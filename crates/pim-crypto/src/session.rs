@@ -1,6 +1,6 @@
 use aes_gcm::aead::{Aead, KeyInit};
 use aes_gcm::{Aes256Gcm, Nonce};
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
 /// Encrypted frame produced by SessionCipher.
 #[derive(Clone, Debug)]
@@ -15,10 +15,16 @@ pub struct EncryptedFrame {
 ///
 /// Uses AES-256-GCM with an incrementing nonce counter to prevent reuse.
 /// The nonce is constructed as: 8-byte random session prefix || 4-byte counter.
+///
+/// Replay protection: `decrypt` tracks the highest accepted counter and rejects
+/// any frame whose counter is ≤ the last accepted value.
 pub struct SessionCipher {
     cipher: Aes256Gcm,
     nonce_prefix: [u8; 8],
     counter: AtomicU32,
+    /// Highest counter value accepted during decryption.
+    /// Initialised to `u64::MAX` (sentinel meaning "no frame received yet").
+    last_recv_counter: AtomicU64,
 }
 
 /// Maximum number of frames before the nonce counter wraps.
@@ -32,6 +38,7 @@ impl SessionCipher {
             cipher,
             nonce_prefix,
             counter: AtomicU32::new(0),
+            last_recv_counter: AtomicU64::new(u64::MAX),
         }
     }
 
@@ -57,11 +64,25 @@ impl SessionCipher {
     }
 
     /// Decrypt an encrypted frame.
+    ///
+    /// Rejects replayed frames: the counter embedded in `frame.nonce[8..12]` must
+    /// be strictly greater than the last accepted counter.
     pub fn decrypt(&self, frame: &EncryptedFrame) -> Result<Vec<u8>, SessionError> {
+        let counter =
+            u32::from_be_bytes(frame.nonce[8..12].try_into().unwrap()) as u64;
+        let last = self.last_recv_counter.load(Ordering::SeqCst);
+        if last != u64::MAX && counter <= last {
+            return Err(SessionError::ReplayedNonce);
+        }
+
         let nonce = Nonce::from_slice(&frame.nonce);
-        self.cipher
+        let plaintext = self
+            .cipher
             .decrypt(nonce, frame.ciphertext.as_ref())
-            .map_err(|_| SessionError::DecryptionFailed)
+            .map_err(|_| SessionError::DecryptionFailed)?;
+
+        self.last_recv_counter.store(counter, Ordering::SeqCst);
+        Ok(plaintext)
     }
 
     /// Build a 12-byte nonce from the prefix and counter.
@@ -81,6 +102,8 @@ pub enum SessionError {
     EncryptionFailed,
     #[error("decryption failed (invalid ciphertext or wrong key)")]
     DecryptionFailed,
+    #[error("replayed nonce: frame counter has already been accepted")]
+    ReplayedNonce,
 }
 
 #[cfg(test)]
@@ -145,6 +168,20 @@ mod tests {
         let e2 = cipher.encrypt(b"msg2").unwrap();
 
         assert_ne!(e1.nonce, e2.nonce);
+    }
+
+    #[test]
+    fn replayed_nonce_is_rejected() {
+        let cipher = SessionCipher::new(&test_key(), test_prefix());
+        let plaintext = b"original message";
+
+        let frame = cipher.encrypt(plaintext).unwrap();
+        // First decryption succeeds.
+        let decrypted = cipher.decrypt(&frame).unwrap();
+        assert_eq!(decrypted, plaintext);
+        // Second decryption with the same frame (replayed nonce) must be rejected.
+        let result = cipher.decrypt(&frame);
+        assert!(matches!(result, Err(SessionError::ReplayedNonce)));
     }
 
     #[test]

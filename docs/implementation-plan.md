@@ -42,7 +42,7 @@ Two containers: one client, one gateway. Client sends IP packets through the mes
   - [x] Full handshake between two identities produces matching session keys
   - [x] Encrypt → decrypt round-trip
   - [x] Tampered ciphertext fails decryption
-  - [ ] Replayed nonce is rejected
+  - [x] Replayed nonce is rejected
   - [x] Wrong key fails decryption
   - [x] Nonce counter overflow triggers error
 
@@ -244,9 +244,9 @@ Two containers: one client, one gateway. Client sends IP packets through the mes
 - [x] Route table cleanup when a peer is removed
 - [x] Triggered route updates on peer join/leave
 - [ ] **Tests**:
-  - [ ] Peer sending heartbeats stays in peer table
-  - [ ] Stopped peer is removed after timeout
-  - [ ] `Goodbye` triggers immediate removal
+  - [x] Peer sending heartbeats stays in peer table
+  - [x] Stopped peer is removed after timeout
+  - [x] `Goodbye` triggers immediate removal
   - [ ] **Docker (4 containers)**: kill a container → other nodes detect loss within 15s, routes update
   - [ ] **Docker (3 containers)**: restart killed container → re-discovers and rejoins mesh
 
