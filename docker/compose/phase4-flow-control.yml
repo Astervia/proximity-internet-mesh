@@ -23,11 +23,13 @@ services:
     cap_add:
       - NET_ADMIN
       - NET_RAW
+    devices:
+      - /dev/net/tun:/dev/net/tun
     sysctls:
       net.ipv4.ip_forward: "1"
     networks:
       pim-net:
-        ipv4_address: 172.20.0.10
+        ipv4_address: 172.30.0.10
     healthcheck:
       test: ["CMD-SHELL", "test -f /run/pim.pid && kill -0 $(cat /run/pim.pid) 2>/dev/null && ip link show pim0 2>/dev/null | grep -q UP"]
       interval: 2s
@@ -47,12 +49,14 @@ services:
       - ../configs/client.toml:/etc/pim/pim.toml:ro
     cap_add:
       - NET_ADMIN
+    devices:
+      - /dev/net/tun:/dev/net/tun
     depends_on:
       gateway:
         condition: service_healthy
     networks:
       pim-net:
-        ipv4_address: 172.20.0.30
+        ipv4_address: 172.30.0.30
     healthcheck:
       test: ["CMD-SHELL", "test -f /run/pim.pid && kill -0 $(cat /run/pim.pid) 2>/dev/null && ip link show pim0 2>/dev/null | grep -q UP"]
       interval: 2s
@@ -66,4 +70,4 @@ networks:
     ipam:
       driver: default
       config:
-        - subnet: 172.20.0.0/24
+        - subnet: 172.30.0.0/24

@@ -63,25 +63,25 @@ docs/
 
 ## Network Topology
 
-All stacks share a single `172.20.0.0/24` bridge network for transport.
+All stacks share a single `172.30.0.0/24` bridge network for transport.
 The mesh uses `10.77.0.0/24` for TUN addresses.
 
 | Role | Transport IP | Mesh IP | Config file |
 |------|-------------|---------|-------------|
-| gateway | 172.20.0.10 | 10.77.0.1 | gateway.toml |
-| gateway1 (phase 5) | 172.20.0.10 | 10.77.0.1 | gateway1.toml |
-| gateway2 (phase 5) | 172.20.0.11 | 10.77.0.2 | gateway2.toml |
-| relay | 172.20.0.20 | 10.77.0.10 | relay.toml |
-| relay1 | 172.20.0.20 | 10.77.0.10 | relay1.toml |
-| relay2 | 172.20.0.21 | 10.77.0.11 | relay2.toml |
-| client | 172.20.0.30 | 10.77.0.100 | client.toml / client-relay.toml |
-| client2 | 172.20.0.31 | 10.77.0.101 | client2.toml |
+| gateway | 172.30.0.10 | 10.77.0.1 | gateway.toml |
+| gateway1 (phase 5) | 172.30.0.10 | 10.77.0.1 | gateway1.toml |
+| gateway2 (phase 5) | 172.30.0.11 | 10.77.0.2 | gateway2.toml |
+| relay | 172.30.0.20 | 10.77.0.10 | relay.toml |
+| relay1 | 172.30.0.20 | 10.77.0.10 | relay1.toml |
+| relay2 | 172.30.0.21 | 10.77.0.11 | relay2.toml |
+| client | 172.30.0.30 | 10.77.0.100 | client.toml / client-relay.toml |
+| client2 | 172.30.0.31 | 10.77.0.101 | client2.toml |
 
 ### Phase 1 — Single-hop
 
 ```
-  client (172.20.0.30)
-    └──[TCP 9100]── gateway (172.20.0.10) ──── internet
+  client (172.30.0.30)
+    └──[TCP 9100]── gateway (172.30.0.10) ──── internet
   mesh: 10.77.0.100       mesh: 10.77.0.1
 ```
 

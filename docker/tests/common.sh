@@ -190,6 +190,28 @@ dump_logs() {
     compose "$file" logs --no-color 2>/dev/null | tail -100 || true
 }
 
+# wait_for_peers <file> <service> [min_peers] [max_seconds]
+# Poll pim status --verbose until peer count >= min_peers.
+wait_for_peers() {
+    local file="$1" svc="$2" min="${3:-1}" max="${4:-60}"
+    local elapsed=0
+    log_info "Waiting for $svc to have at least $min peer(s) (up to ${max}s)..."
+    while [ $elapsed -lt $max ]; do
+        local count
+        count=$(in_svc "$file" "$svc" pim status --verbose 2>/dev/null \
+            | grep -oP '(?<=^peers=)\d+' || echo "0")
+        if [ "${count:-0}" -ge "$min" ]; then
+            log_info "$svc has $count peer(s)"
+            return 0
+        fi
+        sleep 2
+        elapsed=$((elapsed+2))
+    done
+    log_fail "$svc did not reach $min peer(s) within ${max}s"
+    in_svc "$file" "$svc" pim status --verbose 2>/dev/null || true
+    return 1
+}
+
 # ── Summary ───────────────────────────────────────────────────────────────────
 
 print_summary() {
