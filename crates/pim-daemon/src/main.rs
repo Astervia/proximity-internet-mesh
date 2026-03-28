@@ -201,6 +201,8 @@ struct DaemonState {
     self_id: NodeId,
     identity: Arc<Identity>,
     is_gateway: bool,
+    /// Our mesh-local IP (e.g. 10.77.0.1 for gateway).
+    mesh_ip: Ipv4Addr,
     /// Our own X25519 public key (set only when is_gateway = true).
     own_x25519_pub: [u8; 32],
     sessions: SessionMap,
@@ -1128,15 +1130,33 @@ async fn run_event_loop(state: Arc<DaemonState>) -> Result<()> {
                                 }
                             }
 
-                            if let Some(gw) = &state.gw_engine {
-                                // Gateway: NAT outbound
-                                if let Err(e) = gw.translate_outbound(&mut ip_packet).await {
-                                    debug!("outbound NAT: {e}");
-                                    continue;
+                            // Check if the packet is destined for the gateway's
+                            // own mesh IP.  We handle it in userspace instead of
+                            // writing to TUN (where the reply would race with
+                            // run_gateway_return / run_event_loop readers).
+                            let dst_local = state.gw_engine.is_some()
+                                && ip_packet.len() >= 20
+                                && Ipv4Addr::new(
+                                    ip_packet[16], ip_packet[17],
+                                    ip_packet[18], ip_packet[19],
+                                ) == state.mesh_ip;
+
+                            if dst_local {
+                                if let Some(reply) = icmp_echo_reply(&ip_packet) {
+                                    let session = state.sessions.read().await
+                                        .get(&mesh.src_id).cloned();
+                                    if let Some(session) = session {
+                                        send_mesh_data(
+                                            &state, &session, state.self_id,
+                                            mesh.src_id, 8, DataFlags::IS_INTERNET,
+                                            &reply,
+                                        ).await;
+                                    }
                                 }
-                            }
-                            if let Err(e) = state.tun.write_packet(&ip_packet).await {
-                                warn!("TUN write: {e}");
+                            } else {
+                                if let Err(e) = state.tun.write_packet(&ip_packet).await {
+                                    warn!("TUN write: {e}");
+                                }
                             }
                         } else {
                             // Relay forwarding
@@ -1347,7 +1367,8 @@ async fn run_event_loop(state: Arc<DaemonState>) -> Result<()> {
 
 /// Gateway task: drain TUN (internet→mesh), NAT inbound, send back to originators.
 async fn run_gateway_return(state: Arc<DaemonState>) {
-    let Some(gw) = state.gw_engine.clone() else { return };
+    // Only run on gateways
+    if !state.is_gateway { return; }
     let mut buf = vec![0u8; 65536];
 
     loop {
@@ -1357,20 +1378,20 @@ async fn run_gateway_return(state: Arc<DaemonState>) {
                     Ok(n) => n,
                     Err(e) => { error!("GW TUN read: {e}"); break; }
                 };
-                let mut pkt = buf[..n].to_vec();
-                let orig_src = match gw.translate_inbound(&mut pkt).await {
-                    Ok(src) => src,
-                    Err(e) => { debug!("inbound NAT: {e}"); continue; }
-                };
+                let pkt = buf[..n].to_vec();
+                if pkt.len() < 20 { continue; }
+                let dest_ip = Ipv4Addr::new(pkt[16], pkt[17], pkt[18], pkt[19]);
 
-                // Reverse-route: find the session for the original source
-                let src_as_id = {
-                    // We don't have IP→NodeId mapping yet; broadcast to all clients
-                    // as a short-term workaround. A proper ARP/NDP table would fix this.
-                    let _ = orig_src;
-                    state.transport.connected_peers()
-                };
-                for peer in src_as_id {
+                if dest_ip == state.mesh_ip {
+                    // It is for the gateway itself
+                    continue;
+                }
+
+                // Reverse-route: find the session for the destination IP
+                // A proper ARP/NDP routing table would map dest_ip to NodeId.
+                // As a short-term workaround, broadcast to all connected clients.
+                let clients = state.transport.connected_peers();
+                for peer in clients {
                     let session = state.sessions.read().await.get(&peer).cloned();
                     if let Some(session) = session {
                         let flags = DataFlags::IS_INTERNET;
@@ -1384,6 +1405,77 @@ async fn run_gateway_return(state: Arc<DaemonState>) {
 }
 
 // ── Config helpers ────────────────────────────────────────────────────────────
+
+/// If `packet` is an IPv4 ICMP Echo Request, return the corresponding Echo
+/// Reply with src/dst swapped and checksums recalculated.  Returns `None` for
+/// any other packet type.
+fn icmp_echo_reply(packet: &[u8]) -> Option<Vec<u8>> {
+    // Minimum: 20-byte IP header + 8-byte ICMP header
+    if packet.len() < 28 {
+        return None;
+    }
+    let ihl = ((packet[0] & 0x0f) as usize) * 4;
+    if packet.len() < ihl + 8 {
+        return None;
+    }
+    // Protocol must be ICMP (1)
+    if packet[9] != 1 {
+        return None;
+    }
+    // ICMP type must be Echo Request (8), code 0
+    if packet[ihl] != 8 || packet[ihl + 1] != 0 {
+        return None;
+    }
+
+    let mut reply = packet.to_vec();
+
+    // Swap src ↔ dst IP addresses (offsets 12..16 and 16..20)
+    for i in 0..4 {
+        reply.swap(12 + i, 16 + i);
+    }
+
+    // Set ICMP type to Echo Reply (0)
+    reply[ihl] = 0;
+    // Zero ICMP checksum before recalculation
+    reply[ihl + 2] = 0;
+    reply[ihl + 3] = 0;
+
+    // Recalculate ICMP checksum
+    let icmp_data = &reply[ihl..];
+    let mut sum: u32 = 0;
+    let mut i = 0;
+    while i + 1 < icmp_data.len() {
+        sum += u16::from_be_bytes([icmp_data[i], icmp_data[i + 1]]) as u32;
+        i += 2;
+    }
+    if i < icmp_data.len() {
+        sum += (icmp_data[i] as u32) << 8;
+    }
+    while sum >> 16 != 0 {
+        sum = (sum & 0xffff) + (sum >> 16);
+    }
+    let cksum = !(sum as u16);
+    reply[ihl + 2] = (cksum >> 8) as u8;
+    reply[ihl + 3] = (cksum & 0xff) as u8;
+
+    // Recalculate IP header checksum (src/dst changed)
+    reply[10] = 0;
+    reply[11] = 0;
+    let mut sum: u32 = 0;
+    let mut i = 0;
+    while i + 1 < ihl {
+        sum += u16::from_be_bytes([reply[i], reply[i + 1]]) as u32;
+        i += 2;
+    }
+    while sum >> 16 != 0 {
+        sum = (sum & 0xffff) + (sum >> 16);
+    }
+    let cksum = !(sum as u16);
+    reply[10] = (cksum >> 8) as u8;
+    reply[11] = (cksum & 0xff) as u8;
+
+    Some(reply)
+}
 
 fn parse_cidr(s: &str) -> Result<(Ipv4Addr, u8)> {
     let parts: Vec<&str> = s.split('/').collect();
@@ -1505,11 +1597,18 @@ async fn main() -> Result<()> {
     }
 
     // ── Build reconnect manager ───────────────────────────────────────────
-    let configured_addrs: Vec<SocketAddr> = config
-        .peers
-        .iter()
-        .filter_map(|p| p.address.parse().ok())
-        .collect();
+    let mut configured_addrs: Vec<SocketAddr> = Vec::new();
+    for p in &config.peers {
+        use std::net::ToSocketAddrs;
+        match p.address.to_socket_addrs() {
+            Ok(mut addrs) => {
+                if let Some(addr) = addrs.next() {
+                    configured_addrs.push(addr);
+                }
+            }
+            Err(e) => tracing::warn!("failed to resolve peer address {}: {}", p.address, e),
+        }
+    }
     let reconnect = Arc::new(ReconnectManager::new(configured_addrs.iter().copied()));
 
     // ── Build shared state ────────────────────────────────────────────────
@@ -1518,6 +1617,7 @@ async fn main() -> Result<()> {
         self_id,
         identity: identity.clone(),
         is_gateway,
+        mesh_ip,
         own_x25519_pub,
         sessions: Arc::new(RwLock::new(HashMap::new())),
         hs_channels: Arc::new(Mutex::new(HashMap::new())),

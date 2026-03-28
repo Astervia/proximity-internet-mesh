@@ -311,23 +311,24 @@ impl TunInterface {
 
     /// Add a default route via `gateway_ip` on this interface.
     ///
-    /// Shells out to `ip route add default via <gw> dev <iface>`.
+    /// Shells out to `ip route add <cidr> via <gw> dev <iface>`.
+    /// Uses 0.0.0.0/1 and 128.0.0.0/1 to override the default route without replacing it.
     pub fn add_default_route(&self, gateway_ip: Ipv4Addr) -> Result<(), TunError> {
-        let status = std::process::Command::new("ip")
-            .args([
-                "route", "add", "default",
-                "via", &gateway_ip.to_string(),
-                "dev", &self.name,
-            ])
-            .status()?;
+        let gw_str = gateway_ip.to_string();
+        for cidr in ["0.0.0.0/1", "128.0.0.0/1"] {
+            let status = std::process::Command::new("ip")
+                .args(["route", "add", cidr, "via", &gw_str, "dev", &self.name])
+                .status()?;
 
-        if !status.success() {
-            return Err(TunError::Ioctl(
-                "ip route add".into(),
-                io::Error::new(io::ErrorKind::Other, "ip route add failed"),
-            ));
+            if !status.success() {
+                return Err(TunError::Ioctl(
+                    "ip route add".into(),
+                    io::Error::new(io::ErrorKind::Other, format!("ip route add {} failed", cidr)),
+                ));
+            }
         }
-        debug!(gateway = %gateway_ip, iface = %self.name, "default route added");
+
+        debug!(gateway = %gateway_ip, iface = %self.name, "default routes (0.0.0.0/1, 128.0.0.0/1) added");
         Ok(())
     }
 }

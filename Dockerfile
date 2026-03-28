@@ -49,6 +49,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         tcpdump \
         netcat-openbsd \
         ca-certificates \
+        procps \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /build/target/release/pim-daemon /usr/local/bin/pim-daemon

@@ -300,8 +300,10 @@ impl GatewayEngine {
     /// Example `mesh_cidr`: `"10.77.0.0/24"`.
     /// This is idempotent.
     pub fn setup_masquerade(&self, mesh_cidr: &str) -> Result<(), GatewayError> {
-        // Enable IP forwarding
-        run_cmd("sysctl", &["-w", "net.ipv4.ip_forward=1"])?;
+        // Enable IP forwarding (may fail with permission denied in Docker, but often already set)
+        if let Err(e) = run_cmd("sysctl", &["-w", "net.ipv4.ip_forward=1"]) {
+            tracing::warn!("sysctl failed (ignoring): {e}");
+        }
 
         // Add MASQUERADE rule (check first to avoid duplicates)
         let rule_args = [

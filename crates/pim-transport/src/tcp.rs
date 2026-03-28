@@ -33,6 +33,7 @@ pub struct TcpTransport {
 /// Handle for writing to a peer's TCP stream.
 struct PeerWriter {
     tx: mpsc::Sender<Vec<u8>>,
+    current_id: Arc<RwLock<NodeId>>,
 }
 
 impl TcpTransport {
@@ -99,25 +100,29 @@ impl TcpTransport {
     /// Register a connected peer: split the stream, spawn read/write tasks.
     async fn register_peer(&self, peer_id: NodeId, stream: TcpStream) {
         let (read_half, write_half) = stream.into_split();
+        let current_id = Arc::new(RwLock::new(peer_id));
 
         // Write task: receives serialized frames via channel and writes to socket
         let (write_tx, mut write_rx) = mpsc::channel::<Vec<u8>>(64);
-        let write_peer_id = peer_id;
+        let write_id = current_id.clone();
         tokio::spawn(async move {
             let mut writer = write_half;
             while let Some(data) = write_rx.recv().await {
                 if let Err(e) = writer.write_all(&data).await {
-                    warn!(%write_peer_id, "write failed: {e}");
+                    let id = *write_id.read().await;
+                    warn!(write_peer_id = %id, "write failed: {e}");
                     break;
                 }
             }
-            debug!(%write_peer_id, "write task ended");
+            let id = *write_id.read().await;
+            debug!(write_peer_id = %id, "write task ended");
         });
 
         // Read task: reads frames from socket and sends to incoming channel
         let incoming_tx = self.incoming_tx.clone();
         let peers = self.peers.clone();
-        let read_peer_id = peer_id;
+        let read_id = current_id.clone();
+        
         tokio::spawn(async move {
             let mut reader = read_half;
             let mut buf = BytesMut::with_capacity(4096);
@@ -127,14 +132,16 @@ impl TcpTransport {
                 let mut tmp = [0u8; 4096];
                 match reader.read(&mut tmp).await {
                     Ok(0) => {
-                        info!(%read_peer_id, "peer disconnected");
+                        let id = *read_id.read().await;
+                        info!(read_peer_id = %id, "peer disconnected");
                         break;
                     }
                     Ok(n) => {
                         buf.extend_from_slice(&tmp[..n]);
                     }
                     Err(e) => {
-                        warn!(%read_peer_id, "read error: {e}");
+                        let id = *read_id.read().await;
+                        warn!(read_peer_id = %id, "read error: {e}");
                         break;
                     }
                 }
@@ -145,35 +152,39 @@ impl TcpTransport {
                         Ok(Some(mut frame_bytes)) => {
                             match TransportFrame::decode(&mut frame_bytes) {
                                 Ok(frame) => {
-                                    if incoming_tx.send((read_peer_id, frame)).await.is_err() {
-                                        debug!(%read_peer_id, "incoming channel closed");
+                                    let id = *read_id.read().await;
+                                    if incoming_tx.send((id, frame)).await.is_err() {
+                                        debug!(read_peer_id = %id, "incoming channel closed");
                                         return;
                                     }
                                 }
                                 Err(e) => {
-                                    warn!(%read_peer_id, "frame decode error: {e}");
+                                    let id = *read_id.read().await;
+                                    warn!(read_peer_id = %id, "frame decode error: {e}");
                                 }
                             }
                         }
                         Ok(None) => break, // need more data
                         Err(e) => {
-                            warn!(%read_peer_id, "framing error: {e}");
+                            let id = *read_id.read().await;
+                            warn!(read_peer_id = %id, "framing error: {e}");
                             break;
                         }
                     }
                 }
             }
 
-            // Cleanup: remove peer from map
-            peers.write().await.remove(&read_peer_id);
-            info!(%read_peer_id, "peer removed");
+            // Cleanup: remove peer from map using its current id
+            let id = *read_id.read().await;
+            peers.write().await.remove(&id);
+            info!(read_peer_id = %id, "peer removed");
         });
 
         // Store the writer
         self.peers
             .write()
             .await
-            .insert(peer_id, PeerWriter { tx: write_tx });
+            .insert(peer_id, PeerWriter { tx: write_tx, current_id: current_id.clone() });
     }
 
     /// Rename a peer in the connection map after learning their real NodeId
@@ -181,6 +192,7 @@ impl TcpTransport {
     pub async fn rename_peer(&self, old_id: NodeId, new_id: NodeId) {
         let mut peers = self.peers.write().await;
         if let Some(writer) = peers.remove(&old_id) {
+            *writer.current_id.write().await = new_id;
             peers.insert(new_id, writer);
             debug!(%old_id, %new_id, "peer renamed in transport");
         }
