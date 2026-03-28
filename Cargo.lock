@@ -730,6 +730,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "bytes",
+ "ed25519-dalek",
  "hkdf",
  "pim-core",
  "pim-crypto",
@@ -794,6 +795,7 @@ dependencies = [
  "ed25519-dalek",
  "pim-core",
  "pim-protocol",
+ "rand",
  "thiserror",
  "tokio",
  "tracing",

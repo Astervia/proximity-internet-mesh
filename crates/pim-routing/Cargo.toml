@@ -10,3 +10,6 @@ tokio = { workspace = true }
 tracing = { workspace = true }
 thiserror = { workspace = true }
 ed25519-dalek = { workspace = true }
+
+[dev-dependencies]
+rand = { workspace = true }

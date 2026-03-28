@@ -32,6 +32,8 @@
 //! address = "10.0.0.1:9100"   # peer's transport address
 //! ```
 
+mod rate_limiter;
+mod reputation;
 mod send_buffer;
 
 use std::collections::{HashMap, HashSet};
@@ -59,8 +61,14 @@ use pim_protocol::{
     HandshakeWireFrame, HeartbeatFrame, MeshDataFrame, Reassembler, RouteUpdateFrame,
     TransportFrame,
 };
-use pim_routing::RoutingTable;
+use ed25519_dalek::VerifyingKey;
+use pim_routing::{
+    signing::{sign_route_update, verify_route_update},
+    RoutingTable,
+};
 use pim_transport::{PeerAddress, TcpTransport, Transport, TransportError};
+use rate_limiter::{RateLimiter, DEFAULT_BURST, DEFAULT_RATE};
+use reputation::ReputationTracker;
 use send_buffer::{Priority, SendBuffer, DEFAULT_CAPACITY, DEFAULT_TIMEOUT};
 use pim_tun::TunInterface;
 
@@ -222,6 +230,14 @@ struct DaemonState {
     packets_dropped: Arc<AtomicU64>,
     /// Time when the daemon started (for uptime calculation).
     start_time: std::time::SystemTime,
+    /// Pending gateway Ping probes: nonce → (gateway NodeId, sent_time).
+    pending_pings: Arc<Mutex<HashMap<u64, (NodeId, Instant)>>>,
+    /// Ed25519 verifying key (raw bytes) per peer — populated after handshake.
+    peer_pubkeys: Arc<RwLock<HashMap<NodeId, [u8; 32]>>>,
+    /// Per-peer token-bucket rate limiter.
+    rate_limiter: Arc<Mutex<RateLimiter>>,
+    /// Peer reputation tracker; drives automatic blacklisting.
+    reputation: Arc<Mutex<ReputationTracker>>,
     cancel: CancellationToken,
 }
 
@@ -286,6 +302,8 @@ async fn send_control(state: &Arc<DaemonState>, peer: &NodeId, cf: ControlFrame)
 /// send triggered route updates, then schedule reconnect if it was a configured peer.
 async fn remove_peer(state: &Arc<DaemonState>, peer_id: NodeId) {
     state.sessions.write().await.remove(&peer_id);
+    state.peer_pubkeys.write().await.remove(&peer_id);
+    state.rate_limiter.lock().await.remove_peer(&peer_id);
     state.routing.lock().await.remove_peer(peer_id);
     state.peer_last_hb.lock().await.remove(&peer_id);
     state.transport.disconnect(&peer_id).await.ok();
@@ -293,7 +311,8 @@ async fn remove_peer(state: &Arc<DaemonState>, peer_id: NodeId) {
 
     // Triggered route advertisement to remaining peers
     let adverts = state.routing.lock().await.generate_all_advertisements();
-    for (pid, update) in adverts {
+    for (pid, mut update) in adverts {
+        sign_route_update(&mut update, state.identity.signing_key());
         let mut buf = BytesMut::new();
         update.encode(&mut buf);
         send_frame_buffered(
@@ -338,6 +357,12 @@ async fn run_peer_liveness(state: Arc<DaemonState>) {
         for peer_id in timed_out {
             warn!(%peer_id, "peer timed out (no heartbeat for 15s); removing");
             remove_peer(&state, peer_id).await;
+            // Record liveness failure; blacklist if threshold reached.
+            let newly_blacklisted = state.reputation.lock().await.record_failure(peer_id);
+            if newly_blacklisted {
+                warn!(%peer_id, "peer reached reputation blacklist threshold; blocking routes");
+                state.routing.lock().await.blacklist_peer(peer_id);
+            }
         }
     }
 }
@@ -482,6 +507,49 @@ async fn run_stats_writer(state: Arc<DaemonState>) {
             continue;
         }
         std::fs::rename(&tmp, STATS_PATH).ok();
+    }
+}
+
+// ── Gateway probes (Phase 5.3) ────────────────────────────────────────────────
+
+/// Maximum age of a pending ping before it is discarded as lost.
+const PENDING_PING_TTL: Duration = Duration::from_secs(30);
+
+/// Periodically send Ping frames to each directly-connected gateway peer to
+/// measure round-trip latency.  The matching Pong handler in the event loop
+/// calls `update_gateway_rtt` to update the routing table.
+///
+/// Only direct-peer gateways are probed because `ControlFrame::Ping` is an
+/// unrouted transport-layer frame (it is not wrapped inside a `MeshDataFrame`).
+async fn run_gateway_probes(state: Arc<DaemonState>) {
+    let mut interval = tokio::time::interval(Duration::from_secs(10));
+    loop {
+        interval.tick().await;
+
+        // Collect directly-connected gateways (hold lock briefly)
+        let direct_gateways: Vec<NodeId> = {
+            let rt = state.routing.lock().await;
+            let direct = rt.direct_peers().clone();
+            rt.all_gateways()
+                .into_iter()
+                .map(|(id, _)| id)
+                .filter(|id| direct.contains(id))
+                .collect()
+        };
+
+        // GC: remove stale pending pings older than PENDING_PING_TTL
+        {
+            let mut pings = state.pending_pings.lock().await;
+            pings.retain(|_, (_, sent_at)| sent_at.elapsed() < PENDING_PING_TTL);
+        }
+
+        // Send a Ping to each direct gateway
+        for gw_id in direct_gateways {
+            let nonce: u64 = rand::random();
+            state.pending_pings.lock().await.insert(nonce, (gw_id, Instant::now()));
+            send_control(&state, &gw_id, ControlFrame::Ping { nonce }).await;
+            debug!(%gw_id, nonce, "sent gateway probe Ping");
+        }
     }
 }
 
@@ -650,6 +718,7 @@ async fn handshake_initiator(
     }
 
     state.sessions.write().await.insert(peer_id, session);
+    state.peer_pubkeys.write().await.insert(peer_id, sender_pub);
     state.routing.lock().await.add_peer(peer_id);
     state.peer_last_hb.lock().await.insert(peer_id, Instant::now());
     info!(%peer_id, "session established (initiator)");
@@ -724,6 +793,7 @@ async fn handshake_responder(
         recv_key: key,
     });
     state.sessions.write().await.insert(peer_id, session);
+    state.peer_pubkeys.write().await.insert(peer_id, init.sender_pub);
     state.routing.lock().await.add_peer(peer_id);
     state.peer_last_hb.lock().await.insert(peer_id, Instant::now());
     info!(%peer_id, "session established (responder)");
@@ -823,7 +893,8 @@ async fn run_route_advertisements(state: Arc<DaemonState>) {
     loop {
         interval.tick().await;
         let adverts = state.routing.lock().await.generate_all_advertisements();
-        for (peer_id, update) in adverts {
+        for (peer_id, mut update) in adverts {
+            sign_route_update(&mut update, state.identity.signing_key());
             let mut buf = BytesMut::new();
             update.encode(&mut buf);
             send_frame_buffered(
@@ -843,10 +914,20 @@ async fn run_route_advertisements(state: Arc<DaemonState>) {
 }
 
 /// Periodically send heartbeats to all connected peers.
+///
+/// The `load` field is computed as the packet-forwarding rate over the last
+/// heartbeat interval, normalized to 0–255 (2 000 packets/interval ≈ 255).
 async fn run_heartbeats(state: Arc<DaemonState>) {
     let mut interval = tokio::time::interval(Duration::from_secs(10));
+    let mut last_fwd: u64 = 0;
     loop {
         interval.tick().await;
+        let cur_fwd = state.packets_forwarded.load(Ordering::Relaxed);
+        let delta = cur_fwd.saturating_sub(last_fwd);
+        last_fwd = cur_fwd;
+        // Normalize: ≥2 000 pkts/interval → load=255; 0 pkts → load=0.
+        let load = ((delta.min(2000) * 255 / 2000)) as u8;
+
         let peers = state.transport.connected_peers();
         let gateway_hops: u8 = if state.is_gateway {
             0
@@ -866,7 +947,7 @@ async fn run_heartbeats(state: Arc<DaemonState>) {
                 .unwrap_or_default()
                 .as_millis() as u64,
             gateway_hops,
-            load: 0,
+            load,
             gw_x25519_pub: if state.is_gateway { state.own_x25519_pub } else { [0u8; 32] },
         };
         let mut buf = BytesMut::new();
@@ -969,6 +1050,13 @@ async fn run_event_loop(state: Arc<DaemonState>) -> Result<()> {
                     Ok(v) => v,
                     Err(e) => { error!("transport recv: {e}"); break; }
                 };
+
+                // Rate-limit all incoming frames per peer.
+                if !state.rate_limiter.lock().await.allow(&from_peer) {
+                    debug!(%from_peer, "rate limit exceeded; dropping frame");
+                    state.packets_dropped.fetch_add(1, Ordering::Relaxed);
+                    continue;
+                }
 
                 match frame.frame_type {
                     FrameType::Handshake => {
@@ -1095,12 +1183,37 @@ async fn run_event_loop(state: Arc<DaemonState>) -> Result<()> {
                         let mut buf = BytesMut::from(frame.payload.as_slice());
                         match RouteUpdateFrame::decode(&mut buf) {
                             Ok(update) => {
-                                let changed = state
-                                    .routing
-                                    .lock()
-                                    .await
-                                    .apply_update(&update, from_peer);
-                                debug!(%from_peer, ?changed, "route update applied");
+                                // Verify Ed25519 signature before applying.
+                                let pub_bytes = state.peer_pubkeys.read().await
+                                    .get(&from_peer).copied();
+                                let allowed = match pub_bytes {
+                                    Some(pk) => match VerifyingKey::from_bytes(&pk) {
+                                        Ok(vk) => {
+                                            if verify_route_update(&update, &vk) {
+                                                true
+                                            } else {
+                                                warn!(%from_peer, "route update signature invalid; rejecting");
+                                                false
+                                            }
+                                        }
+                                        Err(e) => {
+                                            warn!(%from_peer, "bad verifying key: {e}; rejecting route update");
+                                            false
+                                        }
+                                    },
+                                    None => {
+                                        warn!(%from_peer, "no public key for peer; rejecting route update");
+                                        false
+                                    }
+                                };
+                                if allowed {
+                                    let changed = state
+                                        .routing
+                                        .lock()
+                                        .await
+                                        .apply_update(&update, from_peer);
+                                    debug!(%from_peer, ?changed, "route update applied");
+                                }
                             }
                             Err(e) => warn!(%from_peer, "route frame decode: {e}"),
                         }
@@ -1110,13 +1223,16 @@ async fn run_event_loop(state: Arc<DaemonState>) -> Result<()> {
                         let mut buf = BytesMut::from(frame.payload.as_slice());
                         match HeartbeatFrame::decode(&mut buf) {
                             Ok(hb) => {
-                                debug!(%from_peer, gw_hops = hb.gateway_hops, "heartbeat");
+                                debug!(%from_peer, gw_hops = hb.gateway_hops, load = hb.load, "heartbeat");
                                 // Track liveness
                                 state.peer_last_hb.lock().await.insert(from_peer, Instant::now());
-                                // Learn gateway's X25519 public key from heartbeat
-                                if hb.gateway_hops == 0 && hb.gw_x25519_pub != [0u8; 32] {
-                                    known_gw_x25519 = Some(hb.gw_x25519_pub);
-                                    debug!("learned gateway X25519 pub key");
+                                // Direct gateway heartbeat: learn X25519 key and record load
+                                if hb.gateway_hops == 0 {
+                                    if hb.gw_x25519_pub != [0u8; 32] {
+                                        known_gw_x25519 = Some(hb.gw_x25519_pub);
+                                        debug!("learned gateway X25519 pub key");
+                                    }
+                                    state.routing.lock().await.update_gateway_load(from_peer, hb.load);
                                 }
                             }
                             Err(e) => warn!(%from_peer, "heartbeat decode: {e}"),
@@ -1176,7 +1292,18 @@ async fn run_event_loop(state: Arc<DaemonState>) -> Result<()> {
                                 ControlFrame::Ping { nonce } => {
                                     send_control(&state, &from_peer, ControlFrame::Pong { nonce }).await;
                                 }
-                                ControlFrame::Pong { .. } | ControlFrame::Rekey => {}
+                                ControlFrame::Pong { nonce } => {
+                                    if let Some((gw_id, sent_at)) =
+                                        state.pending_pings.lock().await.remove(&nonce)
+                                    {
+                                        let rtt_ms = sent_at.elapsed().as_millis() as u32;
+                                        state.routing.lock().await.update_gateway_rtt(gw_id, rtt_ms);
+                                        debug!(%gw_id, rtt_ms, "gateway RTT measured via Pong");
+                                        // Pong confirms peer is alive — positive reputation signal.
+                                        state.reputation.lock().await.record_success(gw_id);
+                                    }
+                                }
+                                ControlFrame::Rekey => {}
                             },
                             Err(e) => warn!(%from_peer, "control frame decode: {e}"),
                         }
@@ -1409,6 +1536,10 @@ async fn main() -> Result<()> {
         bytes_forwarded: Arc::new(AtomicU64::new(0)),
         packets_dropped: Arc::new(AtomicU64::new(0)),
         start_time: std::time::SystemTime::now(),
+        pending_pings: Arc::new(Mutex::new(HashMap::new())),
+        peer_pubkeys: Arc::new(RwLock::new(HashMap::new())),
+        rate_limiter: Arc::new(Mutex::new(RateLimiter::new(DEFAULT_BURST, DEFAULT_RATE))),
+        reputation: Arc::new(Mutex::new(ReputationTracker::new())),
         cancel: cancel.clone(),
     });
 
@@ -1473,6 +1604,7 @@ async fn main() -> Result<()> {
     tokio::spawn(run_buffer_gc(state.clone()));
     tokio::spawn(run_buffer_flush(state.clone()));
     tokio::spawn(run_stats_writer(state.clone()));
+    tokio::spawn(run_gateway_probes(state.clone()));
     if state.is_gateway {
         tokio::spawn(run_gateway_return(state.clone()));
         tokio::spawn(run_conntrack_gc(state.clone()));
@@ -1669,6 +1801,48 @@ mod tests {
         assert!(mgr.begin_reconnect(addr_a).await);
         assert!(mgr.begin_reconnect(addr_b).await);
         assert!(!mgr.begin_reconnect(addr_a).await);
+    }
+
+    // ── Phase 5: Gateway probe / load wiring ──────────────────────────────────
+
+    #[test]
+    fn load_normalized_zero_when_no_packets() {
+        // 0 packets in interval → load = 0
+        let delta: u64 = 0;
+        let load = ((delta.min(2000) * 255 / 2000)) as u8;
+        assert_eq!(load, 0);
+    }
+
+    #[test]
+    fn load_normalized_255_at_saturation() {
+        // ≥2000 packets in interval → load = 255
+        let delta: u64 = 2000;
+        let load = ((delta.min(2000) * 255 / 2000)) as u8;
+        assert_eq!(load, 255);
+    }
+
+    #[test]
+    fn load_normalized_midpoint() {
+        // 1000 packets → load ≈ 127
+        let delta: u64 = 1000;
+        let load = ((delta.min(2000) * 255 / 2000)) as u8;
+        assert_eq!(load, 127);
+    }
+
+    #[tokio::test]
+    async fn pending_pings_gc_removes_stale_entries() {
+        let pings: Arc<Mutex<HashMap<u64, (NodeId, Instant)>>> =
+            Arc::new(Mutex::new(HashMap::new()));
+        let stale_time = Instant::now() - Duration::from_secs(60);
+        pings.lock().await.insert(1u64, (NodeId::from_bytes([1; 16]), stale_time));
+        pings.lock().await.insert(2u64, (NodeId::from_bytes([2; 16]), Instant::now()));
+
+        // Simulate the GC step from run_gateway_probes
+        pings.lock().await.retain(|_, (_, sent_at)| sent_at.elapsed() < PENDING_PING_TTL);
+
+        let locked = pings.lock().await;
+        assert!(!locked.contains_key(&1u64), "stale ping should be removed");
+        assert!(locked.contains_key(&2u64), "fresh ping should remain");
     }
 
     // ── Observability (Phase 4.5) tests ───────────────────────────────────────

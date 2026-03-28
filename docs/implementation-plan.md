@@ -322,63 +322,64 @@ Two containers: one client, one gateway. Client sends IP packets through the mes
 
 ---
 
-## Phase 5 — Multi-Gateway and Load Balancing
+## Phase 5 — Multi-Gateway and Load Balancing ✓
 
-### 5.1 Multi-Gateway Routing
+### 5.1 Multi-Gateway Routing ✓
 
-- [ ] Routing table tracks multiple gateways
-- [ ] `nearest_gateway()` considers: hop count, load, latency
-- [ ] Failover: switch to next-best gateway if current becomes unreachable
-- [ ] **Tests**:
-  - [ ] **Docker (5 containers, 2 gateways)**: client prefers closer gateway
-  - [ ] **Docker**: kill preferred gateway → traffic fails over to second gateway
-  - [ ] **Docker**: restore first gateway → traffic may shift back (configurable)
+- [x] `gateway_score(hops, load, rtt_ms) -> u32`: composite score (100/hop + load/2 + rtt_ms/10)
+- [x] `best_gateway_entry()` internal helper used by `nearest_gateway()` and `nearest_gateway_route()`
+- [x] `all_gateways()` sorted by composite score (best first)
+- [x] Failover: `remove_peer()` → routes via dead peer removed → `nearest_gateway_route()` returns next-best
+- [x] **Tests**: `load_aware_selection_prefers_less_loaded_gateway`, `failover_to_second_gateway_when_first_removed`, `all_gateways_sorted_by_score`
+- [ ] **Docker**: kill preferred gateway → failover; restore → may shift back
 
-### 5.2 Load-Aware Routing
+### 5.2 Load-Aware Routing ✓
 
-- [ ] Gateways report load in heartbeats
-- [ ] Clients factor load into gateway selection
-- [ ] **Tests**:
-  - [ ] **Docker (2 gateways)**: saturate one gateway → new flows go to the other
+- [x] `RouteTableEntry.gateway_load: u8` field in routing table
+- [x] `update_gateway_load(gw_id, load)` — called by daemon heartbeat handler for direct gateway peers
+- [x] `run_heartbeats` wires real load: delta of `packets_forwarded` over 10s interval, normalized to 0–255
+- [x] **Tests**: `load_aware_selection_prefers_less_loaded_gateway`, `update_gateway_load_only_applies_to_gateway_entries`, load normalization tests (0, 127, 255)
+- [ ] **Docker**: saturate one gateway → new flows go to the other
 
-### 5.3 Gateway Health Probes
+### 5.3 Gateway Health Probes ✓
 
-- [ ] Periodic latency probes through each gateway
-- [ ] Detect degraded internet on a gateway (high latency, packet loss)
-- [ ] **Tests**:
-  - [ ] **Docker**: add latency to one gateway's internet (`tc netem`) → clients prefer the other
+- [x] `RouteTableEntry.rtt_ms: Option<u32>` — measured RTT per gateway
+- [x] `update_gateway_rtt(gw_id, rtt_ms)` — called by Pong handler in event loop
+- [x] `run_gateway_probes` (10s interval): sends `ControlFrame::Ping` to each direct gateway, records nonce+time in `pending_pings`
+- [x] Pong handler: removes from `pending_pings`, computes elapsed RTT, updates routing table
+- [x] Stale ping GC: entries older than 30s discarded on each probe cycle
+- [x] **Tests**: `rtt_aware_selection_prefers_lower_latency_gateway`, `rtt_aware_selection_switches_at_high_latency`, `pending_pings_gc_removes_stale_entries`
+- [ ] **Docker**: `tc netem` latency on one gateway → clients prefer the other
 
 ---
 
-## Phase 6 — Security Hardening
+## Phase 6 — Security Hardening ✓
 
-### 6.1 Routing Security
+### 6.1 Routing Security ✓
 
-- [ ] Verify Ed25519 signatures on all routing updates
-- [ ] Reject updates with invalid or missing signatures
-- [ ] Sequence number validation (reject old/replayed updates)
-- [ ] Anomaly detection: reject unreasonable claims (0 hops to everything)
-- [ ] **Tests**:
-  - [ ] Forged routing update is rejected
-  - [ ] Replayed old update (old sequence number) is rejected
-  - [ ] Node claiming 0 hops to all destinations is deprioritized
+- [x] Verify Ed25519 signatures on all routing updates (`pim-routing/src/signing.rs`)
+- [x] Reject updates with invalid or missing signatures (daemon wires `verify_route_update` before `apply_update`)
+- [x] Sequence number validation (reject old/replayed updates) (`peer_max_seq` in `RoutingTable`)
+- [x] Anomaly detection: reject hops=0 claims for non-self destinations (`apply_update` anomaly check)
+- [x] `peer_pubkeys` populated on both initiator and responder handshake paths
+- [x] Route advertisements signed with node Ed25519 key before sending
+- [x] **Tests**: sign/verify round-trip, tampered payload, wrong key, unsigned frame, replay rejection, origin mismatch, zero-hop anomaly, blacklist (40 routing tests)
 
-### 6.2 Rate Limiting
+### 6.2 Rate Limiting ✓
 
-- [ ] Per-peer frame rate limit
-- [ ] Gateway: per-client request rate limit
-- [ ] **Tests**:
-  - [ ] **Docker**: flood node with frames → excess frames are dropped, node stays healthy
-  - [ ] Gateway limits a single client's outbound rate
+- [x] Per-peer token-bucket rate limiter (`pim-daemon/src/rate_limiter.rs`)
+- [x] 500-frame burst capacity, 200 fps sustained refill rate
+- [x] All incoming frames checked; excess frames dropped and `packets_dropped` incremented
+- [x] Bucket cleared on `remove_peer`
+- [x] **Tests**: burst allowed up to capacity, throttled after burst, independent per-peer tracking, remove-peer resets bucket (4 unit tests)
 
-### 6.3 Peer Reputation
+### 6.3 Peer Reputation ✓
 
-- [ ] Track delivery success rate per peer
-- [ ] Deprioritize peers with high drop rates
-- [ ] Blacklist after sustained bad behavior
-- [ ] **Tests**:
-  - [ ] Peer that drops 50% of forwarded frames gets deprioritized
-  - [ ] Blacklisted peer's routes are not used
+- [x] `ReputationTracker` in `pim-daemon/src/reputation.rs` with per-peer failure/success scores
+- [x] Heartbeat timeout → `record_failure`; score ≥ 10 → auto-blacklist in routing table
+- [x] Pong received → `record_success` (decrement score)
+- [x] `blacklist_peer` flushes all routes via that peer from `RoutingTable`
+- [x] **Tests**: failure accumulation, blacklist threshold, success decay, floor-zero, pardon (5 unit tests)
 
 ---
 

@@ -22,10 +22,12 @@
 //! Following RIP convention, `INFINITY = 16` means unreachable.  A route
 //! with `hops >= INFINITY` is never installed.
 
+pub mod signing;
+
 use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
 
-use tracing::{debug, info, trace};
+use tracing::{debug, info, trace, warn};
 
 use pim_core::NodeId;
 use pim_protocol::{RouteEntry, RouteUpdateFrame};
@@ -52,6 +54,28 @@ pub struct RouteTableEntry {
     pub learned_from: NodeId,
     /// Sequence number of the last update that installed this entry.
     pub sequence: u64,
+    /// Forwarding load reported by the gateway (0 = idle, 255 = saturated).
+    /// Only meaningful when `is_gateway` is true; zero for non-gateway entries.
+    pub gateway_load: u8,
+    /// Round-trip time to this gateway measured via Ping/Pong (milliseconds).
+    /// `None` until the first probe completes.
+    pub rtt_ms: Option<u32>,
+}
+
+// ── Gateway selection ─────────────────────────────────────────────────────────
+
+/// Composite score used to rank gateway routes.
+///
+/// Lower is better.  The formula balances hop count, load, and measured latency:
+///
+/// - Each hop contributes 100 points.
+/// - Full load (255) adds 127 points — roughly equivalent to 1 extra hop.
+/// - 1 000 ms RTT adds 100 points — equivalent to 1 extra hop.
+///
+/// So a lightly-loaded, low-latency nearby gateway always wins over a distant one,
+/// while a heavily-loaded 1-hop gateway may lose to a clean 2-hop gateway.
+pub fn gateway_score(hops: u8, load: u8, rtt_ms: Option<u32>) -> u32 {
+    hops as u32 * 100 + load as u32 / 2 + rtt_ms.unwrap_or(0) / 10
 }
 
 impl RouteTableEntry {
@@ -84,6 +108,10 @@ pub struct RoutingTable {
     direct_peers: HashSet<NodeId>,
     /// Monotonically increasing sequence number for our own advertisements.
     sequence: u64,
+    /// Highest accepted sequence number per peer — used to reject replays.
+    peer_max_seq: HashMap<NodeId, u64>,
+    /// Peers whose routes must not be used for forwarding (reputation blacklist).
+    blacklisted_peers: HashSet<NodeId>,
 }
 
 impl RoutingTable {
@@ -95,6 +123,8 @@ impl RoutingTable {
             routes: HashMap::new(),
             direct_peers: HashSet::new(),
             sequence: 0,
+            peer_max_seq: HashMap::new(),
+            blacklisted_peers: HashSet::new(),
         }
     }
 
@@ -111,6 +141,8 @@ impl RoutingTable {
                 last_seen: Instant::now(),
                 learned_from: peer_id,
                 sequence: 0,
+                gateway_load: 0,
+                rtt_ms: None,
             },
         );
         debug!(%peer_id, "peer added to routing table");
@@ -129,6 +161,33 @@ impl RoutingTable {
     /// Returns `Changed` if any route was updated and a triggered advertisement
     /// should be sent to other peers.
     pub fn apply_update(&mut self, update: &RouteUpdateFrame, from_peer: NodeId) -> UpdateResult {
+        // ── Security checks ───────────────────────────────────────────────────
+
+        // The origin_id in the frame must match the direct peer sending it.
+        // Relayed route advertisements are not supported; reject mismatches.
+        if update.origin_id != from_peer {
+            warn!(%from_peer, origin = %update.origin_id, "route update origin_id mismatch; rejecting");
+            return UpdateResult::Unchanged;
+        }
+
+        // Replay protection: reject frames whose sequence number is not strictly
+        // greater than the last accepted sequence from this peer.
+        let last_seq = self.peer_max_seq.get(&from_peer).copied().unwrap_or(0);
+        if update.sequence <= last_seq {
+            debug!(%from_peer, seq = update.sequence, last_seq, "rejecting replayed route update");
+            return UpdateResult::Unchanged;
+        }
+        self.peer_max_seq.insert(from_peer, update.sequence);
+
+        // Anomaly detection: any entry claiming hops=0 for a destination other
+        // than the sender is impossible and indicates a forged/malformed update.
+        let suspicious = update.entries.iter()
+            .any(|e| e.hops == 0 && e.destination != update.origin_id);
+        if suspicious {
+            warn!(%from_peer, "route update claims hops=0 for non-self destination; rejecting");
+            return UpdateResult::Unchanged;
+        }
+
         let mut changed = false;
 
         // Update last_seen for the advertising peer itself
@@ -145,6 +204,8 @@ impl RoutingTable {
                     last_seen: Instant::now(),
                     learned_from: from_peer,
                     sequence: update.sequence,
+                    gateway_load: 0,
+                    rtt_ms: None,
                 },
             );
             changed = true;
@@ -188,6 +249,8 @@ impl RoutingTable {
                             last_seen: Instant::now(),
                             learned_from: from_peer,
                             sequence: update.sequence,
+                            gateway_load: 0,
+                            rtt_ms: None,
                         },
                     );
                     debug!(%dst, hops = new_hops, via = %from_peer, "new route");
@@ -200,6 +263,12 @@ impl RoutingTable {
 
                     if better_path || newer_seq {
                         let old_hops = existing.hops;
+                        // Preserve load/rtt when refreshing an existing gateway entry
+                        let (prev_load, prev_rtt) = if existing.is_gateway && !better_path {
+                            (existing.gateway_load, existing.rtt_ms)
+                        } else {
+                            (0, None)
+                        };
                         self.routes.insert(
                             dst,
                             RouteTableEntry {
@@ -209,6 +278,8 @@ impl RoutingTable {
                                 last_seen: Instant::now(),
                                 learned_from: from_peer,
                                 sequence: update.sequence,
+                                gateway_load: prev_load,
+                                rtt_ms: prev_rtt,
                             },
                         );
                         if better_path {
@@ -293,45 +364,85 @@ impl RoutingTable {
 
     // ── Lookups ───────────────────────────────────────────────────────────────
 
+    // ── Blacklist ─────────────────────────────────────────────────────────────
+
+    /// Blacklist `peer_id` and remove all routes that route through it.
+    ///
+    /// Blacklisted peers' routes are invisible to [`lookup`] and
+    /// [`nearest_gateway_route`], effectively forcing traffic onto alternate
+    /// paths.
+    pub fn blacklist_peer(&mut self, peer_id: NodeId) -> UpdateResult {
+        self.blacklisted_peers.insert(peer_id);
+        // Remove all routes whose next-hop is this peer
+        self.remove_routes_via(peer_id)
+    }
+
+    /// Pardon a previously blacklisted peer.
+    pub fn unblacklist_peer(&mut self, peer_id: &NodeId) {
+        self.blacklisted_peers.remove(peer_id);
+    }
+
+    pub fn is_blacklisted(&self, peer_id: &NodeId) -> bool {
+        self.blacklisted_peers.contains(peer_id)
+    }
+
+    // ── Lookups ───────────────────────────────────────────────────────────────
+
     /// Find the next hop for `dst`.
     ///
-    /// Returns `None` if no route is known or if `dst == self_id`.
+    /// Returns `None` if no route is known, `dst == self_id`, or the only
+    /// known next-hop is blacklisted.
     pub fn lookup(&self, dst: NodeId) -> Option<NodeId> {
         if dst == self.self_id {
             return None; // deliver locally
         }
-        self.routes.get(&dst).map(|e| e.next_hop)
+        self.routes
+            .get(&dst)
+            .filter(|e| !self.blacklisted_peers.contains(&e.next_hop))
+            .map(|e| e.next_hop)
     }
 
-    /// Find the next hop and hop count to the nearest gateway.
+    /// Internal helper: pick the best gateway entry by composite score,
+    /// skipping entries whose next-hop is blacklisted.
+    fn best_gateway_entry(&self) -> Option<(NodeId, &RouteTableEntry)> {
+        self.routes
+            .iter()
+            .filter(|(_, e)| {
+                e.is_gateway
+                    && e.hops < INFINITY
+                    && !self.blacklisted_peers.contains(&e.next_hop)
+            })
+            .min_by_key(|(_, e)| gateway_score(e.hops, e.gateway_load, e.rtt_ms))
+            .map(|(id, e)| (*id, e))
+    }
+
+    /// Find the next hop and hop count to the best gateway.
+    ///
+    /// "Best" is determined by [`gateway_score`]: a mix of hop count, load,
+    /// and measured RTT.  Returns `None` if this node is itself a gateway or
+    /// no gateway route is known.
     pub fn nearest_gateway(&self) -> Option<(NodeId, u8)> {
         if self.is_gateway {
             return None; // we are the gateway
         }
-        self.routes
-            .values()
-            .filter(|e| e.is_gateway && e.hops < INFINITY)
-            .min_by_key(|e| e.hops)
-            .map(|e| (e.next_hop, e.hops))
+        self.best_gateway_entry()
+            .map(|(_, e)| (e.next_hop, e.hops))
     }
 
-    /// Returns `(gateway_id, next_hop)` for the nearest gateway.
+    /// Returns `(gateway_id, next_hop)` for the best gateway.
     ///
     /// Unlike [`nearest_gateway`], this returns the gateway's own `NodeId`
     /// (the final destination) as well as the immediate next-hop peer to
-    /// forward packets through.
+    /// forward packets through.  Selection uses [`gateway_score`].
     pub fn nearest_gateway_route(&self) -> Option<(NodeId, NodeId)> {
         if self.is_gateway {
             return None;
         }
-        self.routes
-            .iter()
-            .filter(|(_, e)| e.is_gateway && e.hops < INFINITY)
-            .min_by_key(|(_, e)| e.hops)
-            .map(|(dst, e)| (*dst, e.next_hop))
+        self.best_gateway_entry()
+            .map(|(dst, e)| (dst, e.next_hop))
     }
 
-    /// All known gateways sorted by hop count (closest first).
+    /// All known gateways sorted by composite score (best first).
     pub fn all_gateways(&self) -> Vec<(NodeId, u8)> {
         let mut gateways: Vec<(NodeId, u8)> = self
             .routes
@@ -339,8 +450,37 @@ impl RoutingTable {
             .filter(|(_, e)| e.is_gateway && e.hops < INFINITY)
             .map(|(dst, e)| (*dst, e.hops))
             .collect();
-        gateways.sort_by_key(|(_, hops)| *hops);
+        gateways.sort_by_key(|(dst, _)| {
+            let e = &self.routes[dst];
+            gateway_score(e.hops, e.gateway_load, e.rtt_ms)
+        });
         gateways
+    }
+
+    // ── Gateway metric updates ────────────────────────────────────────────────
+
+    /// Record the forwarding load reported by a gateway in its heartbeat.
+    ///
+    /// No-op if `gw_id` is not a known gateway entry.
+    pub fn update_gateway_load(&mut self, gw_id: NodeId, load: u8) {
+        if let Some(entry) = self.routes.get_mut(&gw_id) {
+            if entry.is_gateway {
+                entry.gateway_load = load;
+                trace!(%gw_id, load, "gateway load updated");
+            }
+        }
+    }
+
+    /// Record a measured round-trip time (ms) to a gateway via Ping/Pong.
+    ///
+    /// No-op if `gw_id` is not a known gateway entry.
+    pub fn update_gateway_rtt(&mut self, gw_id: NodeId, rtt_ms: u32) {
+        if let Some(entry) = self.routes.get_mut(&gw_id) {
+            if entry.is_gateway {
+                entry.rtt_ms = Some(rtt_ms);
+                trace!(%gw_id, rtt_ms, "gateway RTT updated");
+            }
+        }
     }
 
     // ── Maintenance ───────────────────────────────────────────────────────────
@@ -666,6 +806,344 @@ mod tests {
         // There's no route to self in the table
         assert!(rt.routes.get(&a).is_none());
         assert!(rt.lookup(a).is_none());
+    }
+
+    // ── Phase 6: Routing security ─────────────────────────────────────────────
+
+    #[test]
+    fn replay_rejected_same_sequence() {
+        let a = id(1);
+        let b = id(2);
+        let c = id(3);
+
+        let mut rt = RoutingTable::new(a, false);
+        rt.add_peer(b);
+
+        let upd = advertisement(b, 5, vec![(c, 1, false)]);
+        assert_eq!(rt.apply_update(&upd, b), UpdateResult::Changed);
+
+        // Same seq again — replay
+        let upd2 = advertisement(b, 5, vec![(c, 1, false)]);
+        assert_eq!(rt.apply_update(&upd2, b), UpdateResult::Unchanged);
+    }
+
+    #[test]
+    fn replay_rejected_lower_sequence() {
+        let a = id(1);
+        let b = id(2);
+        let c = id(3);
+
+        let mut rt = RoutingTable::new(a, false);
+        rt.add_peer(b);
+
+        rt.apply_update(&advertisement(b, 10, vec![(c, 1, false)]), b);
+        // Seq 5 < 10 — replay
+        let result = rt.apply_update(&advertisement(b, 5, vec![(c, 1, false)]), b);
+        assert_eq!(result, UpdateResult::Unchanged);
+    }
+
+    #[test]
+    fn higher_sequence_accepted() {
+        let a = id(1);
+        let b = id(2);
+        let c = id(3);
+
+        let mut rt = RoutingTable::new(a, false);
+        rt.add_peer(b);
+
+        rt.apply_update(&advertisement(b, 1, vec![(c, 2, false)]), b);
+        let result = rt.apply_update(&advertisement(b, 2, vec![(c, 1, false)]), b);
+        assert_eq!(result, UpdateResult::Changed);
+        assert_eq!(rt.routes[&c].hops, 2); // 1 advertised + 1 for the hop to b
+    }
+
+    #[test]
+    fn origin_mismatch_rejected() {
+        let a = id(1);
+        let b = id(2);
+        let c = id(3);
+        let impostor = id(99);
+
+        let mut rt = RoutingTable::new(a, false);
+        rt.add_peer(b);
+
+        // Frame claims origin=impostor but is sent by b
+        let upd = RouteUpdateFrame {
+            origin_id: impostor,
+            sequence: 1,
+            entries: vec![RouteEntry { destination: c, hops: 1, flags: 0 }],
+            signature: [0u8; 64],
+        };
+        let result = rt.apply_update(&upd, b);
+        assert_eq!(result, UpdateResult::Unchanged, "mismatched origin must be rejected");
+        assert!(rt.lookup(c).is_none());
+    }
+
+    #[test]
+    fn zero_hop_to_non_self_rejected() {
+        let a = id(1);
+        let b = id(2);
+        let victim = id(42);
+
+        let mut rt = RoutingTable::new(a, false);
+        rt.add_peer(b);
+
+        // b claims to be 0 hops from victim (impossible unless b == victim)
+        let upd = RouteUpdateFrame {
+            origin_id: b,
+            sequence: 1,
+            entries: vec![RouteEntry { destination: victim, hops: 0, flags: 0 }],
+            signature: [0u8; 64],
+        };
+        let result = rt.apply_update(&upd, b);
+        assert_eq!(result, UpdateResult::Unchanged, "0-hop claim for non-self must be rejected");
+    }
+
+    #[test]
+    fn zero_hop_self_entry_allowed() {
+        let a = id(1);
+        let b = id(2);
+        let c = id(3);
+
+        let mut rt = RoutingTable::new(a, false);
+        rt.add_peer(b);
+
+        // b claims 0 hops to itself (normal — every advertisement includes this)
+        let upd = RouteUpdateFrame {
+            origin_id: b,
+            sequence: 1,
+            entries: vec![
+                RouteEntry { destination: b, hops: 0, flags: 0 }, // self-entry — OK
+                RouteEntry { destination: c, hops: 1, flags: 0 },
+            ],
+            signature: [0u8; 64],
+        };
+        let result = rt.apply_update(&upd, b);
+        assert_eq!(result, UpdateResult::Changed, "self zero-hop entry should be accepted");
+        assert!(rt.lookup(c).is_some());
+    }
+
+    #[test]
+    fn blacklisted_peer_route_invisible() {
+        let a = id(1);
+        let b = id(2);
+        let c = id(3);
+
+        let mut rt = RoutingTable::new(a, false);
+        rt.add_peer(b);
+        rt.apply_update(&advertisement(b, 1, vec![(c, 1, false)]), b);
+
+        assert!(rt.lookup(c).is_some());
+
+        rt.blacklist_peer(b);
+        assert!(rt.lookup(b).is_none(), "blacklisted peer itself invisible");
+        assert!(rt.lookup(c).is_none(), "routes via blacklisted peer invisible");
+    }
+
+    #[test]
+    fn blacklisted_gateway_excluded_from_selection() {
+        let a = id(1);
+        let gw1 = id(10);
+        let gw2 = id(11);
+
+        let mut rt = RoutingTable::new(a, false);
+        rt.add_peer(gw1);
+        rt.add_peer(gw2);
+        rt.apply_update(&advertisement(gw1, 1, vec![(gw1, 0, true)]), gw1);
+        rt.apply_update(&advertisement(gw2, 1, vec![(gw2, 0, true)]), gw2);
+
+        // Normally gw1 is picked (same hops, comes first)
+        assert!(rt.nearest_gateway_route().is_some());
+
+        rt.blacklist_peer(gw1);
+        let (dst, _) = rt.nearest_gateway_route().unwrap();
+        assert_eq!(dst, gw2, "blacklisted gateway must be skipped");
+    }
+
+    #[test]
+    fn unblacklist_restores_visibility() {
+        let a = id(1);
+        let b = id(2);
+
+        let mut rt = RoutingTable::new(a, false);
+        rt.add_peer(b);
+        rt.blacklist_peer(b);
+        assert!(rt.lookup(b).is_none());
+
+        rt.unblacklist_peer(&b);
+        // Route was removed by blacklist_peer; re-add it
+        rt.add_peer(b);
+        assert!(rt.lookup(b).is_some());
+    }
+
+    // ── Phase 5: Multi-gateway scoring ───────────────────────────────────────
+
+    #[test]
+    fn gateway_score_zero_for_1hop_idle() {
+        // 1 hop, 0 load, no RTT → score = 100
+        assert_eq!(gateway_score(1, 0, None), 100);
+    }
+
+    #[test]
+    fn gateway_score_load_adds_penalty() {
+        // 1 hop + full load (255) → 100 + 127 = 227
+        assert_eq!(gateway_score(1, 255, None), 227);
+    }
+
+    #[test]
+    fn gateway_score_rtt_adds_penalty() {
+        // 1 hop + 1000ms RTT → 100 + 0 + 100 = 200
+        assert_eq!(gateway_score(1, 0, Some(1000)), 200);
+    }
+
+    #[test]
+    fn gateway_score_combined() {
+        // 2 hops + load 100 + rtt 200ms → 200 + 50 + 20 = 270
+        assert_eq!(gateway_score(2, 100, Some(200)), 270);
+    }
+
+    #[test]
+    fn load_aware_selection_prefers_less_loaded_gateway() {
+        // relay_a → gw1: 1 advertised hop → 2 total hops, heavy load (220) → score=200+110=310
+        // relay_b → gw2: 2 advertised hops → 3 total hops, no load         → score=300
+        // gw2 should win despite being farther
+        let self_id = id(1);
+        let relay_a = id(2);
+        let relay_b = id(3);
+        let gw1 = id(10);
+        let gw2 = id(11);
+
+        let mut rt = RoutingTable::new(self_id, false);
+        rt.add_peer(relay_a);
+        rt.add_peer(relay_b);
+
+        rt.apply_update(&advertisement(relay_a, 1, vec![(gw1, 1, true)]), relay_a);
+        rt.apply_update(&advertisement(relay_b, 1, vec![(gw2, 2, true)]), relay_b);
+
+        rt.update_gateway_load(gw1, 220);
+
+        // gw1: hops=2, load=220 → score=200+110=310
+        // gw2: hops=3, load=0   → score=300
+        let (dst, _next_hop) = rt.nearest_gateway_route().unwrap();
+        assert_eq!(dst, gw2, "less-loaded 3-hop gateway should beat saturated 2-hop gateway");
+    }
+
+    #[test]
+    fn rtt_aware_selection_prefers_lower_latency_gateway() {
+        // gw1: 2 hops, no load, rtt=800ms → score=200+0+80=280
+        // gw2: 3 hops, no load, no rtt    → score=300
+        // gw1 wins (280 < 300)
+        let self_id = id(1);
+        let relay_a = id(2);
+        let relay_b = id(3);
+        let gw1 = id(10);
+        let gw2 = id(11);
+
+        let mut rt = RoutingTable::new(self_id, false);
+        rt.add_peer(relay_a);
+        rt.add_peer(relay_b);
+
+        rt.apply_update(&advertisement(relay_a, 1, vec![(gw1, 1, true)]), relay_a);
+        rt.apply_update(&advertisement(relay_b, 1, vec![(gw2, 2, true)]), relay_b);
+
+        rt.update_gateway_rtt(gw1, 800);
+        // gw1 score = 200+0+80 = 280, gw2 score = 300
+        let (dst, _) = rt.nearest_gateway_route().unwrap();
+        assert_eq!(dst, gw1, "lower-RTT 2-hop gateway should beat clean 3-hop gateway at 800ms");
+    }
+
+    #[test]
+    fn rtt_aware_selection_switches_at_high_latency() {
+        // gw1: 2 hops, no load, rtt=3000ms → score=200+0+300=500
+        // gw2: 3 hops, no load, no rtt     → score=300
+        // gw2 wins
+        let self_id = id(1);
+        let relay_a = id(2);
+        let relay_b = id(3);
+        let gw1 = id(10);
+        let gw2 = id(11);
+
+        let mut rt = RoutingTable::new(self_id, false);
+        rt.add_peer(relay_a);
+        rt.add_peer(relay_b);
+
+        rt.apply_update(&advertisement(relay_a, 1, vec![(gw1, 1, true)]), relay_a);
+        rt.apply_update(&advertisement(relay_b, 1, vec![(gw2, 2, true)]), relay_b);
+
+        rt.update_gateway_rtt(gw1, 3000);
+        // gw1 score = 500, gw2 score = 300
+        let (dst, _) = rt.nearest_gateway_route().unwrap();
+        assert_eq!(dst, gw2, "3-hop gateway should beat 2-hop with 3s RTT");
+    }
+
+    #[test]
+    fn failover_to_second_gateway_when_first_removed() {
+        // gw1: 2 hops (clearly better); gw2: 3 hops
+        let self_id = id(1);
+        let relay_a = id(2);
+        let relay_b = id(3);
+        let gw1 = id(10);
+        let gw2 = id(11);
+
+        let mut rt = RoutingTable::new(self_id, false);
+        rt.add_peer(relay_a);
+        rt.add_peer(relay_b);
+
+        rt.apply_update(&advertisement(relay_a, 1, vec![(gw1, 1, true)]), relay_a);
+        rt.apply_update(&advertisement(relay_b, 1, vec![(gw2, 2, true)]), relay_b);
+
+        // Initially gw1 is preferred (2 hops < 3 hops)
+        let (dst, _) = rt.nearest_gateway_route().unwrap();
+        assert_eq!(dst, gw1);
+
+        // gw1's relay goes down
+        rt.remove_peer(relay_a);
+
+        // Failover to gw2
+        let (dst, _) = rt.nearest_gateway_route().unwrap();
+        assert_eq!(dst, gw2, "should fail over to second gateway");
+    }
+
+    #[test]
+    fn all_gateways_sorted_by_score() {
+        let self_id = id(1);
+        let relay_a = id(2);
+        let relay_b = id(3);
+        let gw1 = id(10); // 2 hops, load=200 → score=200+100=300
+        let gw2 = id(11); // 3 hops, load=0   → score=300
+
+        let mut rt = RoutingTable::new(self_id, false);
+        rt.add_peer(relay_a);
+        rt.add_peer(relay_b);
+
+        rt.apply_update(&advertisement(relay_a, 1, vec![(gw1, 1, true)]), relay_a);
+        rt.apply_update(&advertisement(relay_b, 1, vec![(gw2, 2, true)]), relay_b);
+
+        rt.update_gateway_load(gw1, 200);
+        // gw1: score=200+100=300; gw2: score=300+0=300 → tie broken by map iteration (any order)
+        // Just verify both appear
+        let gws = rt.all_gateways();
+        assert_eq!(gws.len(), 2);
+        let ids: Vec<NodeId> = gws.iter().map(|(id, _)| *id).collect();
+        assert!(ids.contains(&gw1));
+        assert!(ids.contains(&gw2));
+    }
+
+    #[test]
+    fn update_gateway_load_only_applies_to_gateway_entries() {
+        let mut rt = RoutingTable::new(id(1), false);
+        rt.add_peer(id(2));
+        // id(2) is not a gateway — update_gateway_load should be a no-op
+        rt.update_gateway_load(id(2), 200);
+        assert_eq!(rt.routes[&id(2)].gateway_load, 0);
+    }
+
+    #[test]
+    fn update_gateway_rtt_only_applies_to_gateway_entries() {
+        let mut rt = RoutingTable::new(id(1), false);
+        rt.add_peer(id(2));
+        rt.update_gateway_rtt(id(2), 50);
+        assert_eq!(rt.routes[&id(2)].rtt_ms, None);
     }
 
     #[test]
