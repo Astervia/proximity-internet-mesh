@@ -175,6 +175,16 @@ impl TcpTransport {
             .await
             .insert(peer_id, PeerWriter { tx: write_tx });
     }
+
+    /// Rename a peer in the connection map after learning their real NodeId
+    /// from a higher-level handshake.  No-op if `old_id` is not present.
+    pub async fn rename_peer(&self, old_id: NodeId, new_id: NodeId) {
+        let mut peers = self.peers.write().await;
+        if let Some(writer) = peers.remove(&old_id) {
+            peers.insert(new_id, writer);
+            debug!(%old_id, %new_id, "peer renamed in transport");
+        }
+    }
 }
 
 #[async_trait]
@@ -193,11 +203,14 @@ impl Transport for TcpTransport {
         let mut wire_buf = BytesMut::new();
         LengthDelimitedCodec::encode(&frame_buf, &mut wire_buf);
 
-        writer
-            .tx
-            .send(wire_buf.to_vec())
-            .await
-            .map_err(|_| TransportError::SendFailed("write channel closed".into()))
+        // Non-blocking: return Congested instead of blocking when the write
+        // queue is full.  Callers apply priority-based drop policy.
+        writer.tx.try_send(wire_buf.to_vec()).map_err(|e| match e {
+            tokio::sync::mpsc::error::TrySendError::Full(_) => TransportError::Congested(*peer),
+            tokio::sync::mpsc::error::TrySendError::Closed(_) => {
+                TransportError::SendFailed("write channel closed".into())
+            }
+        })
     }
 
     async fn recv(&self) -> Result<(NodeId, TransportFrame), TransportError> {
@@ -434,6 +447,59 @@ mod tests {
         assert_eq!(received[0].0, node_b);
         assert_eq!(received[1].1, b"from C");
         assert_eq!(received[1].0, node_c);
+    }
+
+    #[tokio::test]
+    async fn send_returns_congested_when_write_queue_full() {
+        // Verify that try_send is used and TransportError::Congested is returned
+        // when the per-peer write channel is full.
+        //
+        // Strategy: create a transport pair, then flood the write side fast
+        // enough that the write task can't keep up.  We use a small write-
+        // channel capacity (1) via a saturating loop with a stall on the far
+        // end (stop consuming incoming frames on the receiver transport so the
+        // TCP receive buffer fills and backs up the write task).
+
+        let node_a = NodeId::from_bytes([0x01; 16]);
+        let node_b = NodeId::from_bytes([0x02; 16]);
+
+        let transport_a = TcpTransport::new("127.0.0.1:0".parse().unwrap(), node_a)
+            .await
+            .unwrap();
+        let addr_a = transport_a.listen_addr;
+
+        let transport_b = TcpTransport::new("127.0.0.1:0".parse().unwrap(), node_b)
+            .await
+            .unwrap();
+
+        transport_b
+            .connect(&PeerAddress { node_id: node_a, addr: addr_a })
+            .await
+            .unwrap();
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+        // Attempt to send a large number of frames very quickly without
+        // consuming on transport_a.  Eventually the write channel (cap 64)
+        // will fill and try_send will return Full → Congested.
+        let payload = vec![0u8; 1024];
+        let mut got_congested = false;
+        for _ in 0..512 {
+            let f = TransportFrame {
+                frame_type: FrameType::Data,
+                nonce: [0; 12],
+                payload: payload.clone(),
+                tag: [0; 16],
+            };
+            match transport_b.send(&node_a, f).await {
+                Ok(()) => {}
+                Err(crate::TransportError::Congested(_)) => {
+                    got_congested = true;
+                    break;
+                }
+                Err(e) => panic!("unexpected error: {e}"),
+            }
+        }
+        assert!(got_congested, "should hit Congested after saturating write queue");
     }
 
     #[tokio::test]

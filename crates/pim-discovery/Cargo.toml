@@ -8,5 +8,8 @@ pim-core = { workspace = true }
 pim-transport = { workspace = true }
 pim-crypto = { workspace = true }
 tokio = { workspace = true }
+tokio-util = { workspace = true }
 tracing = { workspace = true }
 thiserror = { workspace = true }
+anyhow = { workspace = true }
+bytes = { workspace = true }

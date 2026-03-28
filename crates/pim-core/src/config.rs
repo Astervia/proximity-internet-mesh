@@ -18,6 +18,9 @@ pub struct Config {
     pub gateway: GatewayConfig,
     #[serde(default)]
     pub security: SecurityConfig,
+    /// Statically configured peers (Phase 1 — before discovery).
+    #[serde(default)]
+    pub peers: Vec<PeerConfig>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -189,6 +192,16 @@ impl Default for GatewayConfig {
             max_connections: default_max_connections(),
         }
     }
+}
+
+/// A statically configured peer (used for Phase 1 before discovery is active).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct PeerConfig {
+    /// TCP address to connect to, e.g. "192.168.1.1:9100".
+    pub address: String,
+    /// Optional human-readable label.
+    #[serde(default)]
+    pub label: String,
 }
 
 impl Default for SecurityConfig {

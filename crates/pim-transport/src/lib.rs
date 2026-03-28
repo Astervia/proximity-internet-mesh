@@ -18,6 +18,9 @@ pub enum TransportError {
     #[error("send failed: {0}")]
     SendFailed(String),
 
+    #[error("peer send queue full (congested): {0}")]
+    Congested(NodeId),
+
     #[error("receive failed: {0}")]
     ReceiveFailed(String),
 

@@ -12,6 +12,9 @@ bitflags! {
         const REQUIRES_ACK     = 0b0000_0100;
         const IS_ACK           = 0b0000_1000;
         const IS_INTERNET      = 0b0001_0000;
+        /// Payload is ECIES-encrypted (E2E) to the final destination gateway.
+        /// Relay nodes must forward as-is; only the gateway decrypts.
+        const IS_E2E           = 0b0010_0000;
     }
 }
 

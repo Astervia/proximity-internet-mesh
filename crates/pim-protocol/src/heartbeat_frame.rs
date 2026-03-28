@@ -4,7 +4,14 @@ use pim_core::{FrameCodec, NodeId, PimError};
 
 /// Keepalive message between direct peers.
 ///
-/// Layout: sender_id(16) + timestamp(8) + gateway_hops(1) + load(1) = 26 bytes
+/// Layout:
+///   sender_id(16) + timestamp(8) + gateway_hops(1) + load(1) + gw_x25519_pub(32) = 58 bytes
+///
+/// `gw_x25519_pub` is the X25519 public key of the nearest gateway (derived from
+/// its Ed25519 seed).  Gateway nodes put their own key here; non-gateway nodes put
+/// their nearest known gateway's key, or all-zero if unknown.  This lets any node
+/// in the mesh learn the gateway's X25519 key for E2E encryption without extra
+/// message types.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HeartbeatFrame {
     pub sender_id: NodeId,
@@ -13,9 +20,11 @@ pub struct HeartbeatFrame {
     pub gateway_hops: u8,
     /// Current forwarding load (0-255).
     pub load: u8,
+    /// X25519 public key of the nearest/own gateway; all-zero if unknown.
+    pub gw_x25519_pub: [u8; 32],
 }
 
-const SIZE: usize = 26;
+const SIZE: usize = 58;
 
 impl FrameCodec for HeartbeatFrame {
     fn encode(&self, buf: &mut BytesMut) {
@@ -23,6 +32,7 @@ impl FrameCodec for HeartbeatFrame {
         buf.put_u64(self.timestamp);
         buf.put_u8(self.gateway_hops);
         buf.put_u8(self.load);
+        buf.put_slice(&self.gw_x25519_pub);
     }
 
     fn decode(buf: &mut BytesMut) -> Result<Self, PimError> {
@@ -41,6 +51,9 @@ impl FrameCodec for HeartbeatFrame {
         let gateway_hops = buf[24];
         let load = buf[25];
 
+        let mut gw_x25519_pub = [0u8; 32];
+        gw_x25519_pub.copy_from_slice(&buf[26..58]);
+
         buf.advance(SIZE);
 
         Ok(HeartbeatFrame {
@@ -48,6 +61,7 @@ impl FrameCodec for HeartbeatFrame {
             timestamp,
             gateway_hops,
             load,
+            gw_x25519_pub,
         })
     }
 }
@@ -63,6 +77,7 @@ mod tests {
             timestamp: 1711408200000,
             gateway_hops: 2,
             load: 128,
+            gw_x25519_pub: [0xCC; 32],
         };
         let mut buf = BytesMut::new();
         frame.encode(&mut buf);
@@ -78,6 +93,7 @@ mod tests {
             timestamp: 0,
             gateway_hops: 0xFF,
             load: 0,
+            gw_x25519_pub: [0u8; 32],
         };
         let mut buf = BytesMut::new();
         frame.encode(&mut buf);

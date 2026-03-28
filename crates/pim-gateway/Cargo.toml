@@ -6,5 +6,6 @@ edition = "2021"
 [dependencies]
 pim-core = { workspace = true }
 tokio = { workspace = true }
+bytes = { workspace = true }
 tracing = { workspace = true }
 thiserror = { workspace = true }
