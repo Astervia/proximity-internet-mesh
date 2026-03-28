@@ -1,0 +1,20 @@
+# First gateway for multi-gateway (Phase 5) tests.
+# Transport address: gateway1:9100  Mesh IP: 10.77.0.1/24
+
+[node]
+name = "gateway1"
+data_dir = "/var/lib/pim"
+
+[interface]
+mesh_ip = "10.77.0.1/24"
+mtu = 1400
+
+[transport]
+listen_port = 9100
+
+[security]
+key_file = "/var/lib/pim/node.key"
+
+[gateway]
+enabled = true
+nat_interface = "eth0"

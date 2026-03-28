@@ -1,0 +1,20 @@
+# Second relay for routing/failover tests (Phase 2.3).
+# Transport address: relay2:9100  Mesh IP: 10.77.0.11/24
+
+[node]
+name = "relay2"
+data_dir = "/var/lib/pim"
+
+[interface]
+mesh_ip = "10.77.0.11/24"
+mtu = 1400
+
+[transport]
+listen_port = 9100
+
+[security]
+key_file = "/var/lib/pim/node.key"
+
+[[peers]]
+address = "gateway:9100"
+label = "gateway"
