@@ -9,6 +9,8 @@ pub struct RouteEntry {
     pub hops: u8,
     /// bit 0: is_gateway
     pub flags: u8,
+    /// Mesh IPv4 address assigned to `destination`.
+    pub mesh_ip: [u8; 4],
 }
 
 impl RouteEntry {
@@ -19,7 +21,7 @@ impl RouteEntry {
 
 /// Route advertisement broadcast to direct peers.
 ///
-/// Layout: origin_id(16) + sequence(8) + entry_count(2) + entries(N * 18) + signature(64)
+/// Layout: origin_id(16) + sequence(8) + entry_count(2) + entries(N * 22) + signature(64)
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RouteUpdateFrame {
     pub origin_id: NodeId,
@@ -29,7 +31,7 @@ pub struct RouteUpdateFrame {
 }
 
 const HEADER_SIZE: usize = 16 + 8 + 2; // 26
-const ENTRY_SIZE: usize = 16 + 1 + 1; // 18
+const ENTRY_SIZE: usize = 16 + 1 + 1 + 4; // 22
 const SIGNATURE_SIZE: usize = 64;
 const MAX_ENTRIES: u16 = 1000;
 
@@ -42,6 +44,7 @@ impl FrameCodec for RouteUpdateFrame {
             buf.put_slice(entry.destination.as_bytes());
             buf.put_u8(entry.hops);
             buf.put_u8(entry.flags);
+            buf.put_slice(&entry.mesh_ip);
         }
         buf.put_slice(&self.signature);
     }
@@ -79,10 +82,13 @@ impl FrameCodec for RouteUpdateFrame {
             dest.copy_from_slice(&buf[offset..offset + 16]);
             let hops = buf[offset + 16];
             let flags = buf[offset + 17];
+            let mut mesh_ip = [0u8; 4];
+            mesh_ip.copy_from_slice(&buf[offset + 18..offset + 22]);
             entries.push(RouteEntry {
                 destination: NodeId::from_bytes(dest),
                 hops,
                 flags,
+                mesh_ip,
             });
             offset += ENTRY_SIZE;
         }
@@ -115,11 +121,13 @@ mod tests {
                     destination: NodeId::from_bytes([0x02; 16]),
                     hops: 1,
                     flags: 0x01, // is_gateway
+                    mesh_ip: [10, 77, 0, 1],
                 },
                 RouteEntry {
                     destination: NodeId::from_bytes([0x03; 16]),
                     hops: 3,
                     flags: 0x00,
+                    mesh_ip: [10, 77, 0, 10],
                 },
             ],
             signature: [0xAA; 64],
@@ -161,6 +169,7 @@ mod tests {
                 destination: NodeId::from_bytes([2; 16]),
                 hops: 1,
                 flags: 0,
+                mesh_ip: [10, 77, 0, 2],
             }],
             signature: [0; 64],
         };

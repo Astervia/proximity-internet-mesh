@@ -7,7 +7,7 @@
 //! # Signed bytes
 //!
 //! The signature covers: `origin_id(16) || sequence(8) || entry_count(2) ||
-//! entries(N × 18)`.  The `signature` field itself is excluded (naturally) and
+//! entries(N × 22)`.  The `signature` field itself is excluded (naturally) and
 //! the encoded representation is deterministic for a given frame.
 
 use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
@@ -16,7 +16,7 @@ use pim_protocol::RouteUpdateFrame;
 
 /// Produce the canonical byte string that is signed/verified.
 fn signing_bytes(frame: &RouteUpdateFrame) -> Vec<u8> {
-    let mut bytes = Vec::with_capacity(26 + frame.entries.len() * 18);
+    let mut bytes = Vec::with_capacity(26 + frame.entries.len() * 22);
     bytes.extend_from_slice(frame.origin_id.as_bytes());
     bytes.extend_from_slice(&frame.sequence.to_be_bytes());
     bytes.extend_from_slice(&(frame.entries.len() as u16).to_be_bytes());
@@ -24,6 +24,7 @@ fn signing_bytes(frame: &RouteUpdateFrame) -> Vec<u8> {
         bytes.extend_from_slice(entry.destination.as_bytes());
         bytes.push(entry.hops);
         bytes.push(entry.flags);
+        bytes.extend_from_slice(&entry.mesh_ip);
     }
     bytes
 }
@@ -64,8 +65,18 @@ mod tests {
             origin_id: origin,
             sequence: seq,
             entries: vec![
-                RouteEntry { destination: NodeId::from_bytes([0x02; 16]), hops: 1, flags: 0x01 },
-                RouteEntry { destination: NodeId::from_bytes([0x03; 16]), hops: 2, flags: 0x00 },
+                RouteEntry {
+                    destination: NodeId::from_bytes([0x02; 16]),
+                    hops: 1,
+                    flags: 0x01,
+                    mesh_ip: [10, 77, 0, 1],
+                },
+                RouteEntry {
+                    destination: NodeId::from_bytes([0x03; 16]),
+                    hops: 2,
+                    flags: 0x00,
+                    mesh_ip: [10, 77, 0, 10],
+                },
             ],
             signature: [0u8; 64],
         }

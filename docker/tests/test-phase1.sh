@@ -49,7 +49,7 @@ assert_iface_up   "$COMPOSE_FILE" gateway pim0 "gateway pim0 is UP"
 assert_iface_addr "$COMPOSE_FILE" gateway "10.77.0.1" "gateway pim0 has address 10.77.0.1"
 
 assert_iface_up   "$COMPOSE_FILE" client pim0 "client pim0 is UP"
-assert_iface_addr "$COMPOSE_FILE" client "10.77.0.2" "client pim0 has address 10.77.0.2"
+assert_iface_addr "$COMPOSE_FILE" client "10.77.0.100" "client pim0 has address 10.77.0.100"
 
 # ── 1.7 Gateway NAT ───────────────────────────────────────────────────────────
 log_section "1.7 Gateway NAT / internet access"

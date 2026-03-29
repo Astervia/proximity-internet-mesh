@@ -203,6 +203,8 @@ struct DaemonState {
     is_gateway: bool,
     /// Our mesh-local IP (e.g. 10.77.0.1 for gateway).
     mesh_ip: Ipv4Addr,
+    /// Whether this node expects a dynamic mesh IP from a gateway.
+    request_dynamic_ip: bool,
     /// Our own X25519 public key (set only when is_gateway = true).
     own_x25519_pub: [u8; 32],
     sessions: SessionMap,
@@ -729,7 +731,7 @@ async fn handshake_initiator(
     flush_send_buffer(state, peer_id).await;
 
     // Non-gateway nodes request an IP address from the peer after connecting.
-    if !state.is_gateway {
+    if state.request_dynamic_ip {
         send_control(
             state,
             &peer_id,
@@ -990,19 +992,29 @@ async fn run_event_loop(state: Arc<DaemonState>) -> Result<()> {
                 let packet = &tun_buf[..n];
                 debug!(bytes = n, "TUN read");
 
-                // Determine destination: for now all non-local traffic goes to
-                // the nearest gateway (internet traffic).
-                let gw_route = state.routing.lock().await.nearest_gateway_route();
-                let (dst_id, next_hop_id) = match gw_route {
-                    Some((gw_id, next_hop)) => (gw_id, next_hop),
+                if n < 20 {
+                    debug!(bytes = n, "short IPv4 packet from TUN; dropping");
+                    continue;
+                }
+
+                let dest_ip = Ipv4Addr::new(packet[16], packet[17], packet[18], packet[19]);
+                let mesh_route = state.routing.lock().await.lookup_mesh_ip(dest_ip);
+                let (dst_id, next_hop_id, mut flags) = match mesh_route {
+                    Some((dst_id, next_hop)) => (dst_id, next_hop, DataFlags::empty()),
                     None => {
-                        // No route to a gateway — check direct peers as fallback
-                        let peers = state.transport.connected_peers();
-                        if peers.is_empty() {
-                            debug!("no route and no peers; dropping packet");
-                            continue;
+                        let gw_route = state.routing.lock().await.nearest_gateway_route();
+                        match gw_route {
+                            Some((gw_id, next_hop)) => (gw_id, next_hop, DataFlags::IS_INTERNET),
+                            None => {
+                                // No route to a gateway — check direct peers as fallback
+                                let peers = state.transport.connected_peers();
+                                if peers.is_empty() {
+                                    debug!("no route and no peers; dropping packet");
+                                    continue;
+                                }
+                                (peers[0], peers[0], DataFlags::IS_INTERNET)
+                            }
                         }
-                        (peers[0], peers[0])
                     }
                 };
 
@@ -1012,21 +1024,24 @@ async fn run_event_loop(state: Arc<DaemonState>) -> Result<()> {
                     continue;
                 };
 
-                let mut flags = DataFlags::IS_INTERNET;
                 let payload: Vec<u8>;
 
                 // E2E-encrypt if we have the gateway's X25519 public key and
                 // this packet is internet-bound.
-                if let Some(gw_pub) = known_gw_x25519 {
-                    match e2e_encrypt(packet, &gw_pub) {
-                        Ok(enc) => {
-                            flags |= DataFlags::IS_E2E;
-                            payload = enc;
+                if flags.contains(DataFlags::IS_INTERNET) {
+                    if let Some(gw_pub) = known_gw_x25519 {
+                        match e2e_encrypt(packet, &gw_pub) {
+                            Ok(enc) => {
+                                flags |= DataFlags::IS_E2E;
+                                payload = enc;
+                            }
+                            Err(e) => {
+                                warn!("E2E encrypt failed: {e}");
+                                payload = packet.to_vec();
+                            }
                         }
-                        Err(e) => {
-                            warn!("E2E encrypt failed: {e}");
-                            payload = packet.to_vec();
-                        }
+                    } else {
+                        payload = packet.to_vec();
                     }
                 } else {
                     payload = packet.to_vec();
@@ -1143,12 +1158,15 @@ async fn run_event_loop(state: Arc<DaemonState>) -> Result<()> {
 
                             if dst_local {
                                 if let Some(reply) = icmp_echo_reply(&ip_packet) {
-                                    let session = state.sessions.read().await
-                                        .get(&mesh.src_id).cloned();
+                                    let next_hop = state.routing.lock().await.lookup(mesh.src_id);
+                                    let session = match next_hop {
+                                        Some(next_hop) => state.sessions.read().await.get(&next_hop).cloned(),
+                                        None => None,
+                                    };
                                     if let Some(session) = session {
                                         send_mesh_data(
                                             &state, &session, state.self_id,
-                                            mesh.src_id, 8, DataFlags::IS_INTERNET,
+                                            mesh.src_id, 8, DataFlags::empty(),
                                             &reply,
                                         ).await;
                                     }
@@ -1296,13 +1314,17 @@ async fn run_event_loop(state: Arc<DaemonState>) -> Result<()> {
                                     gateway_ip,
                                     ..
                                 } => {
-                                    let ip = Ipv4Addr::from(assigned_ip);
-                                    let gw = Ipv4Addr::from(gateway_ip);
-                                    info!(%ip, prefix = subnet_mask, %gw, "received IP assignment");
-                                    if let Err(e) = state.tun.set_ip(ip, subnet_mask) {
-                                        warn!("TUN set_ip failed: {e}");
-                                    } else if let Err(e) = state.tun.add_default_route(gw) {
-                                        warn!("add_default_route failed: {e}");
+                                    if state.request_dynamic_ip {
+                                        let ip = Ipv4Addr::from(assigned_ip);
+                                        let gw = Ipv4Addr::from(gateway_ip);
+                                        info!(%ip, prefix = subnet_mask, %gw, "received IP assignment");
+                                        if let Err(e) = state.tun.set_ip(ip, subnet_mask) {
+                                            warn!("TUN set_ip failed: {e}");
+                                        } else if let Err(e) = state.tun.add_default_route(gw) {
+                                            warn!("add_default_route failed: {e}");
+                                        }
+                                    } else {
+                                        debug!(%from_peer, "ignoring unsolicited IpAssign for statically configured mesh IP");
                                     }
                                 }
                                 ControlFrame::Goodbye { departing_id, .. } => {
@@ -1387,15 +1409,10 @@ async fn run_gateway_return(state: Arc<DaemonState>) {
                     continue;
                 }
 
-                // Reverse-route: find the session for the destination IP
-                // A proper ARP/NDP routing table would map dest_ip to NodeId.
-                // As a short-term workaround, broadcast to all connected clients.
-                let clients = state.transport.connected_peers();
-                for peer in clients {
-                    let session = state.sessions.read().await.get(&peer).cloned();
+                if let Some((dst_id, next_hop)) = state.routing.lock().await.lookup_mesh_ip(dest_ip) {
+                    let session = state.sessions.read().await.get(&next_hop).cloned();
                     if let Some(session) = session {
-                        let flags = DataFlags::IS_INTERNET;
-                        send_mesh_data(&state, &session, state.self_id, peer, 8, flags, &pkt).await;
+                        send_mesh_data(&state, &session, state.self_id, dst_id, 8, DataFlags::IS_INTERNET, &pkt).await;
                     }
                 }
             }
@@ -1541,7 +1558,8 @@ async fn main() -> Result<()> {
 
     // ── TUN setup ──────────────────────────────────────────────────────────
     let mesh_cidr = config.interface.mesh_ip.clone();
-    if mesh_cidr == "auto" {
+    let request_dynamic_ip = mesh_cidr == "auto";
+    if request_dynamic_ip {
         bail!("mesh_ip must be set explicitly (e.g. \"10.77.0.1/24\")");
     }
     let (mesh_ip, prefix_len) = parse_cidr(&mesh_cidr)?;
@@ -1612,12 +1630,15 @@ async fn main() -> Result<()> {
     let reconnect = Arc::new(ReconnectManager::new(configured_addrs.iter().copied()));
 
     // ── Build shared state ────────────────────────────────────────────────
-    let routing = Arc::new(Mutex::new(RoutingTable::new(self_id, is_gateway)));
+    let mut routing_table = RoutingTable::new(self_id, is_gateway);
+    routing_table.set_self_mesh_ip(mesh_ip);
+    let routing = Arc::new(Mutex::new(routing_table));
     let state = Arc::new(DaemonState {
         self_id,
         identity: identity.clone(),
         is_gateway,
         mesh_ip,
+        request_dynamic_ip,
         own_x25519_pub,
         sessions: Arc::new(RwLock::new(HashMap::new())),
         hs_channels: Arc::new(Mutex::new(HashMap::new())),

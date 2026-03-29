@@ -25,6 +25,7 @@
 pub mod signing;
 
 use std::collections::{HashMap, HashSet};
+use std::net::Ipv4Addr;
 use std::time::{Duration, Instant};
 
 use tracing::{debug, info, trace, warn};
@@ -60,6 +61,8 @@ pub struct RouteTableEntry {
     /// Round-trip time to this gateway measured via Ping/Pong (milliseconds).
     /// `None` until the first probe completes.
     pub rtt_ms: Option<u32>,
+    /// Mesh IPv4 address advertised for this destination.
+    pub mesh_ip: Option<Ipv4Addr>,
 }
 
 // ── Gateway selection ─────────────────────────────────────────────────────────
@@ -82,6 +85,11 @@ impl RouteTableEntry {
     fn is_expired(&self, max_age: Duration) -> bool {
         self.last_seen.elapsed() > max_age
     }
+}
+
+fn decode_mesh_ip(octets: [u8; 4]) -> Option<Ipv4Addr> {
+    let ip = Ipv4Addr::from(octets);
+    (ip != Ipv4Addr::UNSPECIFIED).then_some(ip)
 }
 
 /// Whether the routing table changed and a triggered update should be sent.
@@ -112,6 +120,7 @@ pub struct RoutingTable {
     peer_max_seq: HashMap<NodeId, u64>,
     /// Peers whose routes must not be used for forwarding (reputation blacklist).
     blacklisted_peers: HashSet<NodeId>,
+    self_mesh_ip: Option<Ipv4Addr>,
 }
 
 impl RoutingTable {
@@ -125,7 +134,13 @@ impl RoutingTable {
             sequence: 0,
             peer_max_seq: HashMap::new(),
             blacklisted_peers: HashSet::new(),
+            self_mesh_ip: None,
         }
+    }
+
+    /// Record our own mesh IP so advertisements can publish it.
+    pub fn set_self_mesh_ip(&mut self, mesh_ip: Ipv4Addr) {
+        self.self_mesh_ip = Some(mesh_ip);
     }
 
     /// Register a directly-connected peer (called when a transport connection is established).
@@ -143,6 +158,7 @@ impl RoutingTable {
                 sequence: 0,
                 gateway_load: 0,
                 rtt_ms: None,
+                mesh_ip: None,
             },
         );
         debug!(%peer_id, "peer added to routing table");
@@ -189,6 +205,11 @@ impl RoutingTable {
         }
 
         let mut changed = false;
+        let advertised_self_mesh_ip = update
+            .entries
+            .iter()
+            .find(|entry| entry.destination == from_peer && entry.hops == 0)
+            .and_then(|entry| decode_mesh_ip(entry.mesh_ip));
 
         // Update last_seen for the advertising peer itself
         if let Some(entry) = self.routes.get_mut(&from_peer) {
@@ -206,6 +227,7 @@ impl RoutingTable {
                     sequence: update.sequence,
                     gateway_load: 0,
                     rtt_ms: None,
+                    mesh_ip: advertised_self_mesh_ip,
                 },
             );
             changed = true;
@@ -251,6 +273,7 @@ impl RoutingTable {
                             sequence: update.sequence,
                             gateway_load: 0,
                             rtt_ms: None,
+                            mesh_ip: decode_mesh_ip(advertised.mesh_ip),
                         },
                     );
                     debug!(%dst, hops = new_hops, via = %from_peer, "new route");
@@ -264,11 +287,12 @@ impl RoutingTable {
                     if better_path || newer_seq {
                         let old_hops = existing.hops;
                         // Preserve load/rtt when refreshing an existing gateway entry
-                        let (prev_load, prev_rtt) = if existing.is_gateway && !better_path {
-                            (existing.gateway_load, existing.rtt_ms)
+                        let (prev_load, prev_rtt, prev_mesh_ip) = if existing.is_gateway && !better_path {
+                            (existing.gateway_load, existing.rtt_ms, existing.mesh_ip)
                         } else {
-                            (0, None)
+                            (0, None, None)
                         };
+                        let mesh_ip = decode_mesh_ip(advertised.mesh_ip).or(prev_mesh_ip);
                         self.routes.insert(
                             dst,
                             RouteTableEntry {
@@ -280,6 +304,7 @@ impl RoutingTable {
                                 sequence: update.sequence,
                                 gateway_load: prev_load,
                                 rtt_ms: prev_rtt,
+                                mesh_ip,
                             },
                         );
                         if better_path {
@@ -314,6 +339,7 @@ impl RoutingTable {
             destination: self.self_id,
             hops: 0,
             flags: if self.is_gateway { 0x01 } else { 0x00 },
+            mesh_ip: self.self_mesh_ip.unwrap_or(Ipv4Addr::UNSPECIFIED).octets(),
         });
 
         for (dst, entry) in &self.routes {
@@ -333,6 +359,7 @@ impl RoutingTable {
                 destination: *dst,
                 hops: advertised_hops,
                 flags: if entry.is_gateway { 0x01 } else { 0x00 },
+                mesh_ip: entry.mesh_ip.unwrap_or(Ipv4Addr::UNSPECIFIED).octets(),
             });
         }
 
@@ -400,6 +427,21 @@ impl RoutingTable {
             .get(&dst)
             .filter(|e| !self.blacklisted_peers.contains(&e.next_hop))
             .map(|e| e.next_hop)
+    }
+
+    /// Resolve a mesh IPv4 destination to `(destination_id, next_hop)`.
+    pub fn lookup_mesh_ip(&self, mesh_ip: Ipv4Addr) -> Option<(NodeId, NodeId)> {
+        self.routes
+            .iter()
+            .find_map(|(dst, entry)| {
+                if entry.mesh_ip == Some(mesh_ip)
+                    && !self.blacklisted_peers.contains(&entry.next_hop)
+                {
+                    Some((*dst, entry.next_hop))
+                } else {
+                    None
+                }
+            })
     }
 
     /// Internal helper: pick the best gateway entry by composite score,
@@ -554,6 +596,10 @@ mod tests {
         NodeId::from_bytes([n; 16])
     }
 
+    fn mesh_ip(n: u8) -> [u8; 4] {
+        [10, 77, 0, n]
+    }
+
     /// Build a RouteUpdateFrame advertising `entries` from `origin`.
     fn advertisement(origin: NodeId, seq: u64, entries: Vec<(NodeId, u8, bool)>) -> RouteUpdateFrame {
         RouteUpdateFrame {
@@ -565,6 +611,7 @@ mod tests {
                     destination: dst,
                     hops,
                     flags: if is_gw { 0x01 } else { 0x00 },
+                    mesh_ip: mesh_ip(dst.as_bytes()[0]),
                 })
                 .collect(),
             signature: [0u8; 64],
@@ -871,7 +918,7 @@ mod tests {
         let upd = RouteUpdateFrame {
             origin_id: impostor,
             sequence: 1,
-            entries: vec![RouteEntry { destination: c, hops: 1, flags: 0 }],
+            entries: vec![RouteEntry { destination: c, hops: 1, flags: 0, mesh_ip: mesh_ip(3) }],
             signature: [0u8; 64],
         };
         let result = rt.apply_update(&upd, b);
@@ -892,7 +939,7 @@ mod tests {
         let upd = RouteUpdateFrame {
             origin_id: b,
             sequence: 1,
-            entries: vec![RouteEntry { destination: victim, hops: 0, flags: 0 }],
+            entries: vec![RouteEntry { destination: victim, hops: 0, flags: 0, mesh_ip: mesh_ip(42) }],
             signature: [0u8; 64],
         };
         let result = rt.apply_update(&upd, b);
@@ -913,8 +960,8 @@ mod tests {
             origin_id: b,
             sequence: 1,
             entries: vec![
-                RouteEntry { destination: b, hops: 0, flags: 0 }, // self-entry — OK
-                RouteEntry { destination: c, hops: 1, flags: 0 },
+                RouteEntry { destination: b, hops: 0, flags: 0, mesh_ip: mesh_ip(2) }, // self-entry — OK
+                RouteEntry { destination: c, hops: 1, flags: 0, mesh_ip: mesh_ip(3) },
             ],
             signature: [0u8; 64],
         };

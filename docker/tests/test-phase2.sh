@@ -37,6 +37,8 @@ log_info "Compose file: $RELAY_FILE"
 
 start_stack "$RELAY_FILE"
 wait_all_healthy "$RELAY_FILE" 150
+log_info "Waiting 10 s for relay route advertisements to propagate..."
+sleep 10
 
 # ── 2.1 End-to-end through relay ──────────────────────────────────────────────
 log_section "2.1 Client → relay → gateway → internet"
@@ -60,8 +62,10 @@ log_section "2.2 End-to-end encryption"
 # There should be no plaintext IP headers visible in the relay's captured frames.
 in_svc "$RELAY_FILE" client ping -c 1 -W 2 "8.8.8.8" >/dev/null 2>&1 || true
 
-PCAP_CHECK=$(in_svc "$RELAY_FILE" relay \
-    timeout 3 tcpdump -i pim0 -c 10 -nn 2>/dev/null | wc -l || echo "0")
+PCAP_CHECK=$(
+    in_svc "$RELAY_FILE" relay \
+        sh -lc 'count=$(timeout 3 tcpdump -i pim0 -c 10 -nn 2>/dev/null | wc -l || echo 0); echo "${count}" | tr -d "[:space:]"'
+)
 
 if [ "$PCAP_CHECK" -gt 0 ]; then
     log_ok "relay TUN carries only encrypted mesh frames (plaintext IP not present on pim0)"
