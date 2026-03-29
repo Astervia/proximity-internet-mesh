@@ -173,17 +173,17 @@ impl ReconnectManager {
 
 // ── Backoff ───────────────────────────────────────────────────────────────────
 
-/// Base delay (ms) for `attempt` without jitter: 1 s × 2^attempt, capped at 30 s.
+/// Base delay (ms) for `attempt` without jitter: 1 s × 2^attempt, capped at 10 s.
 fn backoff_base_ms(attempt: u32) -> u64 {
     const BASE_MS: u64 = 1_000;
-    const MAX_MS: u64 = 30_000;
+    const MAX_MS: u64 = 10_000;
     let shift = attempt.min(15) as u64;
     BASE_MS.saturating_mul(1u64 << shift).min(MAX_MS)
 }
 
 /// Exponential backoff with ±25 % uniform jitter.
 ///
-/// attempt 0 → ~1 s, attempt 1 → ~2 s, …, capped at ~30 s.
+/// attempt 0 → ~1 s, attempt 1 → ~2 s, …, capped at ~10 s.
 fn backoff_duration(attempt: u32) -> Duration {
     let base = backoff_base_ms(attempt);
     let jitter_range = (base / 4) as i64;
@@ -724,6 +724,8 @@ async fn handshake_initiator(
     state.sessions.write().await.insert(peer_id, session);
     state.peer_pubkeys.write().await.insert(peer_id, sender_pub);
     state.routing.lock().await.add_peer(peer_id);
+    state.routing.lock().await.unblacklist_peer(&peer_id);
+    state.reputation.lock().await.pardon(&peer_id);
     state.peer_last_hb.lock().await.insert(peer_id, Instant::now());
     info!(%peer_id, "session established (initiator)");
 
@@ -799,6 +801,8 @@ async fn handshake_responder(
     state.sessions.write().await.insert(peer_id, session);
     state.peer_pubkeys.write().await.insert(peer_id, init.sender_pub);
     state.routing.lock().await.add_peer(peer_id);
+    state.routing.lock().await.unblacklist_peer(&peer_id);
+    state.reputation.lock().await.pardon(&peer_id);
     state.peer_last_hb.lock().await.insert(peer_id, Instant::now());
     info!(%peer_id, "session established (responder)");
 
@@ -1749,15 +1753,15 @@ mod tests {
         assert_eq!(backoff_base_ms(1), 2_000);
         assert_eq!(backoff_base_ms(2), 4_000);
         assert_eq!(backoff_base_ms(3), 8_000);
-        assert_eq!(backoff_base_ms(4), 16_000);
+        assert_eq!(backoff_base_ms(4), 10_000);
     }
 
     #[test]
     fn backoff_base_capped_at_30s() {
-        // 2^5 * 1000 = 32000 > 30000 → capped
-        assert_eq!(backoff_base_ms(5), 30_000);
-        assert_eq!(backoff_base_ms(10), 30_000);
-        assert_eq!(backoff_base_ms(100), 30_000);
+        // 2^4 * 1000 = 16000 > 10000 → capped
+        assert_eq!(backoff_base_ms(4), 10_000);
+        assert_eq!(backoff_base_ms(10), 10_000);
+        assert_eq!(backoff_base_ms(100), 10_000);
     }
 
     #[test]
@@ -1783,12 +1787,12 @@ mod tests {
 
     #[test]
     fn backoff_duration_capped_within_25_pct_of_30s() {
-        // attempt ≥ 5: base = 30 000 ms, jitter ±7 500 ms
+        // attempt ≥ 4: base = 10 000 ms, jitter ±2 500 ms
         for _ in 0..200 {
             let d = backoff_duration(10);
             let ms = d.as_millis();
-            assert!(ms >= 22_500, "attempt 10: {ms} ms < 22 500 ms");
-            assert!(ms <= 37_500, "attempt 10: {ms} ms > 37 500 ms");
+            assert!(ms >= 7_500, "attempt 10: {ms} ms < 7 500 ms");
+            assert!(ms <= 12_500, "attempt 10: {ms} ms > 12 500 ms");
         }
     }
 

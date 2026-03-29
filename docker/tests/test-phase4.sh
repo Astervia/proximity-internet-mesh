@@ -19,6 +19,7 @@ source "$SCRIPT_DIR/common.sh"
 RESILIENCE_FILE="phase4-resilience.yml"
 FLOW_FILE="phase4-flow-control.yml"
 SKIP_SLOW="${SKIP_SLOW:-0}"
+RESILIENCE_GATEWAY_IP="172.34.0.10"
 
 cleanup() {
     if [ "${DUMP_LOGS_ON_FAIL:-0}" = "1" ] && [ $FAIL -gt 0 ]; then
@@ -57,7 +58,7 @@ log_info "Waiting 5 s during outage..."
 sleep 5
 
 log_info "Reconnecting gateway to pim-net..."
-docker network connect --ip 172.30.0.10 "$NETWORK_NAME" pim-p4-gw 2>/dev/null || \
+docker network connect --ip "$RESILIENCE_GATEWAY_IP" "$NETWORK_NAME" pim-p4-gw 2>/dev/null || \
     log_warn "network reconnect failed"
 
 log_info "Waiting 40 s for reconnect and re-handshake (backoff up to 30 s)..."
@@ -81,7 +82,7 @@ in_svc "$RESILIENCE_FILE" client ping -c 3 -W 1 10.77.0.1 >/dev/null 2>&1 || tru
 
 log_info "Reconnecting gateway after 5 s..."
 sleep 5
-docker network connect --ip 172.30.0.10 "$NETWORK_NAME" pim-p4-gw 2>/dev/null || true
+docker network connect --ip "$RESILIENCE_GATEWAY_IP" "$NETWORK_NAME" pim-p4-gw 2>/dev/null || true
 
 log_info "Waiting 35 s for buffer flush and route recovery..."
 sleep 35

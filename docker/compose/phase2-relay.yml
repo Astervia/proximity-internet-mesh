@@ -27,7 +27,7 @@ services:
       net.ipv4.ip_forward: "1"
     networks:
       pim-net:
-        ipv4_address: 172.30.0.10
+        ipv4_address: 172.31.0.10
     healthcheck:
       test: ["CMD-SHELL", "test -f /run/pim.pid && kill -0 $(cat /run/pim.pid) 2>/dev/null && ip link show pim0 2>/dev/null | grep -q UP"]
       interval: 2s
@@ -53,7 +53,7 @@ services:
         condition: service_healthy
     networks:
       pim-net:
-        ipv4_address: 172.30.0.20
+        ipv4_address: 172.31.0.20
     healthcheck:
       test: ["CMD-SHELL", "test -f /run/pim.pid && kill -0 $(cat /run/pim.pid) 2>/dev/null && ip link show pim0 2>/dev/null | grep -q UP"]
       interval: 2s
@@ -79,7 +79,7 @@ services:
         condition: service_healthy
     networks:
       pim-net:
-        ipv4_address: 172.30.0.30
+        ipv4_address: 172.31.0.30
     healthcheck:
       test: ["CMD-SHELL", "test -f /run/pim.pid && kill -0 $(cat /run/pim.pid) 2>/dev/null && ip link show pim0 2>/dev/null | grep -q UP"]
       interval: 2s
@@ -93,4 +93,4 @@ networks:
     ipam:
       driver: default
       config:
-        - subnet: 172.30.0.0/24
+        - subnet: 172.31.0.0/24

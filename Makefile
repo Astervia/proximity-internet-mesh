@@ -22,7 +22,7 @@ test-p3: docker-build
 	bash $(TEST_DIR)/test-phase3.sh
 
 test-p4: docker-build
-	bash $(TEST_DIR)/test-phase4.sh
+	SKIP_SLOW=1 bash $(TEST_DIR)/test-phase4.sh
 
 # Skip the 6-minute NAT timeout test by default; set SKIP_SLOW=0 to enable.
 test-p4-full: docker-build

@@ -63,19 +63,23 @@ docs/
 
 ## Network Topology
 
-All stacks share a single `172.30.0.0/24` bridge network for transport.
+Each stack uses its own Docker bridge subnet for transport to avoid cross-phase
+address collisions when multiple test networks exist on the same host.
 The mesh uses `10.77.0.0/24` for TUN addresses.
 
 | Role | Transport IP | Mesh IP | Config file |
 |------|-------------|---------|-------------|
-| gateway | 172.30.0.10 | 10.77.0.1 | gateway.toml |
-| gateway1 (phase 5) | 172.30.0.10 | 10.77.0.1 | gateway1.toml |
-| gateway2 (phase 5) | 172.30.0.11 | 10.77.0.2 | gateway2.toml |
-| relay | 172.30.0.20 | 10.77.0.10 | relay.toml |
-| relay1 | 172.30.0.20 | 10.77.0.10 | relay1.toml |
-| relay2 | 172.30.0.21 | 10.77.0.11 | relay2.toml |
-| client | 172.30.0.30 | 10.77.0.100 | client.toml / client-relay.toml |
-| client2 | 172.30.0.31 | 10.77.0.101 | client2.toml |
+| gateway (phase 1 / 4) | 172.30.0.10 / 172.34.0.10 | 10.77.0.1 | gateway.toml |
+| gateway (phase 2 relay) | 172.31.0.10 | 10.77.0.1 | gateway.toml |
+| gateway (phase 2 routing) | 172.32.0.10 | 10.77.0.1 | gateway.toml |
+| gateway1 (phase 5) | 172.36.0.10 | 10.77.0.1 | gateway1.toml |
+| gateway2 (phase 5) | 172.36.0.11 | 10.77.0.2 | gateway2.toml |
+| relay (phase 2 relay / 5) | 172.31.0.20 / 172.36.0.20 | 10.77.0.10 | relay.toml / relay-multigateway.toml |
+| relay1 (phase 2 routing / 3) | 172.32.0.20 / 172.33.0.20 | 10.77.0.10 | relay1.toml / relay.toml |
+| relay2 (phase 2 routing) | 172.32.0.21 | 10.77.0.11 | relay2.toml |
+| client (phase 1 / 4 / 5) | 172.30.0.30 / 172.34.0.30 / 172.36.0.30 | 10.77.0.100 | client.toml / client-relay.toml |
+| client (phase 2 relay / routing / 3) | 172.31.0.30 / 172.32.0.30 / 172.33.0.30 | 10.77.0.100 | client-relay.toml / client-dual-relay.toml |
+| client2 | 172.33.0.31 | 10.77.0.101 | client2.toml |
 
 ### Phase 1 — Single-hop
 
