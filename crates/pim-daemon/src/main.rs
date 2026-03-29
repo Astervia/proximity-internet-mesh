@@ -201,8 +201,9 @@ struct DaemonState {
     self_id: NodeId,
     identity: Arc<Identity>,
     is_gateway: bool,
-    /// Our mesh-local IP (e.g. 10.77.0.1 for gateway).
-    mesh_ip: Ipv4Addr,
+    /// Our mesh-local IP (e.g. 10.77.0.1 for gateway). Stored as u32 to allow
+    /// atomic update when a dynamic IP is assigned.
+    mesh_ip: AtomicU32,
     /// Whether this node expects a dynamic mesh IP from a gateway.
     request_dynamic_ip: bool,
     /// Our own X25519 public key (set only when is_gateway = true).
@@ -1002,6 +1003,12 @@ async fn run_event_loop(state: Arc<DaemonState>) -> Result<()> {
                 }
 
                 let dest_ip = Ipv4Addr::new(packet[16], packet[17], packet[18], packet[19]);
+
+                // Drop packets addressed to ourselves — the OS handles local delivery.
+                if dest_ip == Ipv4Addr::from(state.mesh_ip.load(Ordering::Relaxed)) {
+                    continue;
+                }
+
                 let mesh_route = state.routing.lock().await.lookup_mesh_ip(dest_ip);
                 let (dst_id, next_hop_id, mut flags) = match mesh_route {
                     Some((dst_id, next_hop)) => (dst_id, next_hop, DataFlags::empty()),
@@ -1158,7 +1165,7 @@ async fn run_event_loop(state: Arc<DaemonState>) -> Result<()> {
                                 && Ipv4Addr::new(
                                     ip_packet[16], ip_packet[17],
                                     ip_packet[18], ip_packet[19],
-                                ) == state.mesh_ip;
+                                ) == Ipv4Addr::from(state.mesh_ip.load(Ordering::Relaxed));
 
                             if dst_local {
                                 if let Some(reply) = icmp_echo_reply(&ip_packet) {
@@ -1327,6 +1334,8 @@ async fn run_event_loop(state: Arc<DaemonState>) -> Result<()> {
                                         } else if let Err(e) = state.tun.add_default_route(gw) {
                                             warn!("add_default_route failed: {e}");
                                         }
+                                        state.mesh_ip.store(u32::from(ip), Ordering::Relaxed);
+                                        state.routing.lock().await.set_self_mesh_ip(ip);
                                     } else {
                                         debug!(%from_peer, "ignoring unsolicited IpAssign for statically configured mesh IP");
                                     }
@@ -1408,7 +1417,7 @@ async fn run_gateway_return(state: Arc<DaemonState>) {
                 if pkt.len() < 20 { continue; }
                 let dest_ip = Ipv4Addr::new(pkt[16], pkt[17], pkt[18], pkt[19]);
 
-                if dest_ip == state.mesh_ip {
+                if dest_ip == Ipv4Addr::from(state.mesh_ip.load(Ordering::Relaxed)) {
                     // It is for the gateway itself
                     continue;
                 }
@@ -1563,14 +1572,18 @@ async fn main() -> Result<()> {
     // ── TUN setup ──────────────────────────────────────────────────────────
     let mesh_cidr = config.interface.mesh_ip.clone();
     let request_dynamic_ip = mesh_cidr == "auto";
-    if request_dynamic_ip {
-        bail!("mesh_ip must be set explicitly (e.g. \"10.77.0.1/24\")");
-    }
-    let (mesh_ip, prefix_len) = parse_cidr(&mesh_cidr)?;
+    let (mesh_ip, prefix_len) = if request_dynamic_ip {
+        // Placeholder; real address will be assigned via IpAssign control frame.
+        (Ipv4Addr::UNSPECIFIED, 24u8)
+    } else {
+        parse_cidr(&mesh_cidr)?
+    };
     let tun = Arc::new(
         TunInterface::create(&config.interface.name).context("failed to create TUN interface")?,
     );
-    tun.set_ip(mesh_ip, prefix_len).context("set TUN IP")?;
+    if !request_dynamic_ip {
+        tun.set_ip(mesh_ip, prefix_len).context("set TUN IP")?;
+    }
     tun.set_mtu(config.interface.mtu).context("set TUN MTU")?;
     tun.up().context("bring TUN up")?;
     info!(iface = %tun.name(), addr = %mesh_ip, prefix = prefix_len, "TUN up");
@@ -1635,13 +1648,15 @@ async fn main() -> Result<()> {
 
     // ── Build shared state ────────────────────────────────────────────────
     let mut routing_table = RoutingTable::new(self_id, is_gateway);
-    routing_table.set_self_mesh_ip(mesh_ip);
+    if !request_dynamic_ip {
+        routing_table.set_self_mesh_ip(mesh_ip);
+    }
     let routing = Arc::new(Mutex::new(routing_table));
     let state = Arc::new(DaemonState {
         self_id,
         identity: identity.clone(),
         is_gateway,
-        mesh_ip,
+        mesh_ip: AtomicU32::new(u32::from(mesh_ip)),
         request_dynamic_ip,
         own_x25519_pub,
         sessions: Arc::new(RwLock::new(HashMap::new())),

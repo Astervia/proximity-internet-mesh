@@ -121,6 +121,8 @@ pub struct RoutingTable {
     /// Peers whose routes must not be used for forwarding (reputation blacklist).
     blacklisted_peers: HashSet<NodeId>,
     self_mesh_ip: Option<Ipv4Addr>,
+    /// Reverse index: mesh IPv4 → destination NodeId for O(1) `lookup_mesh_ip`.
+    mesh_ip_index: HashMap<Ipv4Addr, NodeId>,
 }
 
 impl RoutingTable {
@@ -135,7 +137,32 @@ impl RoutingTable {
             peer_max_seq: HashMap::new(),
             blacklisted_peers: HashSet::new(),
             self_mesh_ip: None,
+            mesh_ip_index: HashMap::new(),
         }
+    }
+
+    /// Insert or update a route, keeping `mesh_ip_index` in sync.
+    fn insert_route(&mut self, dst: NodeId, entry: RouteTableEntry) {
+        if let Some(old) = self.routes.get(&dst) {
+            if old.mesh_ip != entry.mesh_ip {
+                if let Some(old_ip) = old.mesh_ip {
+                    self.mesh_ip_index.remove(&old_ip);
+                }
+            }
+        }
+        if let Some(ip) = entry.mesh_ip {
+            self.mesh_ip_index.insert(ip, dst);
+        }
+        self.routes.insert(dst, entry);
+    }
+
+    /// Remove a route, keeping `mesh_ip_index` in sync.
+    fn remove_route(&mut self, dst: &NodeId) -> Option<RouteTableEntry> {
+        let entry = self.routes.remove(dst)?;
+        if let Some(ip) = entry.mesh_ip {
+            self.mesh_ip_index.remove(&ip);
+        }
+        Some(entry)
     }
 
     /// Record our own mesh IP so advertisements can publish it.
@@ -219,7 +246,7 @@ impl RoutingTable {
             entry.last_seen = Instant::now();
         } else {
             // Heard from a previously unknown peer — add it at 1 hop
-            self.routes.insert(
+            self.insert_route(
                 from_peer,
                 RouteTableEntry {
                     next_hop: from_peer,
@@ -252,7 +279,7 @@ impl RoutingTable {
             if new_hops >= INFINITY {
                 if let Some(existing) = self.routes.get(&dst) {
                     if existing.next_hop == from_peer {
-                        self.routes.remove(&dst);
+                        self.remove_route(&dst);
                         info!(%dst, via = %from_peer, "route poisoned");
                         changed = true;
                     }
@@ -265,7 +292,7 @@ impl RoutingTable {
             match self.routes.get(&dst) {
                 None => {
                     // New route
-                    self.routes.insert(
+                    self.insert_route(
                         dst,
                         RouteTableEntry {
                             next_hop: from_peer,
@@ -296,7 +323,7 @@ impl RoutingTable {
                             (0, None, None)
                         };
                         let mesh_ip = decode_mesh_ip(advertised.mesh_ip).or(prev_mesh_ip);
-                        self.routes.insert(
+                        self.insert_route(
                             dst,
                             RouteTableEntry {
                                 next_hop: from_peer,
@@ -319,20 +346,21 @@ impl RoutingTable {
             }
         }
 
-        let before = self.routes.len();
-        self.routes.retain(|dst, entry| {
-            if entry.learned_from == from_peer
-                && *dst != from_peer
-                && !advertised_destinations.contains(dst)
-            {
-                debug!(%dst, via = %from_peer, "route withdrawn (missing from full update)");
-                false
-            } else {
-                true
-            }
-        });
-        if self.routes.len() != before {
+        let withdrawn: Vec<NodeId> = self.routes
+            .iter()
+            .filter(|(dst, entry)| {
+                entry.learned_from == from_peer
+                    && **dst != from_peer
+                    && !advertised_destinations.contains(*dst)
+            })
+            .map(|(dst, _)| *dst)
+            .collect();
+        if !withdrawn.is_empty() {
             changed = true;
+            for dst in withdrawn {
+                debug!(%dst, via = %from_peer, "route withdrawn (missing from full update)");
+                self.remove_route(&dst);
+            }
         }
 
         if changed {
@@ -450,17 +478,12 @@ impl RoutingTable {
 
     /// Resolve a mesh IPv4 destination to `(destination_id, next_hop)`.
     pub fn lookup_mesh_ip(&self, mesh_ip: Ipv4Addr) -> Option<(NodeId, NodeId)> {
-        self.routes
-            .iter()
-            .find_map(|(dst, entry)| {
-                if entry.mesh_ip == Some(mesh_ip)
-                    && !self.blacklisted_peers.contains(&entry.next_hop)
-                {
-                    Some((*dst, entry.next_hop))
-                } else {
-                    None
-                }
-            })
+        let dst = self.mesh_ip_index.get(&mesh_ip)?;
+        let entry = self.routes.get(dst)?;
+        if self.blacklisted_peers.contains(&entry.next_hop) {
+            return None;
+        }
+        Some((*dst, entry.next_hop))
     }
 
     /// Internal helper: pick the best gateway entry by composite score,
@@ -549,37 +572,37 @@ impl RoutingTable {
     /// Remove all routes older than `max_age`. Returns `Changed` if anything
     /// was removed.
     pub fn expire_stale(&mut self, max_age: Duration) -> UpdateResult {
-        let before = self.routes.len();
-        self.routes.retain(|dst, entry| {
-            let keep = !entry.is_expired(max_age);
-            if !keep {
-                debug!(%dst, "route expired");
-            }
-            keep
-        });
-        if self.routes.len() < before {
-            UpdateResult::Changed
-        } else {
-            UpdateResult::Unchanged
+        let expired: Vec<NodeId> = self.routes
+            .iter()
+            .filter(|(_, e)| e.is_expired(max_age))
+            .map(|(k, _)| *k)
+            .collect();
+        if expired.is_empty() {
+            return UpdateResult::Unchanged;
         }
+        for dst in expired {
+            debug!(%dst, "route expired");
+            self.remove_route(&dst);
+        }
+        UpdateResult::Changed
     }
 
     /// Invalidate all routes whose `next_hop` is `peer`. Returns `Changed` if
     /// anything was removed.
     pub fn remove_routes_via(&mut self, peer: NodeId) -> UpdateResult {
-        let before = self.routes.len();
-        self.routes.retain(|dst, entry| {
-            let keep = entry.next_hop != peer;
-            if !keep {
-                debug!(%dst, via = %peer, "route invalidated (peer down)");
-            }
-            keep
-        });
-        if self.routes.len() < before {
-            UpdateResult::Changed
-        } else {
-            UpdateResult::Unchanged
+        let to_remove: Vec<NodeId> = self.routes
+            .iter()
+            .filter(|(_, e)| e.next_hop == peer)
+            .map(|(k, _)| *k)
+            .collect();
+        if to_remove.is_empty() {
+            return UpdateResult::Unchanged;
         }
+        for dst in to_remove {
+            debug!(%dst, via = %peer, "route invalidated (peer down)");
+            self.remove_route(&dst);
+        }
+        UpdateResult::Changed
     }
 
     // ── Accessors ─────────────────────────────────────────────────────────────
