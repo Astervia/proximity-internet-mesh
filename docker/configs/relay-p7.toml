@@ -1,0 +1,28 @@
+# Phase 7 — Auto-discovery relay config.
+# NO [[peers]] — all connections formed via UDP broadcast discovery.
+# Advertises: CLIENT | RELAY (capabilities 0x03)
+
+[node]
+name = "relay-p7"
+data_dir = "/var/lib/pim"
+
+[interface]
+mesh_ip = "10.77.0.10/24"
+mtu = 1400
+
+[discovery]
+enabled = true
+port = 9101
+broadcast_interval_ms = 5000
+peer_timeout_ms = 30000
+connect_relays = true
+connect_gateways = true
+
+[relay]
+enabled = true
+
+[transport]
+listen_port = 9100
+
+[security]
+key_file = "/var/lib/pim/node.key"

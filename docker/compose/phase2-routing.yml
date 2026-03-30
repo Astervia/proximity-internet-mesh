@@ -1,0 +1,126 @@
+# Phase 2 — Routing convergence and failover
+# Topology:
+#          ┌── relay1 ──┐
+#  client ─┤             ├── gateway ── internet
+#          └── relay2 ──┘
+#
+# Covers:
+#   2.3 Docker: verify routing table on each node via `pim status`
+#   2.3 Docker: kill a relay mid-test → traffic reroutes via alternate path
+
+name: pim-phase2-routing
+
+services:
+  gateway:
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+    image: pim:latest
+    container_name: pim-p2r-gw
+    hostname: gateway
+    volumes:
+      - ../configs/gateway.toml:/etc/pim/pim.toml:ro
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    sysctls:
+      net.ipv4.ip_forward: "1"
+    networks:
+      pim-net:
+        ipv4_address: 172.32.0.10
+    healthcheck:
+      test: ["CMD-SHELL", "test -f /run/pim.pid && kill -0 $(cat /run/pim.pid) 2>/dev/null && ip link show pim0 2>/dev/null | grep -q UP"]
+      interval: 2s
+      timeout: 4s
+      retries: 25
+      start_period: 5s
+
+  relay1:
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+    image: pim:latest
+    container_name: pim-p2r-relay1
+    hostname: relay1
+    volumes:
+      - ../configs/relay1.toml:/etc/pim/pim.toml:ro
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    depends_on:
+      gateway:
+        condition: service_healthy
+    networks:
+      pim-net:
+        ipv4_address: 172.32.0.20
+    healthcheck:
+      test: ["CMD-SHELL", "test -f /run/pim.pid && kill -0 $(cat /run/pim.pid) 2>/dev/null && ip link show pim0 2>/dev/null | grep -q UP"]
+      interval: 2s
+      timeout: 4s
+      retries: 25
+      start_period: 8s
+
+  relay2:
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+    image: pim:latest
+    container_name: pim-p2r-relay2
+    hostname: relay2
+    volumes:
+      - ../configs/relay2.toml:/etc/pim/pim.toml:ro
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    depends_on:
+      gateway:
+        condition: service_healthy
+    networks:
+      pim-net:
+        ipv4_address: 172.32.0.21
+    healthcheck:
+      test: ["CMD-SHELL", "test -f /run/pim.pid && kill -0 $(cat /run/pim.pid) 2>/dev/null && ip link show pim0 2>/dev/null | grep -q UP"]
+      interval: 2s
+      timeout: 4s
+      retries: 25
+      start_period: 8s
+
+  client:
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+    image: pim:latest
+    container_name: pim-p2r-client
+    hostname: client
+    volumes:
+      - ../configs/client-dual-relay.toml:/etc/pim/pim.toml:ro
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    depends_on:
+      relay1:
+        condition: service_healthy
+      relay2:
+        condition: service_healthy
+    networks:
+      pim-net:
+        ipv4_address: 172.32.0.30
+    healthcheck:
+      test: ["CMD-SHELL", "test -f /run/pim.pid && kill -0 $(cat /run/pim.pid) 2>/dev/null && ip link show pim0 2>/dev/null | grep -q UP"]
+      interval: 2s
+      timeout: 4s
+      retries: 25
+      start_period: 12s
+
+networks:
+  pim-net:
+    driver: bridge
+    ipam:
+      driver: default
+      config:
+        - subnet: 172.32.0.0/24

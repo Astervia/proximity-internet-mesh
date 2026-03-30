@@ -1,0 +1,73 @@
+# Phase 4 — Flow control and backpressure
+# Topology: flood-sender ──── gateway ──── internet
+#
+# The flood-sender container generates high-volume traffic to test
+# that the congestion control policy drops data frames but keeps
+# control frames, and that memory stays bounded.
+#
+# Covers:
+#   4.3 Docker: flood sender → backpressure applied, no OOM
+
+name: pim-phase4-flow-control
+
+services:
+  gateway:
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+    image: pim:latest
+    container_name: pim-p4fc-gw
+    hostname: gateway
+    volumes:
+      - ../configs/gateway.toml:/etc/pim/pim.toml:ro
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    sysctls:
+      net.ipv4.ip_forward: "1"
+    networks:
+      pim-net:
+        ipv4_address: 172.35.0.10
+    healthcheck:
+      test: ["CMD-SHELL", "test -f /run/pim.pid && kill -0 $(cat /run/pim.pid) 2>/dev/null && ip link show pim0 2>/dev/null | grep -q UP"]
+      interval: 2s
+      timeout: 4s
+      retries: 25
+      start_period: 5s
+
+  # High-volume sender uses the same pim image; just sends lots of traffic.
+  flood-sender:
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+    image: pim:latest
+    container_name: pim-p4fc-flood
+    hostname: flood-sender
+    volumes:
+      - ../configs/client.toml:/etc/pim/pim.toml:ro
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    depends_on:
+      gateway:
+        condition: service_healthy
+    networks:
+      pim-net:
+        ipv4_address: 172.35.0.30
+    healthcheck:
+      test: ["CMD-SHELL", "test -f /run/pim.pid && kill -0 $(cat /run/pim.pid) 2>/dev/null && ip link show pim0 2>/dev/null | grep -q UP"]
+      interval: 2s
+      timeout: 4s
+      retries: 25
+      start_period: 8s
+
+networks:
+  pim-net:
+    driver: bridge
+    ipam:
+      driver: default
+      config:
+        - subnet: 172.35.0.0/24

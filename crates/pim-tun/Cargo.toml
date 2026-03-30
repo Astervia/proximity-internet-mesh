@@ -1,0 +1,12 @@
+[package]
+name = "pim-tun"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+pim-core = { workspace = true }
+tokio = { workspace = true }
+nix = { workspace = true }
+libc = { workspace = true }
+tracing = { workspace = true }
+thiserror = { workspace = true }

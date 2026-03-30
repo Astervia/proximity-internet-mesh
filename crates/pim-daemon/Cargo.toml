@@ -1,0 +1,28 @@
+[package]
+name = "pim-daemon"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+pim-core = { workspace = true }
+pim-crypto = { workspace = true }
+pim-protocol = { workspace = true }
+pim-transport = { workspace = true }
+pim-tun = { workspace = true }
+pim-gateway = { workspace = true }
+pim-discovery = { workspace = true }
+pim-routing = { workspace = true }
+pim-wifidirect = { workspace = true }
+tokio = { workspace = true }
+tokio-util = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+anyhow = { workspace = true }
+serde = { workspace = true }
+toml = { workspace = true }
+bytes = { workspace = true }
+hkdf = { workspace = true }
+sha2 = { workspace = true }
+rand = { workspace = true }
+ed25519-dalek = { workspace = true }
+libc = { workspace = true }

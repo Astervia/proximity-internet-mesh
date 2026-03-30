@@ -1,0 +1,98 @@
+# Phase 7 — Zero-config auto-discovery
+# Topology: client ──(discovered)── relay ──(discovered)── gateway ── internet
+#
+# NO [[peers]] in any config file.  All connections formed via UDP broadcast
+# discovery (255.255.255.255:9101).  No depends_on between services — all three
+# start simultaneously to prove true zero-config convergence.
+# Network: 172.34.0.0/24
+#
+# Covers (from implementation-plan.md):
+#   7.4 Docker 7A: all three nodes discover each other (no static peers)
+#   7.4 Docker 7B: client gets IP from gateway, TUN configured, can ping gateway
+#   7.4 Docker 7C: curl http://example.com from client via discovered relay chain
+#   7.4 Docker 7D: DNS resolves from client through mesh
+#   7.4 Docker 7E: late-joiner client discovers and joins after gateway+relay are up
+#   7.4 Docker 7F: relay loss → peer timeout → relay restart → re-discovery
+
+name: pim-phase7-autodiscovery
+
+services:
+  gateway:
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+    image: pim:latest
+    container_name: pim-p7-gw
+    hostname: gateway
+    volumes:
+      - ../configs/gateway-p7.toml:/etc/pim/pim.toml:ro
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    sysctls:
+      net.ipv4.ip_forward: "1"
+    networks:
+      pim-net:
+        ipv4_address: 172.34.0.10
+    healthcheck:
+      test: ["CMD-SHELL", "test -f /run/pim.pid && kill -0 $(cat /run/pim.pid) 2>/dev/null && ip link show pim0 2>/dev/null | grep -q UP"]
+      interval: 2s
+      timeout: 4s
+      retries: 25
+      start_period: 5s
+
+  relay:
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+    image: pim:latest
+    container_name: pim-p7-relay
+    hostname: relay
+    volumes:
+      - ../configs/relay-p7.toml:/etc/pim/pim.toml:ro
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    networks:
+      pim-net:
+        ipv4_address: 172.34.0.20
+    healthcheck:
+      test: ["CMD-SHELL", "test -f /run/pim.pid && kill -0 $(cat /run/pim.pid) 2>/dev/null && ip link show pim0 2>/dev/null | grep -q UP"]
+      interval: 2s
+      timeout: 4s
+      retries: 25
+      start_period: 5s
+
+  client:
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+    image: pim:latest
+    container_name: pim-p7-client
+    hostname: client
+    volumes:
+      - ../configs/client-p7.toml:/etc/pim/pim.toml:ro
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    networks:
+      pim-net:
+        ipv4_address: 172.34.0.30
+    healthcheck:
+      test: ["CMD-SHELL", "test -f /run/pim.pid && kill -0 $(cat /run/pim.pid) 2>/dev/null"]
+      interval: 2s
+      timeout: 4s
+      retries: 25
+      start_period: 5s
+
+networks:
+  pim-net:
+    driver: bridge
+    ipam:
+      driver: default
+      config:
+        - subnet: 172.34.0.0/24

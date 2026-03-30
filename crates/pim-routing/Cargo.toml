@@ -1,0 +1,15 @@
+[package]
+name = "pim-routing"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+pim-core = { workspace = true }
+pim-protocol = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+thiserror = { workspace = true }
+ed25519-dalek = { workspace = true }
+
+[dev-dependencies]
+rand = { workspace = true }
