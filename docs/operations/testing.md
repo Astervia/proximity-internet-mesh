@@ -55,7 +55,7 @@ They validate real daemon startup, TUN interface handling, peer connectivity, ro
 - `test-p3`: discovery and peer lifecycle
 - `test-p4`: resilience, buffering, congestion, and slow NAT timeout checks
 - `test-p5`: dual-gateway failover and gateway selection behavior
-- `test-bluetooth`: Bluetooth PAN readiness seam using a fake sysfs interface tree in Docker
+- `test-bluetooth`: Bluetooth PAN automatic peer discovery seam using fake sysfs and `ip neigh` fixtures in Docker
 
 ## Local Workflow
 

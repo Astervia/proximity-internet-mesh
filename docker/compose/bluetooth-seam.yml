@@ -11,9 +11,19 @@ services:
     entrypoint:
       - /bin/bash
       - -lc
-      - mkdir -p /tmp/fake-sysfs/bnep0; printf 'down\n' > /tmp/fake-sysfs/bnep0/operstate; (sleep 2; printf 'up\n' > /tmp/fake-sysfs/bnep0/operstate) & exec /entrypoint.sh
+      - >-
+        mkdir -p /tmp/fake-sysfs/bnep0 /tmp/fake-bin /tmp/fake-neigh;
+        printf 'down\n' > /tmp/fake-sysfs/bnep0/operstate;
+        printf '%s\n' '#!/bin/sh' 'for arg in "$$@"; do' '  if [ "$$arg" = "devices" ]; then' '    printf '\''Device AA:BB:CC:DD:EE:FF PIM-peer\n'\''' '    exit 0' '  fi' 'done' 'exit 0' > /tmp/fake-bin/bluetoothctl;
+        printf '%s\n' '#!/bin/sh' 'touch /tmp/fake-neigh/ready' 'printf '\''up\n'\'' > /tmp/fake-sysfs/bnep0/operstate' 'exit 0' > /tmp/fake-bin/bt-network;
+        printf '%s\n' '#!/bin/sh' 'if [ "$$1" = "neigh" ] && [ "$$2" = "show" ] && [ "$$3" = "dev" ] && [ "$$4" = "bnep0" ]; then' '  if [ -f /tmp/fake-neigh/ready ]; then' '    printf '\''172.39.0.99 dev bnep0 lladdr 02:00:00:00:00:99 REACHABLE\n'\''' '  fi' '  exit 0' 'fi' 'exec /sbin/ip "$$@"' > /tmp/fake-bin/ip;
+        chmod +x /tmp/fake-bin/bluetoothctl /tmp/fake-bin/bt-network /tmp/fake-bin/ip;
+        exec /entrypoint.sh
     environment:
       PIM_BLUETOOTH_SYSFS_ROOT: /tmp/fake-sysfs
+      PIM_BLUETOOTH_IP_COMMAND: /tmp/fake-bin/ip
+      PIM_BLUETOOTH_BLUETOOTHCTL_COMMAND: /tmp/fake-bin/bluetoothctl
+      PIM_BLUETOOTH_BT_NETWORK_COMMAND: /tmp/fake-bin/bt-network
       RUST_LOG: debug
     volumes:
       - ../configs/bluetooth-seam.toml:/etc/pim/pim.toml:ro

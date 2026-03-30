@@ -152,10 +152,20 @@ prefer a smaller container scenario when the behavior under test is:
 - log or status-level handoff into the main daemon path
 
 The Bluetooth test follows this pattern. It starts one daemon container, mounts
-`docker/configs/bluetooth-seam.toml`, sets `PIM_BLUETOOTH_SYSFS_ROOT=/tmp/fake-sysfs`,
-creates a fake `bnep0/operstate` file, flips it from `down` to `up`, and then
-asserts that the daemon logs `Bluetooth PAN peer ready` and hands the resulting
-address into the normal connection path.
+`docker/configs/bluetooth-seam.toml`, sets fake command paths for:
+
+- `PIM_BLUETOOTH_BLUETOOTHCTL_COMMAND`
+- `PIM_BLUETOOTH_BT_NETWORK_COMMAND`
+- `PIM_BLUETOOTH_IP_COMMAND`
+- `PIM_BLUETOOTH_SYSFS_ROOT`
+
+The fake `bluetoothctl` script reports a nearby `PIM-` device, the fake
+`bt-network` script marks the PAN interface as ready, and the fake `ip neigh`
+script returns the resulting peer IP. The test then asserts that the daemon:
+
+- radio-discovers and prepares a new Bluetooth peer
+- auto-discovers the PAN neighbor IP
+- hands the resulting address into the normal connection path
 
 ## Writing a New Docker Test
 
@@ -286,9 +296,10 @@ plan. Status: **[x] implemented** / **[ ] pending**.
 
 | Test | Scenario                                                        | Status                |
 | ---- | --------------------------------------------------------------- | --------------------- |
-| BT.1 | fake `bnep0` operstate flips to `up` inside Docker              | [x] test-bluetooth.sh |
-| BT.2 | daemon emits Bluetooth peer-ready log using fake sysfs root     | [x] test-bluetooth.sh |
-| BT.3 | Bluetooth handoff reaches the normal connection-initiation path | [x] test-bluetooth.sh |
+| BT.1 | fake `bluetoothctl` reports a nearby `PIM-` peer                  | [x] test-bluetooth.sh |
+| BT.2 | fake `bt-network` marks the PAN interface ready                   | [x] test-bluetooth.sh |
+| BT.3 | daemon auto-discovers PAN peer IPs from fixture `ip neigh` output | [x] test-bluetooth.sh |
+| BT.4 | Bluetooth handoff reaches the normal connection-initiation path   | [x] test-bluetooth.sh |
 
 ### Phase 2 — Multi-Hop Relay
 

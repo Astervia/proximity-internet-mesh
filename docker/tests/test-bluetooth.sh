@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# test-bluetooth.sh — Docker seam test for Bluetooth PAN readiness handling.
+# test-bluetooth.sh — Docker seam test for Bluetooth PAN automatic peer discovery.
 
 set -uo pipefail
 
@@ -23,7 +23,7 @@ log_info "Compose file: $COMPOSE_FILE"
 start_stack "$COMPOSE_FILE"
 wait_all_healthy "$COMPOSE_FILE" 120
 
-log_info "Waiting for fake bnep0 operstate transition and watcher processing..."
+log_info "Waiting for fake bluetoothctl scan, bt-network PAN setup, and neighbor discovery..."
 sleep 5
 
 assert_iface_up "$COMPOSE_FILE" node pim0 "daemon started and pim0 is UP"
@@ -33,8 +33,12 @@ assert_cmd_output \
     in_svc "$COMPOSE_FILE" node cat /tmp/fake-sysfs/bnep0/operstate
 
 assert_logs_contain \
-    "$COMPOSE_FILE" node "Bluetooth PAN peer ready" \
-    "daemon observed fake Bluetooth PAN interface readiness"
+    "$COMPOSE_FILE" node "Bluetooth radio-discovered peer prepared" \
+    "daemon discovered and prepared a new peer over the fake Bluetooth radio layer"
+
+assert_logs_contain \
+    "$COMPOSE_FILE" node "Bluetooth PAN discovered peer addr" \
+    "daemon auto-discovered a peer address from the fake PAN neighbor table"
 
 assert_logs_contain \
     "$COMPOSE_FILE" node "Bluetooth PAN: peer addr ready — initiating connection" \

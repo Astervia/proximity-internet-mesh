@@ -1996,6 +1996,36 @@ fn bluetooth_sysfs_root() -> PathBuf {
     bluetooth_sysfs_root_from_env(std::env::var_os("PIM_BLUETOOTH_SYSFS_ROOT"))
 }
 
+fn bluetooth_ip_command_from_env(value: Option<std::ffi::OsString>) -> PathBuf {
+    value
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(pim_bluetooth::DEFAULT_IP_COMMAND))
+}
+
+fn bluetooth_ip_command() -> PathBuf {
+    bluetooth_ip_command_from_env(std::env::var_os("PIM_BLUETOOTH_IP_COMMAND"))
+}
+
+fn bluetoothctl_command_from_env(value: Option<std::ffi::OsString>) -> PathBuf {
+    value
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(pim_bluetooth::DEFAULT_BLUETOOTHCTL_COMMAND))
+}
+
+fn bluetoothctl_command() -> PathBuf {
+    bluetoothctl_command_from_env(std::env::var_os("PIM_BLUETOOTH_BLUETOOTHCTL_COMMAND"))
+}
+
+fn bt_network_command_from_env(value: Option<std::ffi::OsString>) -> PathBuf {
+    value
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(pim_bluetooth::DEFAULT_BT_NETWORK_COMMAND))
+}
+
+fn bt_network_command() -> PathBuf {
+    bt_network_command_from_env(std::env::var_os("PIM_BLUETOOTH_BT_NETWORK_COMMAND"))
+}
+
 /// Derive the [`NodeCapabilities`] bitfield from the loaded configuration.
 ///
 /// * Gateway node  → `CLIENT | RELAY | GATEWAY` (bits `0x07`)
@@ -2249,17 +2279,34 @@ async fn main() -> Result<()> {
 
     // ── Bluetooth PAN discovery ────────────────────────────────────────────
     if config.bluetooth.enabled {
+        let mut bluetooth_config = config.bluetooth.clone();
+        if bluetooth_config.local_alias.is_empty() {
+            bluetooth_config.local_alias = format!(
+                "{}{}",
+                bluetooth_config.device_name_prefix, config.node.name
+            );
+        }
         let bluetooth_sysfs_root = bluetooth_sysfs_root();
+        let bluetooth_ip_command = bluetooth_ip_command();
+        let bluetoothctl_command = bluetoothctl_command();
+        let bt_network_command = bt_network_command();
         info!(
-            interface = %config.bluetooth.interface,
-            peers = config.bluetooth.peer_addresses.len(),
+            interface = %bluetooth_config.interface,
+            peers = bluetooth_config.peer_addresses.len(),
             sysfs_root = %bluetooth_sysfs_root.display(),
+            ip_command = %bluetooth_ip_command.display(),
+            bluetoothctl_command = %bluetoothctl_command.display(),
+            bt_network_command = %bt_network_command.display(),
+            local_alias = %bluetooth_config.local_alias,
             "starting Bluetooth PAN watcher"
         );
-        let (bt_svc, addr_rx) = BluetoothDiscovery::new_with_sysfs_root(
-            config.bluetooth.clone(),
+        let (bt_svc, addr_rx) = BluetoothDiscovery::new_with_system_paths(
+            bluetooth_config,
             config.transport.listen_port,
             bluetooth_sysfs_root,
+            bluetooth_ip_command,
+            bluetoothctl_command,
+            bt_network_command,
         )
         .context("failed to construct Bluetooth PAN watcher")?;
         let c = cancel.clone();
@@ -2913,6 +2960,51 @@ mod tests {
         assert_eq!(
             bluetooth_sysfs_root_from_env(Some("/tmp/pim-fake-sysfs".into())),
             PathBuf::from("/tmp/pim-fake-sysfs")
+        );
+    }
+
+    #[test]
+    fn bluetooth_ip_command_defaults_to_ip() {
+        assert_eq!(bluetooth_ip_command_from_env(None), PathBuf::from("ip"));
+    }
+
+    #[test]
+    fn bluetooth_ip_command_honors_environment_override() {
+        assert_eq!(
+            bluetooth_ip_command_from_env(Some("/tmp/fake-ip".into())),
+            PathBuf::from("/tmp/fake-ip")
+        );
+    }
+
+    #[test]
+    fn bluetoothctl_command_defaults_to_bluetoothctl() {
+        assert_eq!(
+            bluetoothctl_command_from_env(None),
+            PathBuf::from("bluetoothctl")
+        );
+    }
+
+    #[test]
+    fn bluetoothctl_command_honors_environment_override() {
+        assert_eq!(
+            bluetoothctl_command_from_env(Some("/tmp/fake-bluetoothctl".into())),
+            PathBuf::from("/tmp/fake-bluetoothctl")
+        );
+    }
+
+    #[test]
+    fn bt_network_command_defaults_to_bt_network() {
+        assert_eq!(
+            bt_network_command_from_env(None),
+            PathBuf::from("bt-network")
+        );
+    }
+
+    #[test]
+    fn bt_network_command_honors_environment_override() {
+        assert_eq!(
+            bt_network_command_from_env(Some("/tmp/fake-bt-network".into())),
+            PathBuf::from("/tmp/fake-bt-network")
         );
     }
 

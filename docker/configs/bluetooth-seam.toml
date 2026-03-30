@@ -22,6 +22,14 @@ key_file = "/var/lib/pim/node.key"
 [bluetooth]
 enabled = true
 interface = "bnep0"
-peer_addresses = ["172.39.0.99"]
+radio_discovery_enabled = true
+device_name_prefix = "PIM-"
+local_alias = "PIM-bluetooth-seam"
+auto_discover_peers = true
+peer_addresses = []
 poll_interval_ms = 250
+scan_interval_ms = 250
+peer_discovery_interval_ms = 250
+bluetoothctl_timeout_s = 2
+discoverable_timeout_s = 60
 startup_timeout_ms = 6000
