@@ -1,10 +1,10 @@
-# Implement Connectivity Feature
+# Implement Connectivity Mechanism
 
 Implement a new peer connectivity mechanism for this repository.
 
 Requirements:
 
-- Preserve the current separation between peer discovery or link setup and the direct peer transport.
+- Preserve the separation between peer discovery or link setup and the direct peer transport unless the task clearly requires a transport change.
 - Reuse the daemon's existing connection initiation and handshake path whenever possible.
 - Add config in `pim-core`.
 - Keep the feature opt-in and safe by default.

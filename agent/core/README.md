@@ -4,12 +4,13 @@ Store shared agent-facing building blocks here.
 
 Examples:
 - repository conventions
+- architectural orientation
 - task templates
-- output schemas
 - checklists
-- baseline architectural context
+- output schemas
 
 Start with:
 - `CONVENTIONS.md`
 - `ARCHITECTURE_MAP.md`
+- `DOCS_MAP.md`
 - `TASK_TEMPLATE.md`

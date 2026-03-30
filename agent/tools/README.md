@@ -7,3 +7,7 @@ Use this directory for automation that supports prompts or skills, such as:
 - test runners
 - log parsers
 - environment validation scripts
+
+Keep general-purpose helpers here when they apply across the repository.
+If a helper is feature-specific, pair it with the skill or prompt that uses it
+instead of treating it as part of the default workflow.

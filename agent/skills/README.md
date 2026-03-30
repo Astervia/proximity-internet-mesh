@@ -8,3 +8,6 @@ Examples:
 - Rust crate change workflow
 - Docker test debugging
 - networking regression review
+
+Use `core/` and generic prompts as the default baseline. Put feature-specific
+guidance here when it would otherwise make the shared agent workflow too narrow.

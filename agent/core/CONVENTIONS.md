@@ -2,47 +2,72 @@
 
 These conventions are specific to this repository and should guide agent work.
 
-## Architectural Rules
+## General Rules
 
-1. Keep `TcpTransport` as the transport unless the task explicitly requires a new transport backend.
-2. Prefer adding new peer-finding or link-setup mechanisms that feed the existing daemon connection path.
-3. Reuse `initiate_peer_connection()` for newly discovered neighbor addresses when possible.
-4. Treat peer discovery, link establishment, handshake, routing, and gateway behavior as separate layers.
-5. Avoid bypassing the existing handshake/session path in `pim-daemon`.
+1. Preserve crate boundaries unless the task clearly justifies reshaping them.
+2. Prefer the narrowest viable change over cross-workspace rewrites.
+3. Keep shared types, config models, and error vocabulary in `pim-core`.
+4. Keep transport, protocol, crypto, routing, gateway, discovery, and CLI concerns separated.
+5. Put runtime orchestration in `pim-daemon`, not in leaf crates.
+6. Keep operator-facing behavior explicit in config and docs.
+7. Default new features to opt-in when they change runtime behavior or dependencies.
 
-## Current Connectivity Model
+## Repo Design Bias
 
-- `pim-transport` provides the direct peer transport abstraction and current TCP backend.
-- `pim-discovery` provides LAN UDP discovery and emits `PeerRecord`.
-- `pim-wifidirect` provides Wi-Fi Direct peer-finding and emits `SocketAddr`.
-- `pim-daemon` owns connection initiation, handshake, reconnect, routing, and runtime orchestration.
+The repository is organized around:
 
-## Preferred Extension Pattern
+- small crates with clear responsibilities
+- a daemon that composes those crates into the running system
+- Linux-first runtime assumptions for TUN, routing, and gateway behavior
+- Docker-based end-to-end validation for multi-node behavior
 
-When adding a new connection mechanism such as Bluetooth P2P:
+When changing code, look for the existing layer that should own the behavior:
 
-1. Add a dedicated crate if the mechanism has distinct OS integration or process control needs.
-2. Keep its public contract narrow.
-3. Emit either:
-    - `SocketAddr` when the mechanism produces an IP-reachable peer endpoint, or
-    - a clearly scoped connection descriptor if a new adaptation layer is unavoidable.
-4. Integrate it in `pim-daemon` similarly to Wi-Fi Direct: spawn service, consume results, call connection setup.
-5. Add config under `pim-core::Config` with an opt-in `enabled` flag and mechanism-specific settings.
+- `pim-core` for config, shared types, and common errors
+- `pim-protocol` for wire-format changes
+- `pim-crypto` for identity, handshake, and encryption behavior
+- `pim-transport` for direct peer link behavior
+- `pim-discovery` for peer-finding behavior
+- `pim-routing` for path selection and advertisements
+- `pim-gateway` for NAT and internet-edge behavior
+- `pim-tun` for host-network integration
+- `pim-daemon` for service wiring and async runtime coordination
+- `pim-cli` for operator workflows
+
+## Change Strategy
+
+For most tasks:
+
+1. Trace the current path end to end before editing.
+2. Identify the owning crate and the integration points around it.
+3. Change the smallest public surface that solves the task.
+4. Preserve backward compatibility unless the task explicitly requires a break.
+5. Use `./docs` for broader project context instead of recreating that context in `agent/`.
+6. Update docs when behavior, config, or operator workflow changes.
 
 ## Testing Expectations
 
 At minimum, changes should include:
 
-- config parsing tests
-- service construction tests
-- daemon integration tests where practical
-- docs updates when behavior or topology assumptions change
+- focused crate-level tests for the changed behavior
+- workspace-level verification when integration surfaces change
+- explicit note of any gaps when full validation is not practical
+
+Prefer:
+
+- `cargo test --workspace` for general regression coverage
+- targeted crate tests during iteration
+- Docker phase tests when daemon, routing, discovery, transport, or gateway behavior changes
 
 ## Documentation Expectations
 
-If the connectivity model changes, update:
+Update the closest user-facing or architecture-facing document when the behavior changes:
 
-- `docs/architecture/packet-flow.md`
-- `docs/architecture/system-overview.md`
-- `docs/architecture/wifi-direct.md` if the new mechanism changes comparative positioning
-- `README.md` if operator-facing setup changes
+- `README.md` for install, runtime, or operator workflow changes
+- `docs/project/` for workspace structure or implementation-plan changes
+- `docs/architecture/` for protocol, packet flow, transport, discovery, routing, or security changes
+- `docs/operations/` for testing, deployment, or debugging workflow changes
+
+When looking for context before editing, start with `agent/core/DOCS_MAP.md`
+and follow into `./docs` rather than expanding the agent folder with duplicate
+background material.
