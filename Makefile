@@ -10,7 +10,7 @@ docker-build:
 
 # ── Test phases ───────────────────────────────────────────────────────────────
 
-.PHONY: test-p1 test-p2 test-p3 test-p4 test-p5 test-p7 test-all
+.PHONY: test-p1 test-p2 test-p3 test-p4 test-p5 test-p7 test-bluetooth test-all
 
 test-p1: docker-build
 	bash $(TEST_DIR)/test-phase1.sh
@@ -34,17 +34,21 @@ test-p5: docker-build
 test-p7: docker-build
 	bash $(TEST_DIR)/test-phase7.sh
 
+test-bluetooth: docker-build
+	bash $(TEST_DIR)/test-bluetooth.sh
+
 test-all: docker-build
 	@bash $(TEST_DIR)/test-phase1.sh && \
 	 bash $(TEST_DIR)/test-phase2.sh && \
 	 bash $(TEST_DIR)/test-phase3.sh && \
 	 SKIP_SLOW=1 bash $(TEST_DIR)/test-phase4.sh && \
-	 bash $(TEST_DIR)/test-phase5.sh
+	 bash $(TEST_DIR)/test-phase5.sh && \
+	 bash $(TEST_DIR)/test-bluetooth.sh
 
 # ── Manual stack management ───────────────────────────────────────────────────
 # Use these for interactive debugging without the test scripts.
 
-.PHONY: up-p1 up-p2-relay up-p2-routing up-p3 up-p4 up-p4-fc up-p5 up-p7
+.PHONY: up-p1 up-p2-relay up-p2-routing up-p3 up-p4 up-p4-fc up-p5 up-p7 up-bluetooth
 
 up-p1:
 	docker compose -f $(COMPOSE_DIR)/phase1-single-hop.yml up -d --build
@@ -70,7 +74,10 @@ up-p5:
 up-p7:
 	docker compose -f $(COMPOSE_DIR)/phase7-auto-discovery.yml up -d --build
 
-.PHONY: down-p1 down-p2-relay down-p2-routing down-p3 down-p4 down-p4-fc down-p5 down-p7
+up-bluetooth:
+	docker compose -f $(COMPOSE_DIR)/bluetooth-seam.yml up -d --build
+
+.PHONY: down-p1 down-p2-relay down-p2-routing down-p3 down-p4 down-p4-fc down-p5 down-p7 down-bluetooth
 
 down-p1:
 	docker compose -f $(COMPOSE_DIR)/phase1-single-hop.yml down -v --remove-orphans
@@ -96,9 +103,12 @@ down-p5:
 down-p7:
 	docker compose -f $(COMPOSE_DIR)/phase7-auto-discovery.yml down -v --remove-orphans
 
+down-bluetooth:
+	docker compose -f $(COMPOSE_DIR)/bluetooth-seam.yml down -v --remove-orphans
+
 # ── Log tailing ───────────────────────────────────────────────────────────────
 
-.PHONY: logs-p1 logs-p2-relay logs-p2-routing logs-p3 logs-p4 logs-p5 logs-p7
+.PHONY: logs-p1 logs-p2-relay logs-p2-routing logs-p3 logs-p4 logs-p5 logs-p7 logs-bluetooth
 
 logs-p1:
 	docker compose -f $(COMPOSE_DIR)/phase1-single-hop.yml logs -f
@@ -120,6 +130,9 @@ logs-p5:
 
 logs-p7:
 	docker compose -f $(COMPOSE_DIR)/phase7-auto-discovery.yml logs -f
+
+logs-bluetooth:
+	docker compose -f $(COMPOSE_DIR)/bluetooth-seam.yml logs -f
 
 # ── Shortcuts for exec ────────────────────────────────────────────────────────
 # e.g.:  make sh-p1-client
@@ -154,7 +167,8 @@ docker-clean:
 	    $(COMPOSE_DIR)/phase4-resilience.yml \
 	    $(COMPOSE_DIR)/phase4-flow-control.yml \
 	    $(COMPOSE_DIR)/phase5-multigateway.yml \
-	    $(COMPOSE_DIR)/phase7-auto-discovery.yml; do \
+	    $(COMPOSE_DIR)/phase7-auto-discovery.yml \
+	    $(COMPOSE_DIR)/bluetooth-seam.yml; do \
 	    docker compose -f $$f down -v --remove-orphans 2>/dev/null || true; \
 	done
 
@@ -180,6 +194,7 @@ help:
 	@echo "  make test-p4-full       Phase 4: includes 6-min NAT timeout test"
 	@echo "  make test-p5            Phase 5: multi-gateway + failover + load"
 	@echo "  make test-p7            Phase 7: zero-config auto-discovery"
+	@echo "  make test-bluetooth     Bluetooth fake-sysfs seam test in Docker"
 	@echo "  make test-all           All phases (slow tests skipped)"
 	@echo "  make test-unit          Rust unit tests (no Docker)"
 	@echo ""
@@ -187,6 +202,9 @@ help:
 	@echo "  make down-p1            Stop phase 1 stack"
 	@echo "  make logs-p1            Follow phase 1 logs"
 	@echo "  make sh-p1-client       Shell into phase 1 client container"
+	@echo "  make up-bluetooth       Start Bluetooth seam stack"
+	@echo "  make down-bluetooth     Stop Bluetooth seam stack"
+	@echo "  make logs-bluetooth     Follow Bluetooth seam logs"
 	@echo ""
 	@echo "  make docker-clean       Stop and remove all stacks"
 	@echo "  make clean-all          docker-clean + remove image"

@@ -54,6 +54,19 @@ assert_cmd_output() {
     fi
 }
 
+# assert_logs_contain <file> <service> <expected_substring> [desc]
+assert_logs_contain() {
+    local file="$1" svc="$2" expected="$3"
+    local desc="${4:-logs for $svc contain $expected}"
+    local output
+    output=$(docker compose -f "$COMPOSE_DIR/$file" logs --no-color "$svc" 2>&1) || true
+    if echo "$output" | grep -Fq "$expected"; then
+        log_ok "$desc"
+    else
+        log_fail "$desc (expected '$expected' in logs)"
+    fi
+}
+
 # ── Docker helpers ────────────────────────────────────────────────────────────
 
 COMPOSE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../compose" && pwd)"

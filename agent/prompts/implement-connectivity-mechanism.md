@@ -19,7 +19,7 @@ Repository-specific guidance:
 
 Expected output:
 
-1. Short implementation plan.
+1. Implementation plan.
 2. Concrete code changes.
 3. Verification results.
 4. Risks, limitations, and follow-up work.

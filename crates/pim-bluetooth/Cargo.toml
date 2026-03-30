@@ -1,0 +1,11 @@
+[package]
+name = "pim-bluetooth"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+pim-core = { workspace = true }
+tokio = { workspace = true }
+tokio-util = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }

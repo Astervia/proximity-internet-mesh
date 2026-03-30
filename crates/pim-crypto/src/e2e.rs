@@ -76,7 +76,8 @@ pub fn e2e_encrypt(plaintext: &[u8], gateway_x25519_pub: &[u8; 32]) -> Result<Ve
     // HKDF → AES-256 key
     let hk = Hkdf::<Sha256>::new(None, shared_secret.as_bytes());
     let mut aes_key = [0u8; 32];
-    hk.expand(b"pim-e2e-v1", &mut aes_key).expect("32 bytes is valid");
+    hk.expand(b"pim-e2e-v1", &mut aes_key)
+        .expect("32 bytes is valid");
 
     // Random nonce
     let mut nonce_bytes = [0u8; NONCE_SIZE];
@@ -101,7 +102,10 @@ pub fn e2e_encrypt(plaintext: &[u8], gateway_x25519_pub: &[u8; 32]) -> Result<Ve
 /// Decrypt an E2E-encrypted frame using the gateway's Ed25519 seed.
 ///
 /// `ciphertext` is the output of [`e2e_encrypt`].
-pub fn e2e_decrypt(ciphertext: &[u8], gateway_ed25519_seed: &[u8; 32]) -> Result<Vec<u8>, E2eError> {
+pub fn e2e_decrypt(
+    ciphertext: &[u8],
+    gateway_ed25519_seed: &[u8; 32],
+) -> Result<Vec<u8>, E2eError> {
     if ciphertext.len() < HEADER_SIZE + TAG_SIZE {
         return Err(E2eError::TooShort);
     }
@@ -123,7 +127,8 @@ pub fn e2e_decrypt(ciphertext: &[u8], gateway_ed25519_seed: &[u8; 32]) -> Result
     // HKDF → AES-256 key (same derivation as encrypt)
     let hk = Hkdf::<Sha256>::new(None, shared_secret.as_bytes());
     let mut aes_key = [0u8; 32];
-    hk.expand(b"pim-e2e-v1", &mut aes_key).expect("32 bytes is valid");
+    hk.expand(b"pim-e2e-v1", &mut aes_key)
+        .expect("32 bytes is valid");
 
     // Decrypt
     let cipher = Aes256Gcm::new_from_slice(&aes_key).expect("32 bytes is valid");

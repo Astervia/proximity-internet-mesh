@@ -36,6 +36,7 @@ make test-p2
 make test-p3
 make test-p4
 make test-p5
+make test-bluetooth
 make test-all
 ```
 
@@ -45,7 +46,7 @@ These tests use the files under:
 - `docker/configs/`
 - `docker/tests/`
 
-They validate real daemon startup, TUN interface handling, peer connectivity, routing convergence, NAT, failover, resilience, and multi-gateway behavior.
+They validate real daemon startup, TUN interface handling, peer connectivity, routing convergence, NAT, failover, resilience, and multi-gateway behavior. They also cover hardware-adjacent seams that can be simulated inside a container, such as the Bluetooth fake-sysfs path.
 
 ## Phase Coverage
 
@@ -54,6 +55,7 @@ They validate real daemon startup, TUN interface handling, peer connectivity, ro
 - `test-p3`: discovery and peer lifecycle
 - `test-p4`: resilience, buffering, congestion, and slow NAT timeout checks
 - `test-p5`: dual-gateway failover and gateway selection behavior
+- `test-bluetooth`: Bluetooth PAN readiness seam using a fake sysfs interface tree in Docker
 
 ## Local Workflow
 
@@ -68,6 +70,12 @@ Broader validation after daemon, protocol, routing, or gateway changes:
 ```bash
 make docker-build
 make test-p2
+```
+
+Hardware-adjacent connectivity work without real radios:
+
+```bash
+make test-bluetooth
 ```
 
 Full regression pass:

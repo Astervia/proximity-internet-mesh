@@ -102,8 +102,7 @@ impl Handshaker {
         msg.extend_from_slice(&ephemeral_pub_bytes);
         msg.extend_from_slice(&nonce);
 
-        let signing_key =
-            ed25519_dalek::SigningKey::from_bytes(&self.identity.signing_key_bytes);
+        let signing_key = ed25519_dalek::SigningKey::from_bytes(&self.identity.signing_key_bytes);
         let signature = signing_key.sign(&msg);
 
         // Store state
@@ -153,8 +152,7 @@ impl Handshaker {
         sign_msg.extend_from_slice(&ephemeral_pub_bytes);
         sign_msg.extend_from_slice(&nonce);
 
-        let signing_key =
-            ed25519_dalek::SigningKey::from_bytes(&self.identity.signing_key_bytes);
+        let signing_key = ed25519_dalek::SigningKey::from_bytes(&self.identity.signing_key_bytes);
         let signature = signing_key.sign(&sign_msg);
 
         // Derive shared secret: X25519(our_ephemeral, their_ephemeral_pub)
@@ -218,10 +216,8 @@ impl Handshaker {
         let shared_secret = ephemeral_secret.diffie_hellman(&their_ephemeral);
 
         // Extend transcript
-        self.transcript
-            .extend_from_slice(&response.sender_pub);
-        self.transcript
-            .extend_from_slice(&response.ephemeral_pub);
+        self.transcript.extend_from_slice(&response.sender_pub);
+        self.transcript.extend_from_slice(&response.ephemeral_pub);
         self.transcript.extend_from_slice(&response.nonce);
 
         // Derive session key via HKDF (same salt construction as responder)

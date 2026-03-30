@@ -89,7 +89,11 @@ impl IpPool {
     /// never allocated to clients.
     pub fn new(network_addr: Ipv4Addr, prefix_len: u8) -> Self {
         let host_bits = 32 - prefix_len as u32;
-        let mask: u32 = if prefix_len == 0 { 0 } else { !((1u32 << host_bits) - 1) };
+        let mask: u32 = if prefix_len == 0 {
+            0
+        } else {
+            !((1u32 << host_bits) - 1)
+        };
         let network = u32::from(network_addr) & mask;
         // max_host = 2^host_bits - 1 (broadcast is excluded, so last usable = max_host - 1)
         let max_host = (1u32 << host_bits) - 1;
@@ -130,7 +134,9 @@ impl IpPool {
         // usable client offsets: 2 .. max_host (exclusive broadcast)
         let usable = self.max_host.saturating_sub(2);
         if usable == 0 {
-            return Err(IpPoolError::PoolExhausted { prefix_len: self.prefix_len });
+            return Err(IpPoolError::PoolExhausted {
+                prefix_len: self.prefix_len,
+            });
         }
 
         let lease_secs = self.lease_duration.as_secs() as u32;
@@ -164,7 +170,9 @@ impl IpPool {
         if self.expire_leases() > 0 {
             return self.allocate(node_id);
         }
-        Err(IpPoolError::PoolExhausted { prefix_len: self.prefix_len })
+        Err(IpPoolError::PoolExhausted {
+            prefix_len: self.prefix_len,
+        })
     }
 
     /// Release a lease by node_id (called on Goodbye or explicit release).
@@ -272,7 +280,7 @@ mod tests {
         // So only 1 client can be assigned.
         let mut p = IpPool::new(Ipv4Addr::new(10, 0, 0, 0), 30);
         p.allocate([1u8; 16]).unwrap(); // offset 2
-        // offset 3 = broadcast — pool exhausted for clients
+                                        // offset 3 = broadcast — pool exhausted for clients
         let result = p.allocate([2u8; 16]);
         assert!(result.is_err(), "pool should be exhausted");
     }
@@ -285,8 +293,7 @@ mod tests {
 
     #[test]
     fn expired_lease_can_be_reallocated() {
-        let mut p = IpPool::new(Ipv4Addr::new(10, 0, 0, 0), 30)
-            .with_lease_duration(Duration::ZERO);
+        let mut p = IpPool::new(Ipv4Addr::new(10, 0, 0, 0), 30).with_lease_duration(Duration::ZERO);
         p.allocate([1u8; 16]).unwrap();
         // Lease immediately expired — should be able to allocate for a different node
         let result = p.allocate([2u8; 16]);

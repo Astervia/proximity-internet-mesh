@@ -53,29 +53,30 @@ use tokio::sync::{mpsc, Mutex, RwLock};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, warn};
 
+use ed25519_dalek::VerifyingKey;
+use pim_bluetooth::BluetoothDiscovery;
 use pim_core::{Config, DiscoveryConfig, FrameCodec, NodeId};
 use pim_crypto::{
     e2e_decrypt, e2e_encrypt, x25519_public_from_seed, EncryptedFrame, HandshakeConfirm,
     HandshakeInit, HandshakeResponse, Handshaker, Identity, SessionCipher,
 };
+use pim_discovery::{DiscoveryService, NodeCapabilities, PeerRecord};
 use pim_gateway::{GatewayEngine, IpPool};
 use pim_protocol::{
     fragment_packet, ControlFrame, DataFlags, FragmentFrame, FrameType, HandshakeFrameType,
     HandshakeWireFrame, HeartbeatFrame, MeshDataFrame, Reassembler, RouteUpdateFrame,
     TransportFrame,
 };
-use ed25519_dalek::VerifyingKey;
 use pim_routing::{
     signing::{sign_route_update, verify_route_update},
     RoutingTable,
 };
-use pim_discovery::{DiscoveryService, NodeCapabilities, PeerRecord};
-use pim_wifidirect::WifiDirectDiscovery;
 use pim_transport::{PeerAddress, TcpTransport, Transport, TransportError};
+use pim_tun::TunInterface;
+use pim_wifidirect::WifiDirectDiscovery;
 use rate_limiter::{RateLimiter, DEFAULT_BURST, DEFAULT_RATE};
 use reputation::ReputationTracker;
 use send_buffer::{Priority, SendBuffer, DEFAULT_CAPACITY, DEFAULT_TIMEOUT};
-use pim_tun::TunInterface;
 
 // ── Session ───────────────────────────────────────────────────────────────────
 
@@ -301,7 +302,11 @@ impl InternetGatewayLink {
         };
 
         loop {
-            let mut guard = self.send_fd.writable().await.context("raw send socket writable")?;
+            let mut guard = self
+                .send_fd
+                .writable()
+                .await
+                .context("raw send socket writable")?;
             match guard.try_io(|inner| {
                 let rc = unsafe {
                     libc::sendto(
@@ -327,7 +332,11 @@ impl InternetGatewayLink {
 
     async fn recv_packet(&self, buf: &mut [u8]) -> Result<usize> {
         loop {
-            let mut guard = self.recv_fd.readable().await.context("packet socket readable")?;
+            let mut guard = self
+                .recv_fd
+                .readable()
+                .await
+                .context("packet socket readable")?;
             match guard.try_io(|inner| {
                 let rc = unsafe {
                     libc::recv(
@@ -354,7 +363,9 @@ fn ipv4_destination(packet: &[u8]) -> Option<Ipv4Addr> {
     if packet.len() < 20 || (packet[0] >> 4) != 4 {
         return None;
     }
-    Some(Ipv4Addr::new(packet[16], packet[17], packet[18], packet[19]))
+    Some(Ipv4Addr::new(
+        packet[16], packet[17], packet[18], packet[19],
+    ))
 }
 
 fn lookup_interface_ipv4(interface: &str) -> Result<Ipv4Addr> {
@@ -385,14 +396,25 @@ fn parse_interface_ipv4_output(output: &str) -> Option<Ipv4Addr> {
 }
 
 fn create_raw_send_socket(interface: &str) -> Result<OwnedFd> {
-    let fd = unsafe { libc::socket(libc::AF_INET, libc::SOCK_RAW | libc::SOCK_NONBLOCK, libc::IPPROTO_RAW) };
+    let fd = unsafe {
+        libc::socket(
+            libc::AF_INET,
+            libc::SOCK_RAW | libc::SOCK_NONBLOCK,
+            libc::IPPROTO_RAW,
+        )
+    };
     if fd < 0 {
         return Err(io::Error::last_os_error()).context("create raw send socket");
     }
     let fd = unsafe { OwnedFd::from_raw_fd(fd) };
     let one: libc::c_int = 1;
-    setsockopt_bytes(fd.as_raw_fd(), libc::IPPROTO_IP, libc::IP_HDRINCL, &one.to_ne_bytes())
-        .context("set IP_HDRINCL")?;
+    setsockopt_bytes(
+        fd.as_raw_fd(),
+        libc::IPPROTO_IP,
+        libc::IP_HDRINCL,
+        &one.to_ne_bytes(),
+    )
+    .context("set IP_HDRINCL")?;
     bind_socket_to_device(fd.as_raw_fd(), interface).context("bind raw send socket to device")?;
     Ok(fd)
 }
@@ -654,7 +676,10 @@ async fn run_conntrack_gc(state: Arc<DaemonState>) {
             gw.cleanup_expired().await;
             let after = gw.conntrack_size().await;
             if before != after {
-                debug!(removed = before - after, "conntrack GC: expired entries removed");
+                debug!(
+                    removed = before - after,
+                    "conntrack GC: expired entries removed"
+                );
             }
         }
     }
@@ -702,15 +727,17 @@ async fn run_stats_writer(state: Arc<DaemonState>) {
             Some(gw) => gw.conntrack_size().await,
             None => 0,
         };
-        let uptime_secs = state
-            .start_time
-            .elapsed()
-            .unwrap_or_default()
-            .as_secs();
+        let uptime_secs = state.start_time.elapsed().unwrap_or_default().as_secs();
 
         let content = format_stats(
-            peers, routes, packets_forwarded, bytes_forwarded,
-            packets_dropped, congestion_drops, conntrack_size, uptime_secs,
+            peers,
+            routes,
+            packets_forwarded,
+            bytes_forwarded,
+            packets_dropped,
+            congestion_drops,
+            conntrack_size,
+            uptime_secs,
         );
 
         let tmp = format!("{STATS_PATH}.tmp");
@@ -758,7 +785,11 @@ async fn run_gateway_probes(state: Arc<DaemonState>) {
         // Send a Ping to each direct gateway
         for gw_id in direct_gateways {
             let nonce: u64 = rand::random();
-            state.pending_pings.lock().await.insert(nonce, (gw_id, Instant::now()));
+            state
+                .pending_pings
+                .lock()
+                .await
+                .insert(nonce, (gw_id, Instant::now()));
             send_control(&state, &gw_id, ControlFrame::Ping { nonce }).await;
             debug!(%gw_id, nonce, "sent gateway probe Ping");
         }
@@ -791,7 +822,10 @@ async fn run_reconnect_task(state: Arc<DaemonState>, addr: SocketAddr) {
 
         if let Err(e) = state
             .transport
-            .connect(&PeerAddress { node_id: transport_key, addr })
+            .connect(&PeerAddress {
+                node_id: transport_key,
+                addr,
+            })
             .await
         {
             warn!(%addr, attempt, "reconnect TCP connect failed: {e}");
@@ -898,7 +932,15 @@ async fn handshake_initiator(
             signature,
         } => {
             let sp = sender_pub;
-            (HandshakeResponse { sender_pub: sp, ephemeral_pub, nonce, signature }, sp)
+            (
+                HandshakeResponse {
+                    sender_pub: sp,
+                    ephemeral_pub,
+                    nonce,
+                    signature,
+                },
+                sp,
+            )
         }
         _ => bail!("expected HandshakeResponse from {transport_key}"),
     };
@@ -906,7 +948,8 @@ async fn handshake_initiator(
     // Derive the peer's real NodeId from their Ed25519 public key.
     let peer_id = NodeId::from_public_key(&sender_pub);
 
-    hs.finalize_initiator(&response).context("handshake finalize")?;
+    hs.finalize_initiator(&response)
+        .context("handshake finalize")?;
 
     let confirm = hs.make_confirm().context("make_confirm")?;
     send_handshake(
@@ -934,7 +977,11 @@ async fn handshake_initiator(
     state.routing.lock().await.add_peer(peer_id);
     state.routing.lock().await.unblacklist_peer(&peer_id);
     state.reputation.lock().await.pardon(&peer_id);
-    state.peer_last_hb.lock().await.insert(peer_id, Instant::now());
+    state
+        .peer_last_hb
+        .lock()
+        .await
+        .insert(peer_id, Instant::now());
     info!(%peer_id, "session established (initiator)");
 
     // Flush any frames buffered while this peer was unreachable.
@@ -945,7 +992,9 @@ async fn handshake_initiator(
         send_control(
             state,
             &peer_id,
-            ControlFrame::IpRequest { requester_id: state.self_id },
+            ControlFrame::IpRequest {
+                requester_id: state.self_id,
+            },
         )
         .await;
         debug!(%peer_id, "sent IpRequest");
@@ -967,7 +1016,12 @@ async fn handshake_responder(
             ephemeral_pub,
             nonce,
             signature,
-        } => HandshakeInit { sender_pub, ephemeral_pub, nonce, signature },
+        } => HandshakeInit {
+            sender_pub,
+            ephemeral_pub,
+            nonce,
+            signature,
+        },
         _ => bail!("expected HandshakeInit"),
     };
 
@@ -997,7 +1051,8 @@ async fn handshake_responder(
         HandshakeWireFrame::Confirm { hmac } => HandshakeConfirm { hmac },
         _ => bail!("expected HandshakeConfirm from {peer_id}"),
     };
-    hs.verify_confirm(&confirm).context("confirm verification")?;
+    hs.verify_confirm(&confirm)
+        .context("confirm verification")?;
     info!(%peer_id, "handshake complete (responder)");
 
     let key = *hs.session_key().unwrap().as_bytes();
@@ -1007,11 +1062,19 @@ async fn handshake_responder(
         recv: SessionCipher::new(&key, nonce_prefix(&key, true)),
     });
     state.sessions.write().await.insert(peer_id, session);
-    state.peer_pubkeys.write().await.insert(peer_id, init.sender_pub);
+    state
+        .peer_pubkeys
+        .write()
+        .await
+        .insert(peer_id, init.sender_pub);
     state.routing.lock().await.add_peer(peer_id);
     state.routing.lock().await.unblacklist_peer(&peer_id);
     state.reputation.lock().await.pardon(&peer_id);
-    state.peer_last_hb.lock().await.insert(peer_id, Instant::now());
+    state
+        .peer_last_hb
+        .lock()
+        .await
+        .insert(peer_id, Instant::now());
     info!(%peer_id, "session established (responder)");
 
     // Flush any frames buffered while this peer was unreachable.
@@ -1142,7 +1205,7 @@ async fn run_heartbeats(state: Arc<DaemonState>) {
         let delta = cur_fwd.saturating_sub(last_fwd);
         last_fwd = cur_fwd;
         // Normalize: ≥2 000 pkts/interval → load=255; 0 pkts → load=0.
-        let load = ((delta.min(2000) * 255 / 2000)) as u8;
+        let load = (delta.min(2000) * 255 / 2000) as u8;
 
         let peers = state.transport.connected_peers();
         let gateway_hops: u8 = if state.is_gateway {
@@ -1164,7 +1227,11 @@ async fn run_heartbeats(state: Arc<DaemonState>) {
                 .as_millis() as u64,
             gateway_hops,
             load,
-            gw_x25519_pub: if state.is_gateway { state.own_x25519_pub } else { [0u8; 32] },
+            gw_x25519_pub: if state.is_gateway {
+                state.own_x25519_pub
+            } else {
+                [0u8; 32]
+            },
         };
         let mut buf = BytesMut::new();
         hb.encode(&mut buf);
@@ -1627,9 +1694,15 @@ async fn run_event_loop(state: Arc<DaemonState>) -> Result<()> {
 /// Gateway task: drain TUN (internet→mesh), NAT inbound, send back to originators.
 async fn run_gateway_return(state: Arc<DaemonState>) {
     // Only run on gateways
-    if !state.is_gateway { return; }
-    let Some(link) = state.internet_link.as_ref().cloned() else { return; };
-    let Some(gw) = state.gw_engine.as_ref().cloned() else { return; };
+    if !state.is_gateway {
+        return;
+    }
+    let Some(link) = state.internet_link.as_ref().cloned() else {
+        return;
+    };
+    let Some(gw) = state.gw_engine.as_ref().cloned() else {
+        return;
+    };
     let mut buf = vec![0u8; 65536];
 
     loop {
@@ -1777,7 +1850,10 @@ async fn initiate_peer_connection(state: Arc<DaemonState>, peer_addr: SocketAddr
 
     if let Err(e) = state
         .transport
-        .connect(&PeerAddress { node_id: transport_key, addr: peer_addr })
+        .connect(&PeerAddress {
+            node_id: transport_key,
+            addr: peer_addr,
+        })
         .await
     {
         warn!(%peer_addr, "connect failed: {e}; reconnect will retry");
@@ -1818,7 +1894,10 @@ async fn initiate_peer_connection(state: Arc<DaemonState>, peer_addr: SocketAddr
 /// * Already connected — skipped to avoid duplicate sessions.
 /// * Client-only capability — skipped; we only connect to relays / gateways.
 /// * `connect_relays` / `connect_gateways` config flags — selectively skipped.
-async fn run_discovery_consumer(state: Arc<DaemonState>, mut new_peer_rx: mpsc::Receiver<PeerRecord>) {
+async fn run_discovery_consumer(
+    state: Arc<DaemonState>,
+    mut new_peer_rx: mpsc::Receiver<PeerRecord>,
+) {
     loop {
         tokio::select! {
             Some(record) = new_peer_rx.recv() => {
@@ -1876,10 +1955,7 @@ async fn run_discovery_consumer(state: Arc<DaemonState>, mut new_peer_rx: mpsc::
 /// than [`PeerRecord`]s — Wi-Fi Direct discovery does not know the peer's
 /// `NodeId` before the TCP handshake.  Deduplication by session is still
 /// performed after the handshake via the sessions map.
-async fn run_wifidirect_consumer(
-    state: Arc<DaemonState>,
-    mut addr_rx: mpsc::Receiver<SocketAddr>,
-) {
+async fn run_wifidirect_consumer(state: Arc<DaemonState>, mut addr_rx: mpsc::Receiver<SocketAddr>) {
     loop {
         tokio::select! {
             Some(addr) = addr_rx.recv() => {
@@ -1893,6 +1969,31 @@ async fn run_wifidirect_consumer(
             _ = state.cancel.cancelled() => break,
         }
     }
+}
+
+/// Consume `SocketAddr` notifications from [`BluetoothDiscovery`] and initiate
+/// connections to the indicated peers.
+async fn run_bluetooth_consumer(state: Arc<DaemonState>, mut addr_rx: mpsc::Receiver<SocketAddr>) {
+    loop {
+        tokio::select! {
+            Some(addr) = addr_rx.recv() => {
+                info!(%addr, "Bluetooth PAN: peer addr ready — initiating connection");
+                state.reconnect.register_discovered(addr).await;
+                initiate_peer_connection(state.clone(), addr).await;
+            }
+            _ = state.cancel.cancelled() => break,
+        }
+    }
+}
+
+fn bluetooth_sysfs_root_from_env(value: Option<std::ffi::OsString>) -> PathBuf {
+    value
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(pim_bluetooth::DEFAULT_SYSFS_ROOT))
+}
+
+fn bluetooth_sysfs_root() -> PathBuf {
+    bluetooth_sysfs_root_from_env(std::env::var_os("PIM_BLUETOOTH_SYSFS_ROOT"))
 }
 
 /// Derive the [`NodeCapabilities`] bitfield from the loaded configuration.
@@ -1925,8 +2026,8 @@ async fn main() -> Result<()> {
         .nth(2)
         .unwrap_or_else(|| "/run/pim.pid".to_string());
 
-    let config = Config::load(std::path::Path::new(&config_path))
-        .context("failed to load config")?;
+    let config =
+        Config::load(std::path::Path::new(&config_path)).context("failed to load config")?;
     info!(config = %config_path, node = %config.node.name, "daemon starting");
 
     std::fs::write(&pid_file, std::process::id().to_string())
@@ -1973,8 +2074,12 @@ async fn main() -> Result<()> {
     // ── Gateway NAT setup ─────────────────────────────────────────────────
     let gateway_external_ip = if is_gateway {
         Some(
-            lookup_interface_ipv4(&config.gateway.nat_interface)
-                .with_context(|| format!("failed to resolve IPv4 address for {}", config.gateway.nat_interface))?
+            lookup_interface_ipv4(&config.gateway.nat_interface).with_context(|| {
+                format!(
+                    "failed to resolve IPv4 address for {}",
+                    config.gateway.nat_interface
+                )
+            })?,
         )
     } else {
         None
@@ -1996,8 +2101,12 @@ async fn main() -> Result<()> {
 
     let internet_link: Option<Arc<InternetGatewayLink>> = if is_gateway {
         Some(Arc::new(
-            InternetGatewayLink::new(&config.gateway.nat_interface)
-                .with_context(|| format!("failed to initialize gateway internet link on {}", config.gateway.nat_interface))?,
+            InternetGatewayLink::new(&config.gateway.nat_interface).with_context(|| {
+                format!(
+                    "failed to initialize gateway internet link on {}",
+                    config.gateway.nat_interface
+                )
+            })?,
         ))
     } else {
         None
@@ -2007,7 +2116,11 @@ async fn main() -> Result<()> {
     let ip_pool: Option<Arc<Mutex<IpPool>>> = if is_gateway {
         // Network address is the subnet base (e.g. 10.77.0.0 for 10.77.0.1/24)
         let n = u32::from(mesh_ip);
-        let mask: u32 = if prefix_len >= 32 { 0xffff_ffff } else { !((1u32 << (32 - prefix_len)) - 1) };
+        let mask: u32 = if prefix_len >= 32 {
+            0xffff_ffff
+        } else {
+            !((1u32 << (32 - prefix_len)) - 1)
+        };
         let network_addr = Ipv4Addr::from(n & mask);
         Some(Arc::new(Mutex::new(IpPool::new(network_addr, prefix_len))))
     } else {
@@ -2096,23 +2209,23 @@ async fn main() -> Result<()> {
     if config.discovery.enabled {
         let pubkey: [u8; 32] = identity.signing_key().verifying_key().to_bytes();
         let caps = node_capabilities(&config);
-        let (discovery_svc, new_peer_rx) = DiscoveryService::new(
-            self_id,
-            pubkey,
-            caps,
-            config.transport.listen_port,
-        );
+        let (discovery_svc, new_peer_rx) =
+            DiscoveryService::new(self_id, pubkey, caps, config.transport.listen_port);
         let discovery_svc = Arc::new(
             discovery_svc
                 .with_port(config.discovery.port)
-                .with_broadcast_interval(Duration::from_millis(config.discovery.broadcast_interval_ms))
+                .with_broadcast_interval(Duration::from_millis(
+                    config.discovery.broadcast_interval_ms,
+                ))
                 .with_peer_timeout(Duration::from_millis(config.discovery.peer_timeout_ms)),
         );
         info!(port = config.discovery.port, "discovery enabled");
         tokio::spawn({
             let svc = discovery_svc.clone();
             let c = cancel.clone();
-            async move { svc.run(c).await.ok(); }
+            async move {
+                svc.run(c).await.ok();
+            }
         });
         tokio::spawn(run_discovery_consumer(state.clone(), new_peer_rx));
     } else {
@@ -2132,6 +2245,30 @@ async fn main() -> Result<()> {
         tokio::spawn(run_wifidirect_consumer(state.clone(), addr_rx));
     } else {
         debug!("Wi-Fi Direct disabled by config");
+    }
+
+    // ── Bluetooth PAN discovery ────────────────────────────────────────────
+    if config.bluetooth.enabled {
+        let bluetooth_sysfs_root = bluetooth_sysfs_root();
+        info!(
+            interface = %config.bluetooth.interface,
+            peers = config.bluetooth.peer_addresses.len(),
+            sysfs_root = %bluetooth_sysfs_root.display(),
+            "starting Bluetooth PAN watcher"
+        );
+        let (bt_svc, addr_rx) = BluetoothDiscovery::new_with_sysfs_root(
+            config.bluetooth.clone(),
+            config.transport.listen_port,
+            bluetooth_sysfs_root,
+        )
+        .context("failed to construct Bluetooth PAN watcher")?;
+        let c = cancel.clone();
+        tokio::spawn(async move {
+            bt_svc.run(c).await.ok();
+        });
+        tokio::spawn(run_bluetooth_consumer(state.clone(), addr_rx));
+    } else {
+        debug!("Bluetooth PAN disabled by config");
     }
 
     // ── Background tasks ──────────────────────────────────────────────────
@@ -2213,9 +2350,18 @@ mod tests {
     fn backoff_duration_increases_with_attempt() {
         // On average the capped duration must be higher than the base duration.
         // Compare median over many samples.
-        let low: u64 = (0..200).map(|_| backoff_duration(0).as_millis() as u64).sum::<u64>() / 200;
-        let high: u64 = (0..200).map(|_| backoff_duration(4).as_millis() as u64).sum::<u64>() / 200;
-        assert!(high > low, "attempt 4 avg ({high}) should exceed attempt 0 avg ({low})");
+        let low: u64 = (0..200)
+            .map(|_| backoff_duration(0).as_millis() as u64)
+            .sum::<u64>()
+            / 200;
+        let high: u64 = (0..200)
+            .map(|_| backoff_duration(4).as_millis() as u64)
+            .sum::<u64>()
+            / 200;
+        assert!(
+            high > low,
+            "attempt 4 avg ({high}) should exceed attempt 0 avg ({low})"
+        );
     }
 
     // ── ReconnectManager tests ─────────────────────────────────────────────
@@ -2231,8 +2377,14 @@ mod tests {
     #[tokio::test]
     async fn begin_reconnect_returns_true_once() {
         let mgr = ReconnectManager::new([test_addr()]);
-        assert!(mgr.begin_reconnect(test_addr()).await, "first claim should succeed");
-        assert!(!mgr.begin_reconnect(test_addr()).await, "second claim should fail");
+        assert!(
+            mgr.begin_reconnect(test_addr()).await,
+            "first claim should succeed"
+        );
+        assert!(
+            !mgr.begin_reconnect(test_addr()).await,
+            "second claim should fail"
+        );
     }
 
     #[tokio::test]
@@ -2240,7 +2392,10 @@ mod tests {
         let mgr = ReconnectManager::new([test_addr()]);
         mgr.begin_reconnect(test_addr()).await;
         mgr.end_reconnect(test_addr()).await;
-        assert!(mgr.begin_reconnect(test_addr()).await, "should be able to claim after release");
+        assert!(
+            mgr.begin_reconnect(test_addr()).await,
+            "should be able to claim after release"
+        );
     }
 
     #[tokio::test]
@@ -2313,13 +2468,23 @@ mod tests {
     fn congestion_drop_policy_is_priority_based() {
         // Only Data-priority frame types are dropped; everything more important is buffered.
         use pim_protocol::FrameType;
-        let high_priority = [FrameType::Control, FrameType::Handshake, FrameType::RouteUpdate];
+        let high_priority = [
+            FrameType::Control,
+            FrameType::Handshake,
+            FrameType::RouteUpdate,
+        ];
         let low_priority = [FrameType::Data, FrameType::Heartbeat];
         for ft in high_priority {
-            assert!(should_buffer_under_congestion(ft), "{ft:?} should be buffered");
+            assert!(
+                should_buffer_under_congestion(ft),
+                "{ft:?} should be buffered"
+            );
         }
         for ft in low_priority {
-            assert!(!should_buffer_under_congestion(ft), "{ft:?} should be dropped");
+            assert!(
+                !should_buffer_under_congestion(ft),
+                "{ft:?} should be dropped"
+            );
         }
     }
 
@@ -2347,7 +2512,7 @@ mod tests {
     fn load_normalized_zero_when_no_packets() {
         // 0 packets in interval → load = 0
         let delta: u64 = 0;
-        let load = ((delta.min(2000) * 255 / 2000)) as u8;
+        let load = (delta.min(2000) * 255 / 2000) as u8;
         assert_eq!(load, 0);
     }
 
@@ -2355,7 +2520,7 @@ mod tests {
     fn load_normalized_255_at_saturation() {
         // ≥2000 packets in interval → load = 255
         let delta: u64 = 2000;
-        let load = ((delta.min(2000) * 255 / 2000)) as u8;
+        let load = (delta.min(2000) * 255 / 2000) as u8;
         assert_eq!(load, 255);
     }
 
@@ -2363,7 +2528,7 @@ mod tests {
     fn load_normalized_midpoint() {
         // 1000 packets → load ≈ 127
         let delta: u64 = 1000;
-        let load = ((delta.min(2000) * 255 / 2000)) as u8;
+        let load = (delta.min(2000) * 255 / 2000) as u8;
         assert_eq!(load, 127);
     }
 
@@ -2372,11 +2537,20 @@ mod tests {
         let pings: Arc<Mutex<HashMap<u64, (NodeId, Instant)>>> =
             Arc::new(Mutex::new(HashMap::new()));
         let stale_time = Instant::now() - Duration::from_secs(60);
-        pings.lock().await.insert(1u64, (NodeId::from_bytes([1; 16]), stale_time));
-        pings.lock().await.insert(2u64, (NodeId::from_bytes([2; 16]), Instant::now()));
+        pings
+            .lock()
+            .await
+            .insert(1u64, (NodeId::from_bytes([1; 16]), stale_time));
+        pings
+            .lock()
+            .await
+            .insert(2u64, (NodeId::from_bytes([2; 16]), Instant::now()));
 
         // Simulate the GC step from run_gateway_probes
-        pings.lock().await.retain(|_, (_, sent_at)| sent_at.elapsed() < PENDING_PING_TTL);
+        pings
+            .lock()
+            .await
+            .retain(|_, (_, sent_at)| sent_at.elapsed() < PENDING_PING_TTL);
 
         let locked = pings.lock().await;
         assert!(!locked.contains_key(&1u64), "stale ping should be removed");
@@ -2435,7 +2609,10 @@ mod tests {
             .map(|(id, _)| *id)
             .collect();
 
-        assert!(timed_out.is_empty(), "peer with recent heartbeat must not time out");
+        assert!(
+            timed_out.is_empty(),
+            "peer with recent heartbeat must not time out"
+        );
     }
 
     /// A peer that has been silent for more than 15 s must appear in the timed-out set.
@@ -2483,9 +2660,18 @@ mod tests {
         mgr.register(peer_id(52), discovered).await;
         mgr.register_discovered(discovered).await;
 
-        assert!(mgr.is_reconnectable_addr(&peer_id(51)).await.is_some(), "configured peer must be reconnectable");
-        assert!(mgr.is_reconnectable_addr(&peer_id(52)).await.is_some(), "discovered peer must be reconnectable");
-        assert!(mgr.is_reconnectable_addr(&peer_id(99)).await.is_none(), "unknown peer must not be reconnectable");
+        assert!(
+            mgr.is_reconnectable_addr(&peer_id(51)).await.is_some(),
+            "configured peer must be reconnectable"
+        );
+        assert!(
+            mgr.is_reconnectable_addr(&peer_id(52)).await.is_some(),
+            "discovered peer must be reconnectable"
+        );
+        assert!(
+            mgr.is_reconnectable_addr(&peer_id(99)).await.is_none(),
+            "unknown peer must not be reconnectable"
+        );
     }
 
     /// Client-only capability `(!is_relay() && !is_gateway())` must trigger the skip condition.
@@ -2493,8 +2679,10 @@ mod tests {
     fn client_only_peer_is_skipped() {
         let caps = NodeCapabilities::client();
         // The consumer skips when neither relay nor gateway.
-        assert!(!caps.is_relay() && !caps.is_gateway(),
-            "consumer must filter out client-only peers");
+        assert!(
+            !caps.is_relay() && !caps.is_gateway(),
+            "consumer must filter out client-only peers"
+        );
     }
 
     /// Relay and gateway capability sets must pass the capability filter.
@@ -2502,8 +2690,14 @@ mod tests {
     fn relay_and_gateway_caps_pass_filter() {
         let relay = NodeCapabilities::relay();
         let gateway = NodeCapabilities::gateway();
-        assert!(relay.is_relay() || relay.is_gateway(), "relay caps must pass filter");
-        assert!(gateway.is_relay() || gateway.is_gateway(), "gateway caps must pass filter");
+        assert!(
+            relay.is_relay() || relay.is_gateway(),
+            "relay caps must pass filter"
+        );
+        assert!(
+            gateway.is_relay() || gateway.is_gateway(),
+            "gateway caps must pass filter"
+        );
     }
 
     /// The self-check (`record.node_id == state.self_id`) correctly identifies own broadcasts.
@@ -2511,33 +2705,30 @@ mod tests {
     fn self_advertisement_is_ignored() {
         let own_id = NodeId::from_bytes([42; 16]);
         let record_id = NodeId::from_bytes([42; 16]);
-        assert_eq!(record_id, own_id, "own NodeId must be caught by self-check in consumer");
+        assert_eq!(
+            record_id, own_id,
+            "own NodeId must be caught by self-check in consumer"
+        );
     }
 
     /// When `discovery.enabled = false`, the discovery service must not be started.
     #[test]
     fn discovery_disabled_in_config_skips_spawning() {
-        let config = Config::from_str(
-            "[node]\nname=\"t\"\n[discovery]\nenabled=false\n",
-        ).unwrap();
-        assert!(!config.discovery.enabled,
-            "discovery service must not start when enabled=false");
+        let config = Config::from_str("[node]\nname=\"t\"\n[discovery]\nenabled=false\n").unwrap();
+        assert!(
+            !config.discovery.enabled,
+            "discovery service must not start when enabled=false"
+        );
     }
 
     // ── Phase 7: node_capabilities() tests ───────────────────────────────────
 
     fn cfg_gateway() -> Config {
-        Config::from_str(
-            "[node]\nname=\"t\"\n[gateway]\nenabled=true\n",
-        )
-        .unwrap()
+        Config::from_str("[node]\nname=\"t\"\n[gateway]\nenabled=true\n").unwrap()
     }
 
     fn cfg_relay() -> Config {
-        Config::from_str(
-            "[node]\nname=\"t\"\n[relay]\nenabled=true\n",
-        )
-        .unwrap()
+        Config::from_str("[node]\nname=\"t\"\n[relay]\nenabled=true\n").unwrap()
     }
 
     fn cfg_client() -> Config {
@@ -2571,12 +2762,17 @@ mod tests {
     #[test]
     fn gateway_caps_bits_are_correct() {
         let caps = node_capabilities(&cfg_gateway());
-        assert_eq!(caps.bits(), 0x07, "gateway caps must be CLIENT|RELAY|GATEWAY = 0x07");
+        assert_eq!(
+            caps.bits(),
+            0x07,
+            "gateway caps must be CLIENT|RELAY|GATEWAY = 0x07"
+        );
     }
 
     #[test]
     fn parse_interface_ipv4_output_extracts_first_inet_cidr() {
-        let output = "2: eno1    inet 192.168.0.137/24 brd 192.168.0.255 scope global dynamic eno1\n";
+        let output =
+            "2: eno1    inet 192.168.0.137/24 brd 192.168.0.255 scope global dynamic eno1\n";
         assert_eq!(
             parse_interface_ipv4_output(output),
             Some(Ipv4Addr::new(192, 168, 0, 137))
@@ -2586,9 +2782,7 @@ mod tests {
     #[test]
     fn ipv4_destination_reads_destination_octets() {
         let packet = [
-            0x45, 0, 0, 20, 0, 0, 0, 0, 64, 1, 0, 0,
-            10, 77, 0, 2,
-            1, 1, 1, 1,
+            0x45, 0, 0, 20, 0, 0, 0, 0, 64, 1, 0, 0, 10, 77, 0, 2, 1, 1, 1, 1,
         ];
         assert_eq!(ipv4_destination(&packet), Some(Ipv4Addr::new(1, 1, 1, 1)));
     }
@@ -2643,8 +2837,14 @@ mod tests {
         mgr.register_discovered(wfd_addr).await;
         mgr.register(peer_id(61), udp_addr).await;
         mgr.register(peer_id(62), wfd_addr).await;
-        assert!(mgr.is_reconnectable_addr(&peer_id(61)).await.is_some(), "UDP peer reconnectable");
-        assert!(mgr.is_reconnectable_addr(&peer_id(62)).await.is_some(), "WFD peer reconnectable");
+        assert!(
+            mgr.is_reconnectable_addr(&peer_id(61)).await.is_some(),
+            "UDP peer reconnectable"
+        );
+        assert!(
+            mgr.is_reconnectable_addr(&peer_id(62)).await.is_some(),
+            "WFD peer reconnectable"
+        );
     }
 
     /// Verify `WifiDirectDiscovery::new` can be constructed from config without panicking.
@@ -2653,16 +2853,74 @@ mod tests {
         use pim_wifidirect::WifiDirectDiscovery;
         let toml = "[node]\nname=\"t\"\n[wifi_direct]\nenabled=true\n";
         let config = Config::from_str(toml).unwrap();
-        let (_svc, _rx) = WifiDirectDiscovery::new(config.wifi_direct, config.transport.listen_port);
+        let (_svc, _rx) =
+            WifiDirectDiscovery::new(config.wifi_direct, config.transport.listen_port);
         // Construction must not panic.
+    }
+
+    #[test]
+    fn bluetooth_disabled_config_skips_spawning() {
+        let config = Config::from_str("[node]\nname=\"t\"\n").unwrap();
+        assert!(
+            !config.bluetooth.enabled,
+            "Bluetooth PAN watcher must not start when enabled=false"
+        );
+    }
+
+    #[test]
+    fn bluetooth_enabled_config_exposes_interface_and_peers() {
+        let toml = "[node]\nname=\"t\"\n[bluetooth]\nenabled=true\ninterface=\"bnep1\"\npeer_addresses=[\"192.168.44.2\"]\n";
+        let config = Config::from_str(toml).unwrap();
+        assert!(config.bluetooth.enabled);
+        assert_eq!(config.bluetooth.interface, "bnep1");
+        assert_eq!(config.bluetooth.peer_addresses, vec!["192.168.44.2"]);
+        assert_eq!(config.transport.listen_port, 9100);
+    }
+
+    #[tokio::test]
+    async fn bluetooth_addr_registered_for_reconnect() {
+        let mgr = ReconnectManager::new([]);
+        let addr: SocketAddr = "192.168.44.2:9100".parse().unwrap();
+        mgr.register_discovered(addr).await;
+        mgr.register(peer_id(63), addr).await;
+        assert_eq!(
+            mgr.is_reconnectable_addr(&peer_id(63)).await,
+            Some(addr),
+            "Bluetooth-discovered peer must be reconnectable"
+        );
+    }
+
+    #[test]
+    fn bluetooth_discovery_construction_from_config() {
+        use pim_bluetooth::BluetoothDiscovery;
+        let toml =
+            "[node]\nname=\"t\"\n[bluetooth]\nenabled=true\npeer_addresses=[\"192.168.44.2\"]\n";
+        let config = Config::from_str(toml).unwrap();
+        let (_svc, _rx) =
+            BluetoothDiscovery::new(config.bluetooth, config.transport.listen_port).unwrap();
+    }
+
+    #[test]
+    fn bluetooth_sysfs_root_defaults_to_linux_sysfs() {
+        assert_eq!(
+            bluetooth_sysfs_root_from_env(None),
+            PathBuf::from("/sys/class/net")
+        );
+    }
+
+    #[test]
+    fn bluetooth_sysfs_root_honors_environment_override() {
+        assert_eq!(
+            bluetooth_sysfs_root_from_env(Some("/tmp/pim-fake-sysfs".into())),
+            PathBuf::from("/tmp/pim-fake-sysfs")
+        );
     }
 
     /// On receiving a Goodbye, the peer must be removed from the heartbeat map immediately.
     #[tokio::test]
     async fn goodbye_triggers_immediate_removal() {
         let p = peer_id(12);
-        let hb_map: Arc<Mutex<HashMap<NodeId, Instant>>> =
-            Arc::new(Mutex::new(HashMap::new()));
+        let hb_map: Arc<Mutex<HashMap<NodeId, Instant>>> = Arc::new(Mutex::new(HashMap::new()));
         hb_map.lock().await.insert(p, Instant::now());
         assert!(hb_map.lock().await.contains_key(&p));
 

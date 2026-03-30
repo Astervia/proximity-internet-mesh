@@ -95,9 +95,9 @@ struct ConntrackEntry {
 impl ConntrackEntry {
     fn idle_timeout(&self) -> Duration {
         match self.proto {
-            PROTO_TCP => Duration::from_secs(300),  // 5 min
-            PROTO_UDP => Duration::from_secs(30),   // 30 s
-            PROTO_ICMP => Duration::from_secs(10),  // 10 s
+            PROTO_TCP => Duration::from_secs(300), // 5 min
+            PROTO_UDP => Duration::from_secs(30),  // 30 s
+            PROTO_ICMP => Duration::from_secs(10), // 10 s
             _ => Duration::from_secs(30),
         }
     }
@@ -320,11 +320,16 @@ impl GatewayEngine {
 
         // Add MASQUERADE rule (check first to avoid duplicates)
         let rule_args = [
-            "-t", "nat",
-            "-A", "POSTROUTING",
-            "-s", mesh_cidr,
-            "-o", &self.internet_iface,
-            "-j", "MASQUERADE",
+            "-t",
+            "nat",
+            "-A",
+            "POSTROUTING",
+            "-s",
+            mesh_cidr,
+            "-o",
+            &self.internet_iface,
+            "-j",
+            "MASQUERADE",
         ];
         let check_args = {
             let mut a = rule_args.to_vec();
@@ -338,11 +343,7 @@ impl GatewayEngine {
         }
 
         // Allow FORWARD traffic from the mesh
-        let fwd_args = [
-            "-A", "FORWARD",
-            "-s", mesh_cidr,
-            "-j", "ACCEPT",
-        ];
+        let fwd_args = ["-A", "FORWARD", "-s", mesh_cidr, "-j", "ACCEPT"];
         let fwd_check = {
             let mut a = fwd_args.to_vec();
             a[0] = "-C";
@@ -373,11 +374,16 @@ impl GatewayEngine {
 
 fn input_drop_args<'a>(proto: &'a str, iface: &'a str) -> [&'a str; 10] {
     [
-        "-A", "INPUT",
-        "-i", iface,
-        "-p", proto,
-        "--dport", "30000:59999",
-        "-j", "DROP",
+        "-A",
+        "INPUT",
+        "-i",
+        iface,
+        "-p",
+        proto,
+        "--dport",
+        "30000:59999",
+        "-j",
+        "DROP",
     ]
 }
 
@@ -671,7 +677,13 @@ pub mod test_util {
     use super::*;
 
     /// Build a minimal IPv4/UDP packet.
-    pub fn udp_packet(src: Ipv4Addr, dst: Ipv4Addr, src_port: u16, dst_port: u16, payload: &[u8]) -> Vec<u8> {
+    pub fn udp_packet(
+        src: Ipv4Addr,
+        dst: Ipv4Addr,
+        src_port: u16,
+        dst_port: u16,
+        payload: &[u8],
+    ) -> Vec<u8> {
         let udp_len = 8 + payload.len();
         let total = 20 + udp_len;
         let mut pkt = vec![0u8; total];
@@ -767,7 +779,7 @@ pub mod test_util {
     pub fn icmp_echo_reply_packet(src: Ipv4Addr, dst: Ipv4Addr, id: u16, seq: u16) -> Vec<u8> {
         let mut pkt = icmp_echo_packet(src, dst, id, seq);
         pkt[20] = 0; // type: echo reply
-        // Recompute ICMP checksum
+                     // Recompute ICMP checksum
         pkt[22] = 0;
         pkt[23] = 0;
         let sum = fold_checksum(ones_complement_sum(&pkt[20..]));
@@ -942,7 +954,10 @@ mod tests {
         let mut in_pkt = icmp_echo_reply_packet(REMOTE_IP, GW_EXT_IP, ext_id, 1);
         let orig = gw.translate_inbound(&mut in_pkt).await.unwrap();
         assert_eq!(orig, CLIENT_IP);
-        assert_eq!(Ipv4Addr::new(in_pkt[16], in_pkt[17], in_pkt[18], in_pkt[19]), CLIENT_IP);
+        assert_eq!(
+            Ipv4Addr::new(in_pkt[16], in_pkt[17], in_pkt[18], in_pkt[19]),
+            CLIENT_IP
+        );
     }
 
     #[tokio::test]
@@ -1029,7 +1044,18 @@ mod tests {
     fn input_drop_args_for_tcp_cover_reserved_nat_range() {
         assert_eq!(
             input_drop_args("tcp", "eno1"),
-            ["-A", "INPUT", "-i", "eno1", "-p", "tcp", "--dport", "30000:59999", "-j", "DROP"]
+            [
+                "-A",
+                "INPUT",
+                "-i",
+                "eno1",
+                "-p",
+                "tcp",
+                "--dport",
+                "30000:59999",
+                "-j",
+                "DROP"
+            ]
         );
     }
 
@@ -1037,7 +1063,18 @@ mod tests {
     fn input_drop_args_for_udp_cover_reserved_nat_range() {
         assert_eq!(
             input_drop_args("udp", "eno1"),
-            ["-A", "INPUT", "-i", "eno1", "-p", "udp", "--dport", "30000:59999", "-j", "DROP"]
+            [
+                "-A",
+                "INPUT",
+                "-i",
+                "eno1",
+                "-p",
+                "udp",
+                "--dport",
+                "30000:59999",
+                "-j",
+                "DROP"
+            ]
         );
     }
 }

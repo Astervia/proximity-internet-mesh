@@ -230,7 +230,9 @@ impl RoutingTable {
 
         // Anomaly detection: any entry claiming hops=0 for a destination other
         // than the sender is impossible and indicates a forged/malformed update.
-        let suspicious = update.entries.iter()
+        let suspicious = update
+            .entries
+            .iter()
             .any(|e| e.hops == 0 && e.destination != update.origin_id);
         if suspicious {
             warn!(%from_peer, "route update claims hops=0 for non-self destination; rejecting");
@@ -238,8 +240,11 @@ impl RoutingTable {
         }
 
         let mut changed = false;
-        let advertised_destinations: HashSet<NodeId> =
-            update.entries.iter().map(|entry| entry.destination).collect();
+        let advertised_destinations: HashSet<NodeId> = update
+            .entries
+            .iter()
+            .map(|entry| entry.destination)
+            .collect();
         let advertised_self_mesh_ip = update
             .entries
             .iter()
@@ -322,11 +327,12 @@ impl RoutingTable {
                     if better_path || newer_seq {
                         let old_hops = existing.hops;
                         // Preserve load/rtt when refreshing an existing gateway entry
-                        let (prev_load, prev_rtt, prev_mesh_ip) = if existing.is_gateway && !better_path {
-                            (existing.gateway_load, existing.rtt_ms, existing.mesh_ip)
-                        } else {
-                            (0, None, None)
-                        };
+                        let (prev_load, prev_rtt, prev_mesh_ip) =
+                            if existing.is_gateway && !better_path {
+                                (existing.gateway_load, existing.rtt_ms, existing.mesh_ip)
+                            } else {
+                                (0, None, None)
+                            };
                         let mesh_ip = decode_mesh_ip(advertised.mesh_ip).or(prev_mesh_ip);
                         self.insert_route(
                             dst,
@@ -351,7 +357,8 @@ impl RoutingTable {
             }
         }
 
-        let withdrawn: Vec<NodeId> = self.routes
+        let withdrawn: Vec<NodeId> = self
+            .routes
             .iter()
             .filter(|(dst, entry)| {
                 entry.learned_from == from_peer
@@ -498,9 +505,7 @@ impl RoutingTable {
         self.routes
             .iter()
             .filter(|(_, e)| {
-                e.is_gateway
-                    && e.hops < INFINITY
-                    && !self.blacklisted_peers.contains(&e.next_hop)
+                e.is_gateway && e.hops < INFINITY && !self.blacklisted_peers.contains(&e.next_hop)
             })
             .min_by_key(|(_, e)| gateway_score(e.hops, e.gateway_load, e.rtt_ms))
             .map(|(id, e)| (*id, e))
@@ -515,8 +520,7 @@ impl RoutingTable {
         if self.is_gateway {
             return None; // we are the gateway
         }
-        self.best_gateway_entry()
-            .map(|(_, e)| (e.next_hop, e.hops))
+        self.best_gateway_entry().map(|(_, e)| (e.next_hop, e.hops))
     }
 
     /// Returns `(gateway_id, next_hop)` for the best gateway.
@@ -528,8 +532,7 @@ impl RoutingTable {
         if self.is_gateway {
             return None;
         }
-        self.best_gateway_entry()
-            .map(|(dst, e)| (dst, e.next_hop))
+        self.best_gateway_entry().map(|(dst, e)| (dst, e.next_hop))
     }
 
     /// All known gateways sorted by composite score (best first).
@@ -578,7 +581,8 @@ impl RoutingTable {
     /// Remove all routes older than `max_age`. Returns `Changed` if anything
     /// was removed.
     pub fn expire_stale(&mut self, max_age: Duration) -> UpdateResult {
-        let expired: Vec<NodeId> = self.routes
+        let expired: Vec<NodeId> = self
+            .routes
             .iter()
             .filter(|(_, e)| e.is_expired(max_age))
             .map(|(k, _)| *k)
@@ -596,7 +600,8 @@ impl RoutingTable {
     /// Invalidate all routes whose `next_hop` is `peer`. Returns `Changed` if
     /// anything was removed.
     pub fn remove_routes_via(&mut self, peer: NodeId) -> UpdateResult {
-        let to_remove: Vec<NodeId> = self.routes
+        let to_remove: Vec<NodeId> = self
+            .routes
             .iter()
             .filter(|(_, e)| e.next_hop == peer)
             .map(|(k, _)| *k)
@@ -654,7 +659,11 @@ mod tests {
     }
 
     /// Build a RouteUpdateFrame advertising `entries` from `origin`.
-    fn advertisement(origin: NodeId, seq: u64, entries: Vec<(NodeId, u8, bool)>) -> RouteUpdateFrame {
+    fn advertisement(
+        origin: NodeId,
+        seq: u64,
+        entries: Vec<(NodeId, u8, bool)>,
+    ) -> RouteUpdateFrame {
         RouteUpdateFrame {
             origin_id: origin,
             sequence: seq,
@@ -738,7 +747,10 @@ mod tests {
         // Advertisement to B: C should have hops=INFINITY (poison reverse)
         let adv = rt.generate_advertisement(b);
         let c_entry = adv.entries.iter().find(|e| e.destination == c).unwrap();
-        assert_eq!(c_entry.hops, INFINITY, "poison reverse should set hops=INFINITY");
+        assert_eq!(
+            c_entry.hops, INFINITY,
+            "poison reverse should set hops=INFINITY"
+        );
     }
 
     #[test]
@@ -758,7 +770,10 @@ mod tests {
         // Advertisement to B: D was NOT learned from B → advertise normally
         let adv = rt.generate_advertisement(b);
         let d_entry = adv.entries.iter().find(|e| e.destination == d).unwrap();
-        assert!(d_entry.hops < INFINITY, "D should be advertised normally to B");
+        assert!(
+            d_entry.hops < INFINITY,
+            "D should be advertised normally to B"
+        );
     }
 
     // ── Invalidation ──────────────────────────────────────────────────────────
@@ -812,7 +827,10 @@ mod tests {
 
         let result = rt.apply_update(&advertisement(b, 2, vec![]), b);
         assert_eq!(result, UpdateResult::Changed);
-        assert!(rt.lookup(c).is_none(), "route omitted from full update should be withdrawn");
+        assert!(
+            rt.lookup(c).is_none(),
+            "route omitted from full update should be withdrawn"
+        );
     }
 
     // ── Stale expiry ──────────────────────────────────────────────────────────
@@ -966,7 +984,10 @@ mod tests {
 
         let mut rt = RoutingTable::new(a, false);
         rt.add_peer(b);
-        assert_eq!(rt.apply_update(&advertisement(b, 10, vec![(c, 1, false)]), b), UpdateResult::Changed);
+        assert_eq!(
+            rt.apply_update(&advertisement(b, 10, vec![(c, 1, false)]), b),
+            UpdateResult::Changed
+        );
 
         rt.remove_peer(b);
         rt.add_peer(b);
@@ -1007,11 +1028,20 @@ mod tests {
         let upd = RouteUpdateFrame {
             origin_id: impostor,
             sequence: 1,
-            entries: vec![RouteEntry { destination: c, hops: 1, flags: 0, mesh_ip: mesh_ip(3) }],
+            entries: vec![RouteEntry {
+                destination: c,
+                hops: 1,
+                flags: 0,
+                mesh_ip: mesh_ip(3),
+            }],
             signature: [0u8; 64],
         };
         let result = rt.apply_update(&upd, b);
-        assert_eq!(result, UpdateResult::Unchanged, "mismatched origin must be rejected");
+        assert_eq!(
+            result,
+            UpdateResult::Unchanged,
+            "mismatched origin must be rejected"
+        );
         assert!(rt.lookup(c).is_none());
     }
 
@@ -1028,11 +1058,20 @@ mod tests {
         let upd = RouteUpdateFrame {
             origin_id: b,
             sequence: 1,
-            entries: vec![RouteEntry { destination: victim, hops: 0, flags: 0, mesh_ip: mesh_ip(42) }],
+            entries: vec![RouteEntry {
+                destination: victim,
+                hops: 0,
+                flags: 0,
+                mesh_ip: mesh_ip(42),
+            }],
             signature: [0u8; 64],
         };
         let result = rt.apply_update(&upd, b);
-        assert_eq!(result, UpdateResult::Unchanged, "0-hop claim for non-self must be rejected");
+        assert_eq!(
+            result,
+            UpdateResult::Unchanged,
+            "0-hop claim for non-self must be rejected"
+        );
     }
 
     #[test]
@@ -1049,13 +1088,27 @@ mod tests {
             origin_id: b,
             sequence: 1,
             entries: vec![
-                RouteEntry { destination: b, hops: 0, flags: 0, mesh_ip: mesh_ip(2) }, // self-entry — OK
-                RouteEntry { destination: c, hops: 1, flags: 0, mesh_ip: mesh_ip(3) },
+                RouteEntry {
+                    destination: b,
+                    hops: 0,
+                    flags: 0,
+                    mesh_ip: mesh_ip(2),
+                }, // self-entry — OK
+                RouteEntry {
+                    destination: c,
+                    hops: 1,
+                    flags: 0,
+                    mesh_ip: mesh_ip(3),
+                },
             ],
             signature: [0u8; 64],
         };
         let result = rt.apply_update(&upd, b);
-        assert_eq!(result, UpdateResult::Changed, "self zero-hop entry should be accepted");
+        assert_eq!(
+            result,
+            UpdateResult::Changed,
+            "self zero-hop entry should be accepted"
+        );
         assert!(rt.lookup(c).is_some());
     }
 
@@ -1073,7 +1126,10 @@ mod tests {
 
         rt.blacklist_peer(b);
         assert!(rt.lookup(b).is_none(), "blacklisted peer itself invisible");
-        assert!(rt.lookup(c).is_none(), "routes via blacklisted peer invisible");
+        assert!(
+            rt.lookup(c).is_none(),
+            "routes via blacklisted peer invisible"
+        );
     }
 
     #[test]
@@ -1161,7 +1217,10 @@ mod tests {
         // gw1: hops=2, load=220 → score=200+110=310
         // gw2: hops=3, load=0   → score=300
         let (dst, _next_hop) = rt.nearest_gateway_route().unwrap();
-        assert_eq!(dst, gw2, "less-loaded 3-hop gateway should beat saturated 2-hop gateway");
+        assert_eq!(
+            dst, gw2,
+            "less-loaded 3-hop gateway should beat saturated 2-hop gateway"
+        );
     }
 
     #[test]
@@ -1185,7 +1244,10 @@ mod tests {
         rt.update_gateway_rtt(gw1, 800);
         // gw1 score = 200+0+80 = 280, gw2 score = 300
         let (dst, _) = rt.nearest_gateway_route().unwrap();
-        assert_eq!(dst, gw1, "lower-RTT 2-hop gateway should beat clean 3-hop gateway at 800ms");
+        assert_eq!(
+            dst, gw1,
+            "lower-RTT 2-hop gateway should beat clean 3-hop gateway at 800ms"
+        );
     }
 
     #[test]

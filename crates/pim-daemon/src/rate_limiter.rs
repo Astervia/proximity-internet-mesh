@@ -62,7 +62,11 @@ pub struct RateLimiter {
 
 impl RateLimiter {
     pub fn new(capacity: u32, refill_rate: f64) -> Self {
-        Self { buckets: HashMap::new(), capacity, refill_rate }
+        Self {
+            buckets: HashMap::new(),
+            capacity,
+            refill_rate,
+        }
     }
 
     /// Returns `true` if the next frame from `peer_id` is within the rate limit.

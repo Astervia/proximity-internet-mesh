@@ -5,6 +5,7 @@ WORKDIR /build
 
 # Copy manifests first so dependency fetching is cached independently of source.
 COPY Cargo.toml Cargo.lock ./
+COPY crates/pim-bluetooth/Cargo.toml  crates/pim-bluetooth/
 COPY crates/pim-core/Cargo.toml       crates/pim-core/
 COPY crates/pim-crypto/Cargo.toml     crates/pim-crypto/
 COPY crates/pim-protocol/Cargo.toml   crates/pim-protocol/
@@ -13,12 +14,13 @@ COPY crates/pim-tun/Cargo.toml        crates/pim-tun/
 COPY crates/pim-gateway/Cargo.toml    crates/pim-gateway/
 COPY crates/pim-routing/Cargo.toml    crates/pim-routing/
 COPY crates/pim-discovery/Cargo.toml  crates/pim-discovery/
+COPY crates/pim-wifidirect/Cargo.toml crates/pim-wifidirect/
 COPY crates/pim-daemon/Cargo.toml     crates/pim-daemon/
 COPY crates/pim-cli/Cargo.toml        crates/pim-cli/
 
 # Stub sources so `cargo fetch` and the dependency compile step can run.
-RUN for crate in pim-core pim-crypto pim-protocol pim-transport pim-tun \
-        pim-gateway pim-routing pim-discovery; do \
+RUN for crate in pim-bluetooth pim-core pim-crypto pim-protocol pim-transport pim-tun \
+        pim-gateway pim-routing pim-discovery pim-wifidirect; do \
         mkdir -p crates/$crate/src && \
         printf 'pub fn _stub() {}' > crates/$crate/src/lib.rs; \
     done && \

@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+pim-bluetooth = { workspace = true }
 pim-core = { workspace = true }
 pim-crypto = { workspace = true }
 pim-protocol = { workspace = true }

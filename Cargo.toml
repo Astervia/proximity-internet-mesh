@@ -2,6 +2,7 @@
 resolver = "2"
 members = [
     "crates/pim-core",
+    "crates/pim-bluetooth",
     "crates/pim-crypto",
     "crates/pim-protocol",
     "crates/pim-transport",
@@ -56,6 +57,7 @@ tokio-util = { version = "0.7", features = ["full"] }
 
 # Internal crates
 pim-core = { path = "crates/pim-core" }
+pim-bluetooth = { path = "crates/pim-bluetooth" }
 pim-crypto = { path = "crates/pim-crypto" }
 pim-protocol = { path = "crates/pim-protocol" }
 pim-transport = { path = "crates/pim-transport" }

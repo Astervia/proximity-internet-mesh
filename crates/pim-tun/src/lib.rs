@@ -70,7 +70,11 @@ impl Ifreq {
 
     /// Read interface name back from the kernel (written after TUNSETIFF).
     fn name_str(&self) -> String {
-        let end = self.ifr_name.iter().position(|&b| b == 0).unwrap_or(IFNAMSIZ);
+        let end = self
+            .ifr_name
+            .iter()
+            .position(|&b| b == 0)
+            .unwrap_or(IFNAMSIZ);
         String::from_utf8_lossy(&self.ifr_name[..end]).to_string()
     }
 
@@ -331,7 +335,10 @@ impl TunInterface {
             if !status.success() {
                 return Err(TunError::Ioctl(
                     "ip route add".into(),
-                    io::Error::new(io::ErrorKind::Other, format!("ip route add {} failed", cidr)),
+                    io::Error::new(
+                        io::ErrorKind::Other,
+                        format!("ip route add {} failed", cidr),
+                    ),
                 ));
             }
         }
@@ -411,7 +418,16 @@ mod tests {
     fn default_route_args_include_onlink_for_lower_half() {
         assert_eq!(
             default_route_args("0.0.0.0/1", "10.77.0.1", "pim0"),
-            ["route", "add", "0.0.0.0/1", "via", "10.77.0.1", "dev", "pim0", "onlink"]
+            [
+                "route",
+                "add",
+                "0.0.0.0/1",
+                "via",
+                "10.77.0.1",
+                "dev",
+                "pim0",
+                "onlink"
+            ]
         );
     }
 
@@ -419,7 +435,16 @@ mod tests {
     fn default_route_args_include_onlink_for_upper_half() {
         assert_eq!(
             default_route_args("128.0.0.0/1", "10.77.0.1", "pim0"),
-            ["route", "add", "128.0.0.0/1", "via", "10.77.0.1", "dev", "pim0", "onlink"]
+            [
+                "route",
+                "add",
+                "128.0.0.0/1",
+                "via",
+                "10.77.0.1",
+                "dev",
+                "pim0",
+                "onlink"
+            ]
         );
     }
 

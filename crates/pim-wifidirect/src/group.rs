@@ -5,9 +5,9 @@
 //! both sides of the newly formed group so the caller can build a `SocketAddr`
 //! and hand it to the connection initiator.
 
-use crate::{WifiDirectError, wpa_cli::WpaCliController};
+use crate::{wpa_cli::WpaCliController, WifiDirectError};
 use std::net::Ipv4Addr;
-use tokio::time::{Duration, sleep};
+use tokio::time::{sleep, Duration};
 
 /// The role this node plays in the P2P group.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -112,7 +112,7 @@ async fn poll_arp_for_peer(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::wpa_cli::{parse_inet_addr, parse_arp_table};
+    use crate::wpa_cli::{parse_arp_table, parse_inet_addr};
 
     #[test]
     fn group_ip_parsed_from_go_interface() {

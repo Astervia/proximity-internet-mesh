@@ -34,6 +34,9 @@ pub struct Config {
     /// Wi-Fi Direct (IEEE 802.11 P2P) peer discovery and group formation settings.
     #[serde(default)]
     pub wifi_direct: WifiDirectConfig,
+    /// Bluetooth PAN peer link monitoring and address handoff settings.
+    #[serde(default)]
+    pub bluetooth: BluetoothConfig,
     /// Statically configured peers. Optional — nodes can rely entirely on discovery when empty.
     #[serde(default)]
     pub peers: Vec<PeerConfig>,
@@ -178,6 +181,31 @@ pub struct WifiDirectConfig {
     pub connect_method: String,
 }
 
+/// Bluetooth PAN link-establishment configuration.
+///
+/// This mechanism is intentionally narrow: it does not replace the transport
+/// layer and it does not manage pairing. Instead, it waits for a Bluetooth PAN
+/// interface to appear, then hands configured peer IPs to the daemon so the
+/// existing TCP transport and handshake logic can connect normally.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct BluetoothConfig {
+    /// Enable Bluetooth PAN link monitoring. Defaults to `false` (opt-in).
+    #[serde(default)]
+    pub enabled: bool,
+    /// Linux network interface expected to represent the PAN link, e.g. `bnep0`.
+    #[serde(default = "default_bluetooth_interface")]
+    pub interface: String,
+    /// Peer IPv4 or IPv6 addresses reachable over the Bluetooth PAN link.
+    #[serde(default)]
+    pub peer_addresses: Vec<String>,
+    /// Poll interval used while waiting for the PAN interface to become ready.
+    #[serde(default = "default_bluetooth_poll_interval_ms")]
+    pub poll_interval_ms: u64,
+    /// Maximum time to wait for the PAN interface to appear before giving up.
+    #[serde(default = "default_bluetooth_startup_timeout_ms")]
+    pub startup_timeout_ms: u64,
+}
+
 // Default value functions
 
 fn default_data_dir() -> PathBuf {
@@ -276,6 +304,18 @@ fn default_wfd_connect_method() -> String {
     "pbc".into()
 }
 
+fn default_bluetooth_interface() -> String {
+    "bnep0".into()
+}
+
+fn default_bluetooth_poll_interval_ms() -> u64 {
+    2_000
+}
+
+fn default_bluetooth_startup_timeout_ms() -> u64 {
+    15_000
+}
+
 impl Default for InterfaceConfig {
     fn default() -> Self {
         Self {
@@ -353,6 +393,18 @@ impl Default for WifiDirectConfig {
             listen_channel: default_wfd_listen_channel(),
             op_channel: default_wfd_op_channel(),
             connect_method: default_wfd_connect_method(),
+        }
+    }
+}
+
+impl Default for BluetoothConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            interface: default_bluetooth_interface(),
+            peer_addresses: Vec::new(),
+            poll_interval_ms: default_bluetooth_poll_interval_ms(),
+            startup_timeout_ms: default_bluetooth_startup_timeout_ms(),
         }
     }
 }
@@ -439,6 +491,13 @@ go_intent = 7
 listen_channel = 6
 op_channel = 6
 connect_method = "pbc"
+
+[bluetooth]
+enabled = false
+interface = "bnep0"
+peer_addresses = ["fe80::2"]
+poll_interval_ms = 2000
+startup_timeout_ms = 15000
 "#;
 
     #[test]
@@ -615,5 +674,55 @@ connect_method = "pin:12345670"
         let serialized = config.to_toml_string().unwrap();
         let reparsed = Config::from_str(&serialized).unwrap();
         assert_eq!(config, reparsed);
+    }
+
+    #[test]
+    fn bluetooth_defaults_to_disabled() {
+        let config = Config::from_str(MINIMAL_CONFIG).unwrap();
+        assert!(!config.bluetooth.enabled);
+        assert_eq!(config.bluetooth.interface, "bnep0");
+        assert!(config.bluetooth.peer_addresses.is_empty());
+        assert_eq!(config.bluetooth.poll_interval_ms, 2_000);
+        assert_eq!(config.bluetooth.startup_timeout_ms, 15_000);
+    }
+
+    #[test]
+    fn bluetooth_enabled_round_trips() {
+        let toml = r#"
+[node]
+name = "t"
+[bluetooth]
+enabled = true
+peer_addresses = ["192.168.44.2"]
+"#;
+        let config = Config::from_str(toml).unwrap();
+        assert!(config.bluetooth.enabled);
+        assert_eq!(config.bluetooth.peer_addresses, vec!["192.168.44.2"]);
+        let serialized = config.to_toml_string().unwrap();
+        let reparsed = Config::from_str(&serialized).unwrap();
+        assert!(reparsed.bluetooth.enabled);
+        assert_eq!(reparsed.bluetooth.peer_addresses, vec!["192.168.44.2"]);
+    }
+
+    #[test]
+    fn bluetooth_custom_interface_and_timeouts_parse() {
+        let toml = r#"
+[node]
+name = "t"
+[bluetooth]
+enabled = true
+interface = "bnep1"
+peer_addresses = ["10.33.0.2", "fd00::2"]
+poll_interval_ms = 500
+startup_timeout_ms = 10000
+"#;
+        let config = Config::from_str(toml).unwrap();
+        assert_eq!(config.bluetooth.interface, "bnep1");
+        assert_eq!(
+            config.bluetooth.peer_addresses,
+            vec!["10.33.0.2", "fd00::2"]
+        );
+        assert_eq!(config.bluetooth.poll_interval_ms, 500);
+        assert_eq!(config.bluetooth.startup_timeout_ms, 10_000);
     }
 }
