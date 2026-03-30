@@ -8,3 +8,8 @@ Examples:
 - output schemas
 - checklists
 - baseline architectural context
+
+Start with:
+- `CONVENTIONS.md`
+- `ARCHITECTURE_MAP.md`
+- `TASK_TEMPLATE.md`
