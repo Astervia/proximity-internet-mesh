@@ -2,6 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
+use std::str::FromStr;
 
 use crate::PimError;
 
@@ -34,6 +35,9 @@ pub struct Config {
     /// Wi-Fi Direct (IEEE 802.11 P2P) peer discovery and group formation settings.
     #[serde(default)]
     pub wifi_direct: WifiDirectConfig,
+    /// Bluetooth PAN peer link monitoring and address handoff settings.
+    #[serde(default)]
+    pub bluetooth: BluetoothConfig,
     /// Statically configured peers. Optional — nodes can rely entirely on discovery when empty.
     #[serde(default)]
     pub peers: Vec<PeerConfig>,
@@ -87,7 +91,7 @@ pub struct DiscoveryConfig {
     pub connect_gateways: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 /// Settings that control whether this node acts as a relay, forwarding traffic for other peers.
 pub struct RelayConfig {
     /// Enables relay forwarding when `true`. Gateway nodes are implicitly relays regardless of
@@ -176,6 +180,57 @@ pub struct WifiDirectConfig {
     /// Connection method: `"pbc"` (push-button) or `"pin:<8-digit-pin>"`. Default `"pbc"`.
     #[serde(default = "default_wfd_connect_method")]
     pub connect_method: String,
+}
+
+/// Bluetooth PAN link-establishment configuration.
+///
+/// This mechanism is intentionally narrow: it does not replace the transport
+/// layer and it does not manage pairing. Instead, it waits for a Bluetooth PAN
+/// interface to appear, then learns peer IPs from the PAN neighbor table and
+/// hands them to the daemon so the existing TCP transport and handshake logic
+/// can connect normally. Statically configured peer IPs remain supported as an
+/// additive fallback.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct BluetoothConfig {
+    /// Enable Bluetooth PAN link monitoring. Defaults to `false` (opt-in).
+    #[serde(default)]
+    pub enabled: bool,
+    /// Linux network interface expected to represent the PAN link, e.g. `bnep0`.
+    #[serde(default = "default_bluetooth_interface")]
+    pub interface: String,
+    /// Enable radio-level Bluetooth discovery and pairing for new peers.
+    #[serde(default = "default_bluetooth_radio_discovery_enabled")]
+    pub radio_discovery_enabled: bool,
+    /// Prefix used to identify PIM peers by Bluetooth device name.
+    #[serde(default = "default_bluetooth_device_name_prefix")]
+    pub device_name_prefix: String,
+    /// Local Bluetooth controller alias to advertise. Empty means derived from node name.
+    #[serde(default)]
+    pub local_alias: String,
+    /// Automatically discover peer IPs from the PAN interface neighbor table.
+    #[serde(default = "default_bluetooth_auto_discover_peers")]
+    pub auto_discover_peers: bool,
+    /// Optional static peer IPv4 or IPv6 addresses reachable over the Bluetooth PAN link.
+    #[serde(default)]
+    pub peer_addresses: Vec<String>,
+    /// Poll interval used while waiting for the PAN interface to become ready.
+    #[serde(default = "default_bluetooth_poll_interval_ms")]
+    pub poll_interval_ms: u64,
+    /// Poll interval used for radio-level device scans.
+    #[serde(default = "default_bluetooth_scan_interval_ms")]
+    pub scan_interval_ms: u64,
+    /// Poll interval used for automatic peer discovery after the interface is ready.
+    #[serde(default = "default_bluetooth_peer_discovery_interval_ms")]
+    pub peer_discovery_interval_ms: u64,
+    /// Timeout for `bluetoothctl` operations, in seconds.
+    #[serde(default = "default_bluetoothctl_timeout_s")]
+    pub bluetoothctl_timeout_s: u64,
+    /// How long the controller remains discoverable after startup.
+    #[serde(default = "default_bluetooth_discoverable_timeout_s")]
+    pub discoverable_timeout_s: u64,
+    /// Maximum time to wait for the PAN interface to appear before giving up.
+    #[serde(default = "default_bluetooth_startup_timeout_ms")]
+    pub startup_timeout_ms: u64,
 }
 
 // Default value functions
@@ -276,6 +331,46 @@ fn default_wfd_connect_method() -> String {
     "pbc".into()
 }
 
+fn default_bluetooth_interface() -> String {
+    "bnep0".into()
+}
+
+fn default_bluetooth_radio_discovery_enabled() -> bool {
+    true
+}
+
+fn default_bluetooth_device_name_prefix() -> String {
+    "PIM-".into()
+}
+
+fn default_bluetooth_auto_discover_peers() -> bool {
+    true
+}
+
+fn default_bluetooth_poll_interval_ms() -> u64 {
+    2_000
+}
+
+fn default_bluetooth_scan_interval_ms() -> u64 {
+    5_000
+}
+
+fn default_bluetooth_peer_discovery_interval_ms() -> u64 {
+    2_000
+}
+
+fn default_bluetoothctl_timeout_s() -> u64 {
+    15
+}
+
+fn default_bluetooth_discoverable_timeout_s() -> u64 {
+    180
+}
+
+fn default_bluetooth_startup_timeout_ms() -> u64 {
+    15_000
+}
+
 impl Default for InterfaceConfig {
     fn default() -> Self {
         Self {
@@ -296,12 +391,6 @@ impl Default for DiscoveryConfig {
             connect_relays: default_connect_relays(),
             connect_gateways: default_connect_gateways(),
         }
-    }
-}
-
-impl Default for RelayConfig {
-    fn default() -> Self {
-        Self { enabled: false }
     }
 }
 
@@ -357,6 +446,26 @@ impl Default for WifiDirectConfig {
     }
 }
 
+impl Default for BluetoothConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            interface: default_bluetooth_interface(),
+            radio_discovery_enabled: default_bluetooth_radio_discovery_enabled(),
+            device_name_prefix: default_bluetooth_device_name_prefix(),
+            local_alias: String::new(),
+            auto_discover_peers: default_bluetooth_auto_discover_peers(),
+            peer_addresses: Vec::new(),
+            poll_interval_ms: default_bluetooth_poll_interval_ms(),
+            scan_interval_ms: default_bluetooth_scan_interval_ms(),
+            peer_discovery_interval_ms: default_bluetooth_peer_discovery_interval_ms(),
+            bluetoothctl_timeout_s: default_bluetoothctl_timeout_s(),
+            discoverable_timeout_s: default_bluetooth_discoverable_timeout_s(),
+            startup_timeout_ms: default_bluetooth_startup_timeout_ms(),
+        }
+    }
+}
+
 impl Default for SecurityConfig {
     fn default() -> Self {
         Self {
@@ -370,17 +479,25 @@ impl Config {
     /// Load configuration from a TOML file.
     pub fn load(path: &Path) -> Result<Self, PimError> {
         let content = std::fs::read_to_string(path).map_err(PimError::Io)?;
-        Self::from_str(&content)
+        content.parse()
     }
 
     /// Parse configuration from a TOML string.
-    pub fn from_str(s: &str) -> Result<Self, PimError> {
-        toml::from_str(s).map_err(|e| PimError::Config(e.to_string()))
+    pub fn from_toml_str(s: &str) -> Result<Self, PimError> {
+        s.parse()
     }
 
     /// Serialize configuration to a TOML string.
     pub fn to_toml_string(&self) -> Result<String, PimError> {
         toml::to_string_pretty(self).map_err(|e| PimError::Config(e.to_string()))
+    }
+}
+
+impl FromStr for Config {
+    type Err = PimError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        toml::from_str(s).map_err(|e| PimError::Config(e.to_string()))
     }
 }
 
@@ -439,11 +556,26 @@ go_intent = 7
 listen_channel = 6
 op_channel = 6
 connect_method = "pbc"
+
+[bluetooth]
+enabled = false
+interface = "bnep0"
+radio_discovery_enabled = true
+device_name_prefix = "PIM-"
+local_alias = ""
+auto_discover_peers = true
+peer_addresses = []
+poll_interval_ms = 2000
+scan_interval_ms = 5000
+peer_discovery_interval_ms = 2000
+bluetoothctl_timeout_s = 15
+discoverable_timeout_s = 180
+startup_timeout_ms = 15000
 "#;
 
     #[test]
     fn parse_minimal_config() {
-        let config = Config::from_str(MINIMAL_CONFIG).unwrap();
+        let config = Config::from_toml_str(MINIMAL_CONFIG).unwrap();
         assert_eq!(config.node.name, "test-node");
         // Defaults should be applied
         assert_eq!(config.interface.name, "pim0");
@@ -455,7 +587,7 @@ connect_method = "pbc"
 
     #[test]
     fn parse_full_config() {
-        let config = Config::from_str(FULL_CONFIG).unwrap();
+        let config = Config::from_toml_str(FULL_CONFIG).unwrap();
         assert_eq!(config.node.name, "my-device");
         assert_eq!(config.node.data_dir, PathBuf::from("/tmp/pim"));
         assert!(config.gateway.enabled);
@@ -465,22 +597,22 @@ connect_method = "pbc"
 
     #[test]
     fn config_round_trip() {
-        let config = Config::from_str(FULL_CONFIG).unwrap();
+        let config = Config::from_toml_str(FULL_CONFIG).unwrap();
         let serialized = config.to_toml_string().unwrap();
-        let reparsed = Config::from_str(&serialized).unwrap();
+        let reparsed = Config::from_toml_str(&serialized).unwrap();
         assert_eq!(config, reparsed);
     }
 
     #[test]
     fn invalid_toml_returns_error() {
-        let result = Config::from_str("not valid toml {{{}}}");
+        let result = Config::from_toml_str("not valid toml {{{}}}");
         assert!(result.is_err());
         assert!(format!("{}", result.unwrap_err()).contains("config error"));
     }
 
     #[test]
     fn discovery_defaults_when_section_absent() {
-        let config = Config::from_str(MINIMAL_CONFIG).unwrap();
+        let config = Config::from_toml_str(MINIMAL_CONFIG).unwrap();
         assert!(config.discovery.enabled);
         assert_eq!(config.discovery.port, 9101);
         assert_eq!(config.discovery.broadcast_interval_ms, 5000);
@@ -497,10 +629,10 @@ name = "t"
 [discovery]
 enabled = false
 "#;
-        let config = Config::from_str(toml).unwrap();
+        let config = Config::from_toml_str(toml).unwrap();
         assert!(!config.discovery.enabled);
         let serialized = config.to_toml_string().unwrap();
-        let reparsed = Config::from_str(&serialized).unwrap();
+        let reparsed = Config::from_toml_str(&serialized).unwrap();
         assert!(!reparsed.discovery.enabled);
     }
 
@@ -512,16 +644,16 @@ name = "t"
 [discovery]
 port = 19101
 "#;
-        let config = Config::from_str(toml).unwrap();
+        let config = Config::from_toml_str(toml).unwrap();
         assert_eq!(config.discovery.port, 19101);
         let serialized = config.to_toml_string().unwrap();
-        let reparsed = Config::from_str(&serialized).unwrap();
+        let reparsed = Config::from_toml_str(&serialized).unwrap();
         assert_eq!(reparsed.discovery.port, 19101);
     }
 
     #[test]
     fn relay_config_defaults_to_disabled() {
-        let config = Config::from_str(MINIMAL_CONFIG).unwrap();
+        let config = Config::from_toml_str(MINIMAL_CONFIG).unwrap();
         assert!(!config.relay.enabled);
     }
 
@@ -533,32 +665,32 @@ name = "t"
 [relay]
 enabled = true
 "#;
-        let config = Config::from_str(toml).unwrap();
+        let config = Config::from_toml_str(toml).unwrap();
         assert!(config.relay.enabled);
     }
 
     #[test]
     fn peers_section_is_optional() {
-        let config = Config::from_str(MINIMAL_CONFIG).unwrap();
+        let config = Config::from_toml_str(MINIMAL_CONFIG).unwrap();
         assert!(config.peers.is_empty());
     }
 
     #[test]
     fn config_round_trip_with_all_discovery_fields() {
-        let config = Config::from_str(FULL_CONFIG).unwrap();
+        let config = Config::from_toml_str(FULL_CONFIG).unwrap();
         assert!(config.discovery.enabled);
         assert_eq!(config.discovery.port, 9101);
         assert!(config.discovery.connect_relays);
         assert!(config.discovery.connect_gateways);
         assert!(!config.relay.enabled);
         let serialized = config.to_toml_string().unwrap();
-        let reparsed = Config::from_str(&serialized).unwrap();
+        let reparsed = Config::from_toml_str(&serialized).unwrap();
         assert_eq!(config, reparsed);
     }
 
     #[test]
     fn wifi_direct_defaults_to_disabled() {
-        let config = Config::from_str(MINIMAL_CONFIG).unwrap();
+        let config = Config::from_toml_str(MINIMAL_CONFIG).unwrap();
         assert!(!config.wifi_direct.enabled);
         assert_eq!(config.wifi_direct.interface, "wlan0");
         assert_eq!(config.wifi_direct.go_intent, 7);
@@ -575,10 +707,10 @@ name = "t"
 [wifi_direct]
 enabled = true
 "#;
-        let config = Config::from_str(toml).unwrap();
+        let config = Config::from_toml_str(toml).unwrap();
         assert!(config.wifi_direct.enabled);
         let serialized = config.to_toml_string().unwrap();
-        let reparsed = Config::from_str(&serialized).unwrap();
+        let reparsed = Config::from_toml_str(&serialized).unwrap();
         assert!(reparsed.wifi_direct.enabled);
     }
 
@@ -593,7 +725,7 @@ interface = "wlan1"
 go_intent = 12
 connect_method = "pin:12345670"
 "#;
-        let config = Config::from_str(toml).unwrap();
+        let config = Config::from_toml_str(toml).unwrap();
         assert_eq!(config.wifi_direct.interface, "wlan1");
         assert_eq!(config.wifi_direct.go_intent, 12);
         assert_eq!(config.wifi_direct.connect_method, "pin:12345670");
@@ -601,19 +733,102 @@ connect_method = "pin:12345670"
 
     #[test]
     fn wifi_direct_go_intent_default_is_neutral() {
-        let config = Config::from_str(MINIMAL_CONFIG).unwrap();
+        let config = Config::from_toml_str(MINIMAL_CONFIG).unwrap();
         assert_eq!(config.wifi_direct.go_intent, 7);
     }
 
     #[test]
     fn config_round_trip_with_wifi_direct_section() {
-        let config = Config::from_str(FULL_CONFIG).unwrap();
+        let config = Config::from_toml_str(FULL_CONFIG).unwrap();
         assert!(!config.wifi_direct.enabled);
         assert_eq!(config.wifi_direct.interface, "wlan0");
         assert_eq!(config.wifi_direct.go_intent, 7);
         assert_eq!(config.wifi_direct.connect_method, "pbc");
         let serialized = config.to_toml_string().unwrap();
-        let reparsed = Config::from_str(&serialized).unwrap();
+        let reparsed = Config::from_toml_str(&serialized).unwrap();
         assert_eq!(config, reparsed);
+    }
+
+    #[test]
+    fn bluetooth_defaults_to_disabled() {
+        let config = Config::from_toml_str(MINIMAL_CONFIG).unwrap();
+        assert!(!config.bluetooth.enabled);
+        assert_eq!(config.bluetooth.interface, "bnep0");
+        assert!(config.bluetooth.radio_discovery_enabled);
+        assert_eq!(config.bluetooth.device_name_prefix, "PIM-");
+        assert_eq!(config.bluetooth.local_alias, "");
+        assert!(config.bluetooth.auto_discover_peers);
+        assert!(config.bluetooth.peer_addresses.is_empty());
+        assert_eq!(config.bluetooth.poll_interval_ms, 2_000);
+        assert_eq!(config.bluetooth.scan_interval_ms, 5_000);
+        assert_eq!(config.bluetooth.peer_discovery_interval_ms, 2_000);
+        assert_eq!(config.bluetooth.bluetoothctl_timeout_s, 15);
+        assert_eq!(config.bluetooth.discoverable_timeout_s, 180);
+        assert_eq!(config.bluetooth.startup_timeout_ms, 15_000);
+    }
+
+    #[test]
+    fn bluetooth_enabled_round_trips() {
+        let toml = r#"
+[node]
+name = "t"
+[bluetooth]
+enabled = true
+radio_discovery_enabled = true
+device_name_prefix = "PIM-"
+local_alias = "PIM-t"
+auto_discover_peers = false
+peer_addresses = ["192.168.44.2"]
+"#;
+        let config = Config::from_toml_str(toml).unwrap();
+        assert!(config.bluetooth.enabled);
+        assert!(config.bluetooth.radio_discovery_enabled);
+        assert_eq!(config.bluetooth.device_name_prefix, "PIM-");
+        assert_eq!(config.bluetooth.local_alias, "PIM-t");
+        assert!(!config.bluetooth.auto_discover_peers);
+        assert_eq!(config.bluetooth.peer_addresses, vec!["192.168.44.2"]);
+        let serialized = config.to_toml_string().unwrap();
+        let reparsed = Config::from_toml_str(&serialized).unwrap();
+        assert!(reparsed.bluetooth.enabled);
+        assert!(!reparsed.bluetooth.auto_discover_peers);
+        assert_eq!(reparsed.bluetooth.peer_addresses, vec!["192.168.44.2"]);
+    }
+
+    #[test]
+    fn bluetooth_custom_interface_and_timeouts_parse() {
+        let toml = r#"
+[node]
+name = "t"
+[bluetooth]
+enabled = true
+interface = "bnep1"
+radio_discovery_enabled = true
+device_name_prefix = "MESH-"
+local_alias = "MESH-t"
+auto_discover_peers = true
+peer_addresses = ["10.33.0.2", "fd00::2"]
+poll_interval_ms = 500
+scan_interval_ms = 750
+peer_discovery_interval_ms = 750
+bluetoothctl_timeout_s = 20
+discoverable_timeout_s = 60
+startup_timeout_ms = 10000
+"#;
+        let config = Config::from_toml_str(toml).unwrap();
+        assert_eq!(config.bluetooth.interface, "bnep1");
+        assert!(config.bluetooth.radio_discovery_enabled);
+        assert_eq!(config.bluetooth.device_name_prefix, "MESH-");
+        assert_eq!(config.bluetooth.local_alias, "MESH-t");
+        assert!(config.bluetooth.auto_discover_peers);
+        assert_eq!(
+            config.bluetooth.peer_addresses,
+            vec!["10.33.0.2", "fd00::2"]
+        );
+        assert_eq!(config.bluetooth.poll_interval_ms, 500);
+        assert_eq!(config.bluetooth.scan_interval_ms, 750);
+        assert_eq!(config.bluetooth.peer_discovery_interval_ms, 750);
+        assert_eq!(config.bluetooth.bluetoothctl_timeout_s, 20);
+        assert_eq!(config.bluetooth.discoverable_timeout_s, 60);
+        assert_eq!(config.bluetooth.startup_timeout_ms, 10_000);
     }
 }

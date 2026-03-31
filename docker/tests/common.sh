@@ -54,6 +54,19 @@ assert_cmd_output() {
     fi
 }
 
+# assert_logs_contain <file> <service> <expected_substring> [desc]
+assert_logs_contain() {
+    local file="$1" svc="$2" expected="$3"
+    local desc="${4:-logs for $svc contain $expected}"
+    local output
+    output=$(docker compose -f "$COMPOSE_DIR/$file" logs --no-color "$svc" 2>&1) || true
+    if echo "$output" | grep -Fq "$expected"; then
+        log_ok "$desc"
+    else
+        log_fail "$desc (expected '$expected' in logs)"
+    fi
+}
+
 # ── Docker helpers ────────────────────────────────────────────────────────────
 
 COMPOSE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../compose" && pwd)"
@@ -70,6 +83,12 @@ in_svc() {
     local svc="$2"
     shift 2
     docker compose -f "$COMPOSE_DIR/$file" exec -T "$svc" "$@"
+}
+
+# enable_mesh_route <file> <service> [config]
+enable_mesh_route() {
+    local file="$1" svc="$2" config="${3:-/etc/pim/pim.toml}"
+    in_svc "$file" "$svc" pim route on --config "$config" >/dev/null 2>&1
 }
 
 # assert_ping <file> <from_svc> <target_ip> [desc]

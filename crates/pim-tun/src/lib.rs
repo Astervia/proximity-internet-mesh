@@ -70,7 +70,11 @@ impl Ifreq {
 
     /// Read interface name back from the kernel (written after TUNSETIFF).
     fn name_str(&self) -> String {
-        let end = self.ifr_name.iter().position(|&b| b == 0).unwrap_or(IFNAMSIZ);
+        let end = self
+            .ifr_name
+            .iter()
+            .position(|&b| b == 0)
+            .unwrap_or(IFNAMSIZ);
         String::from_utf8_lossy(&self.ifr_name[..end]).to_string()
     }
 
@@ -323,7 +327,7 @@ impl TunInterface {
     /// Uses 0.0.0.0/1 and 128.0.0.0/1 to override the default route without replacing it.
     pub fn add_default_route(&self, gateway_ip: Ipv4Addr) -> Result<(), TunError> {
         let gw_str = gateway_ip.to_string();
-        for cidr in ["0.0.0.0/1", "128.0.0.0/1"] {
+        for cidr in split_default_cidrs() {
             let status = std::process::Command::new("ip")
                 .args(default_route_args(cidr, &gw_str, &self.name))
                 .status()?;
@@ -331,7 +335,7 @@ impl TunInterface {
             if !status.success() {
                 return Err(TunError::Ioctl(
                     "ip route add".into(),
-                    io::Error::new(io::ErrorKind::Other, format!("ip route add {} failed", cidr)),
+                    io::Error::other(format!("ip route add {} failed", cidr)),
                 ));
             }
         }
@@ -339,10 +343,33 @@ impl TunInterface {
         debug!(gateway = %gateway_ip, iface = %self.name, "default routes (0.0.0.0/1, 128.0.0.0/1) added");
         Ok(())
     }
+
+    /// Remove split-default routes on this interface.
+    ///
+    /// Missing routes are ignored so shutdown cleanup can be best-effort.
+    pub fn remove_default_route(&self, gateway_ip: Ipv4Addr) -> Result<(), TunError> {
+        let gw_str = gateway_ip.to_string();
+        for cidr in split_default_cidrs() {
+            let _ = std::process::Command::new("ip")
+                .args(remove_default_route_args(cidr, &gw_str, &self.name))
+                .status()?;
+        }
+
+        debug!(gateway = %gateway_ip, iface = %self.name, "default routes (0.0.0.0/1, 128.0.0.0/1) removed");
+        Ok(())
+    }
+}
+
+fn split_default_cidrs() -> [&'static str; 2] {
+    ["0.0.0.0/1", "128.0.0.0/1"]
 }
 
 fn default_route_args<'a>(cidr: &'a str, gateway: &'a str, iface: &'a str) -> [&'a str; 8] {
     ["route", "add", cidr, "via", gateway, "dev", iface, "onlink"]
+}
+
+fn remove_default_route_args<'a>(cidr: &'a str, gateway: &'a str, iface: &'a str) -> [&'a str; 7] {
+    ["route", "del", cidr, "via", gateway, "dev", iface]
 }
 
 /// Convert a CIDR prefix length to an IPv4 netmask address.
@@ -411,7 +438,16 @@ mod tests {
     fn default_route_args_include_onlink_for_lower_half() {
         assert_eq!(
             default_route_args("0.0.0.0/1", "10.77.0.1", "pim0"),
-            ["route", "add", "0.0.0.0/1", "via", "10.77.0.1", "dev", "pim0", "onlink"]
+            [
+                "route",
+                "add",
+                "0.0.0.0/1",
+                "via",
+                "10.77.0.1",
+                "dev",
+                "pim0",
+                "onlink"
+            ]
         );
     }
 
@@ -419,7 +455,32 @@ mod tests {
     fn default_route_args_include_onlink_for_upper_half() {
         assert_eq!(
             default_route_args("128.0.0.0/1", "10.77.0.1", "pim0"),
-            ["route", "add", "128.0.0.0/1", "via", "10.77.0.1", "dev", "pim0", "onlink"]
+            [
+                "route",
+                "add",
+                "128.0.0.0/1",
+                "via",
+                "10.77.0.1",
+                "dev",
+                "pim0",
+                "onlink"
+            ]
+        );
+    }
+
+    #[test]
+    fn remove_default_route_args_match_cli_cleanup() {
+        assert_eq!(
+            remove_default_route_args("0.0.0.0/1", "10.77.0.1", "pim0"),
+            [
+                "route",
+                "del",
+                "0.0.0.0/1",
+                "via",
+                "10.77.0.1",
+                "dev",
+                "pim0"
+            ]
         );
     }
 

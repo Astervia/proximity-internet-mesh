@@ -18,7 +18,9 @@ pub struct ReputationTracker {
 
 impl ReputationTracker {
     pub fn new() -> Self {
-        Self { scores: HashMap::new() }
+        Self {
+            scores: HashMap::new(),
+        }
     }
 
     /// Record a failure for `peer_id`.
@@ -65,7 +67,10 @@ mod tests {
         let mut rt = ReputationTracker::new();
         let p = peer(1);
         for i in 1..BLACKLIST_THRESHOLD {
-            assert!(!rt.record_failure(p), "failure {i} should not newly blacklist");
+            assert!(
+                !rt.record_failure(p),
+                "failure {i} should not newly blacklist"
+            );
         }
         assert!(rt.record_failure(p), "final failure should newly blacklist");
     }

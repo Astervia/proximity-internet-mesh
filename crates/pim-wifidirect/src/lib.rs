@@ -94,7 +94,10 @@ impl WifiDirectDiscovery {
     /// 5. Resolves peer IP via [`WifiDirectGroup::from_iface`].
     /// 6. Sends `SocketAddr` on the peer channel.
     pub async fn run(self, cancel: CancellationToken) {
-        info!("Wi-Fi Direct discovery starting on interface {}", self.config.interface);
+        info!(
+            "Wi-Fi Direct discovery starting on interface {}",
+            self.config.interface
+        );
 
         // Verify wpa_cli is available; log a warning and return early if not.
         if let Err(e) = self.ctrl.p2p_find().await {
@@ -161,9 +164,13 @@ impl WifiDirectDiscovery {
         info!("Wi-Fi Direct: P2P group interface appeared: {group_iface}");
 
         // Determine role by reading own IP — GO gets 192.168.49.1.
-        let group =
-            WifiDirectGroup::from_iface(&self.ctrl, &group_iface, GroupRole::Gc, Duration::from_secs(10))
-                .await;
+        let group = WifiDirectGroup::from_iface(
+            &self.ctrl,
+            &group_iface,
+            GroupRole::Gc,
+            Duration::from_secs(10),
+        )
+        .await;
 
         let group = match group {
             Ok(g) => g,
@@ -174,8 +181,13 @@ impl WifiDirectDiscovery {
 
         // Refine role: if own_ip == GO_INTERFACE_IP we are actually the GO.
         let group = if group.own_ip == GO_INTERFACE_IP {
-            WifiDirectGroup::from_iface(&self.ctrl, &group_iface, GroupRole::Go, Duration::from_secs(10))
-                .await?
+            WifiDirectGroup::from_iface(
+                &self.ctrl,
+                &group_iface,
+                GroupRole::Go,
+                Duration::from_secs(10),
+            )
+            .await?
         } else {
             group
         };

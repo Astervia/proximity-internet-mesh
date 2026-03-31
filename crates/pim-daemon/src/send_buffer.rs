@@ -66,13 +66,18 @@ struct PeerBuffer {
 
 impl PeerBuffer {
     fn new(capacity: usize, timeout: Duration) -> Self {
-        Self { frames: Vec::with_capacity(capacity.min(64)), capacity, timeout }
+        Self {
+            frames: Vec::with_capacity(capacity.min(64)),
+            capacity,
+            timeout,
+        }
     }
 
     fn push(&mut self, priority: Priority, frame: TransportFrame) {
         // Evict already-expired frames before touching capacity.
         let now = Instant::now();
-        self.frames.retain(|f| now.duration_since(f.enqueued_at) < self.timeout);
+        self.frames
+            .retain(|f| now.duration_since(f.enqueued_at) < self.timeout);
 
         // At capacity: attempt to evict the lowest-priority (last) frame.
         if self.frames.len() >= self.capacity {
@@ -86,9 +91,14 @@ impl PeerBuffer {
         }
 
         // Insert so the Vec remains sorted ascending by (priority, enqueued_at).
-        let bf = BufferedFrame { enqueued_at: Instant::now(), priority, frame };
+        let bf = BufferedFrame {
+            enqueued_at: Instant::now(),
+            priority,
+            frame,
+        };
         let pos = self.frames.partition_point(|f| {
-            f.priority < bf.priority || (f.priority == bf.priority && f.enqueued_at <= bf.enqueued_at)
+            f.priority < bf.priority
+                || (f.priority == bf.priority && f.enqueued_at <= bf.enqueued_at)
         });
         self.frames.insert(pos, bf);
     }
@@ -109,7 +119,8 @@ impl PeerBuffer {
         let before = self.frames.len();
         let now = Instant::now();
         let timeout = self.timeout;
-        self.frames.retain(|f| now.duration_since(f.enqueued_at) < timeout);
+        self.frames
+            .retain(|f| now.duration_since(f.enqueued_at) < timeout);
         before - self.frames.len()
     }
 
@@ -156,7 +167,9 @@ impl SendBuffer {
     /// Removes the peer's buffer entry when empty.
     pub async fn drain(&self, peer_id: &NodeId) -> Vec<TransportFrame> {
         let mut peers = self.peers.lock().await;
-        let Some(buf) = peers.get_mut(peer_id) else { return vec![] };
+        let Some(buf) = peers.get_mut(peer_id) else {
+            return vec![];
+        };
         let frames = buf.drain();
         if buf.is_empty() {
             peers.remove(peer_id);
@@ -181,7 +194,12 @@ impl SendBuffer {
     /// Number of buffered frames for a specific peer.
     #[cfg_attr(not(test), allow(dead_code))]
     pub async fn frame_count(&self, peer_id: &NodeId) -> usize {
-        self.peers.lock().await.get(peer_id).map(|b| b.len()).unwrap_or(0)
+        self.peers
+            .lock()
+            .await
+            .get(peer_id)
+            .map(|b| b.len())
+            .unwrap_or(0)
     }
 }
 
@@ -196,12 +214,23 @@ mod tests {
     }
 
     fn mk_frame(ft: FrameType) -> TransportFrame {
-        TransportFrame { frame_type: ft, nonce: [0; 12], payload: vec![], tag: [0; 16] }
+        TransportFrame {
+            frame_type: ft,
+            nonce: [0; 12],
+            payload: vec![],
+            tag: [0; 16],
+        }
     }
 
-    fn ctrl() -> TransportFrame { mk_frame(FrameType::Control) }
-    fn route() -> TransportFrame { mk_frame(FrameType::RouteUpdate) }
-    fn data() -> TransportFrame { mk_frame(FrameType::Data) }
+    fn ctrl() -> TransportFrame {
+        mk_frame(FrameType::Control)
+    }
+    fn route() -> TransportFrame {
+        mk_frame(FrameType::RouteUpdate)
+    }
+    fn data() -> TransportFrame {
+        mk_frame(FrameType::Data)
+    }
 
     // ── Priority ──────────────────────────────────────────────────────────────
 
@@ -240,8 +269,10 @@ mod tests {
     fn peer_buffer_same_priority_is_fifo() {
         let mut buf = PeerBuffer::new(16, Duration::from_secs(60));
         // Use payload to distinguish frames
-        let mut f1 = data(); f1.payload = vec![1];
-        let mut f2 = data(); f2.payload = vec![2];
+        let mut f1 = data();
+        f1.payload = vec![1];
+        let mut f2 = data();
+        f2.payload = vec![2];
         buf.push(Priority::Data, f1);
         buf.push(Priority::Data, f2);
         let frames = buf.drain();
@@ -271,7 +302,9 @@ mod tests {
         assert_eq!(buf.len(), 2);
         let frames = buf.drain();
         assert!(frames.iter().any(|f| f.frame_type == FrameType::Control));
-        assert!(frames.iter().any(|f| f.frame_type == FrameType::RouteUpdate));
+        assert!(frames
+            .iter()
+            .any(|f| f.frame_type == FrameType::RouteUpdate));
         assert!(!frames.iter().any(|f| f.frame_type == FrameType::Data));
     }
 
@@ -316,7 +349,11 @@ mod tests {
         let peer = node(1);
         sb.push(peer, Priority::Data, data()).await;
         sb.drain(&peer).await;
-        assert_eq!(sb.peer_count().await, 0, "peer entry should be removed after drain");
+        assert_eq!(
+            sb.peer_count().await,
+            0,
+            "peer entry should be removed after drain"
+        );
     }
 
     #[tokio::test]

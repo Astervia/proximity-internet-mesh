@@ -3,7 +3,8 @@
 Multi-node tests that require real network interfaces, TUN devices, and live
 internet access cannot run in a standard `cargo test` context. This guide
 covers how those tests are structured, how to run them, how to write new ones,
-and tracks which scenarios are implemented.
+and tracks which scenarios are implemented. It also covers smaller
+hardware-adjacent seam tests that run in Docker without requiring real radios.
 
 ## Prerequisites
 
@@ -37,6 +38,7 @@ docker/
     client-dual-relay.toml       — client → relay1 + relay2
     client2.toml                 — second client
   compose/
+    bluetooth-seam.yml          — single-node Bluetooth fake-sysfs seam test
     phase1-single-hop.yml        — gateway + client
     phase2-relay.yml             — gateway + relay + client
     phase2-routing.yml           — gateway + relay1 + relay2 + client
@@ -45,6 +47,7 @@ docker/
     phase4-flow-control.yml      — gateway + flood-sender
     phase5-multigateway.yml      — gateway1 + gateway2 + relay + client
   tests/
+    test-bluetooth.sh           — Bluetooth seam test runner
     common.sh                    — shared assertion and lifecycle helpers
     test-phase1.sh               — phase 1 test runner
     test-phase2.sh               — phase 2 test runner
@@ -119,6 +122,7 @@ make test-all
 # Run a single phase
 make test-p1
 make test-p2
+make test-bluetooth
 
 # Interactive: bring up a stack and poke around
 make up-p1
@@ -137,6 +141,32 @@ when an assertion fails:
 DUMP_LOGS_ON_FAIL=1 make test-p2
 ```
 
+## Component Seam Tests
+
+Not every Docker test needs a full mesh topology. For hardware-adjacent code,
+prefer a smaller container scenario when the behavior under test is:
+
+- startup wiring
+- environment overrides
+- fixture-driven readiness checks
+- log or status-level handoff into the main daemon path
+
+The Bluetooth test follows this pattern. It starts one daemon container, mounts
+`docker/configs/bluetooth-seam.toml`, sets fake command paths for:
+
+- `PIM_BLUETOOTH_BLUETOOTHCTL_COMMAND`
+- `PIM_BLUETOOTH_BT_NETWORK_COMMAND`
+- `PIM_BLUETOOTH_IP_COMMAND`
+- `PIM_BLUETOOTH_SYSFS_ROOT`
+
+The fake `bluetoothctl` script reports a nearby `PIM-` device, the fake
+`bt-network` script marks the PAN interface as ready, and the fake `ip neigh`
+script returns the resulting peer IP. The test then asserts that the daemon:
+
+- radio-discovers and prepares a new Bluetooth peer
+- auto-discovers the PAN neighbor IP
+- hands the resulting address into the normal connection path
+
 ## Writing a New Docker Test
 
 ### 1. Add or reuse a compose file
@@ -147,6 +177,7 @@ If you need a new topology:
 1. Copy the closest existing file in `docker/compose/`.
 2. Adjust service names, configs, and IP addresses.
 3. Keep the healthcheck pattern — tests use it to know when nodes are ready.
+4. For seam tests, prefer a single service and drive fixtures through env vars or mounted files.
 
 ### 2. Add node configs if needed
 
@@ -206,6 +237,17 @@ trap cleanup EXIT
 Add a target that depends on `docker-build` and calls your script. Add it to
 `test-all` if it should run in CI.
 
+### 6. Prefer Docker seams for hardware-adjacent logic
+
+If the feature normally depends on host hardware, add a narrow seam first:
+
+- fake sysfs tree for interface readiness
+- mounted fixture files for discovery input
+- explicit environment override for paths
+- log assertions proving the daemon handed control to the normal code path
+
+This repository's Bluetooth test is the reference example.
+
 ## Timing Guidelines
 
 Timers are driven by the daemon's background task intervals:
@@ -226,6 +268,7 @@ Timers are driven by the daemon's background task intervals:
 | TCP idle timeout             | 300 s           |
 | UDP idle timeout             | 30 s            |
 | ICMP idle timeout            | 10 s            |
+| Bluetooth seam operstate flip| ~2 s in Docker  |
 
 When writing sleep statements, add ~5 s of headroom on top of the calculated
 interval.
@@ -248,6 +291,15 @@ plan. Status: **[x] implemented** / **[ ] pending**.
 | 1.8  | Client DNS resolution through mesh             | [x] test-phase1.sh |
 | 1.8  | Daemon exits cleanly on SIGTERM                | [x] test-phase1.sh |
 | 1.9  | pim status reports running state               | [x] test-phase1.sh |
+
+### Component Seams
+
+| Test | Scenario                                                        | Status                |
+| ---- | --------------------------------------------------------------- | --------------------- |
+| BT.1 | fake `bluetoothctl` reports a nearby `PIM-` peer                  | [x] test-bluetooth.sh |
+| BT.2 | fake `bt-network` marks the PAN interface ready                   | [x] test-bluetooth.sh |
+| BT.3 | daemon auto-discovers PAN peer IPs from fixture `ip neigh` output | [x] test-bluetooth.sh |
+| BT.4 | Bluetooth handoff reaches the normal connection-initiation path   | [x] test-bluetooth.sh |
 
 ### Phase 2 — Multi-Hop Relay
 

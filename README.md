@@ -29,7 +29,7 @@ The codebase is currently centered on a Linux daemon, a small CLI, and Docker-ba
 For local development and manual runs:
 
 - Linux with `/dev/net/tun`
-- Rust toolchain new enough to build the workspace
+- Rust toolchain new enough to build the workspace when installing from source
 - `iproute2`
 - `iptables`
 - privileges to create a TUN interface and update routes, typically `root` or `CAP_NET_ADMIN`
@@ -85,7 +85,23 @@ The generated TOML is meant to be edited by hand:
 
 ## Install
 
-One straightforward local install flow is:
+Published releases include prebuilt Linux x86_64 binaries, so a local Rust toolchain is not required for normal installation.
+
+Install the latest released binaries:
+
+```bash
+VERSION="v0.1.0"
+ASSET="pim-${VERSION}-x86_64-unknown-linux-gnu"
+curl -LO "https://github.com/Astervia/proximity-internet-mesh/releases/download/${VERSION}/${ASSET}.tar.gz"
+curl -LO "https://github.com/Astervia/proximity-internet-mesh/releases/download/${VERSION}/${ASSET}.sha256"
+sha256sum -c "${ASSET}.sha256"
+tar -xzf "${ASSET}.tar.gz"
+sudo install -Dm755 "${ASSET}/pim" /usr/local/bin/pim
+sudo install -Dm755 "${ASSET}/pim-daemon" /usr/local/bin/pim-daemon
+sudo install -d /etc/pim /var/lib/pim /run
+```
+
+If you need to build from source instead:
 
 ```bash
 cargo build --workspace --release

@@ -49,6 +49,10 @@ assert_ping "$RELAY_FILE" client "10.77.0.1" \
 assert_ping "$RELAY_FILE" client "10.77.0.10" \
     "client pings relay mesh IP"
 
+assert_cmd \
+    "client enables split-default routing explicitly" \
+    enable_mesh_route "$RELAY_FILE" client
+
 assert_dns  "$RELAY_FILE" client "example.com" \
     "client DNS resolution through relay → gateway"
 

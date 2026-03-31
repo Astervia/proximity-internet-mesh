@@ -124,7 +124,7 @@ mod tests {
         let frags = fragment_packet(&data, 42);
 
         // 4000 / 1200 = 3 full + 1 partial → 4 fragments
-        let expected = (4000 + MAX_FRAGMENT_PAYLOAD - 1) / MAX_FRAGMENT_PAYLOAD;
+        let expected = 4000_usize.div_ceil(MAX_FRAGMENT_PAYLOAD);
         assert_eq!(frags.len(), expected);
 
         // offsets must be contiguous

@@ -42,7 +42,10 @@ impl TcpTransport {
     /// Spawns a background listener task that accepts incoming connections.
     /// Incoming connections must send a 16-byte NodeId as the first message
     /// so we can identify the peer.
-    pub async fn new(listen_addr: SocketAddr, node_id: NodeId) -> Result<Arc<Self>, TransportError> {
+    pub async fn new(
+        listen_addr: SocketAddr,
+        node_id: NodeId,
+    ) -> Result<Arc<Self>, TransportError> {
         let (incoming_tx, incoming_rx) = mpsc::channel(256);
 
         // Bind first so we know the actual address (important for port 0)
@@ -85,7 +88,10 @@ impl TcpTransport {
 
     /// Handle an incoming TCP connection.
     /// The peer sends its 16-byte NodeId first, then we exchange frames.
-    async fn handle_incoming(self: &Arc<Self>, mut stream: TcpStream) -> Result<(), TransportError> {
+    async fn handle_incoming(
+        self: &Arc<Self>,
+        mut stream: TcpStream,
+    ) -> Result<(), TransportError> {
         // Read the peer's NodeId (16 bytes)
         let mut id_buf = [0u8; 16];
         stream.read_exact(&mut id_buf).await?;
@@ -122,7 +128,7 @@ impl TcpTransport {
         let incoming_tx = self.incoming_tx.clone();
         let peers = self.peers.clone();
         let read_id = current_id.clone();
-        
+
         tokio::spawn(async move {
             let mut reader = read_half;
             let mut buf = BytesMut::with_capacity(4096);
@@ -181,10 +187,13 @@ impl TcpTransport {
         });
 
         // Store the writer
-        self.peers
-            .write()
-            .await
-            .insert(peer_id, PeerWriter { tx: write_tx, current_id: current_id.clone() });
+        self.peers.write().await.insert(
+            peer_id,
+            PeerWriter {
+                tx: write_tx,
+                current_id: current_id.clone(),
+            },
+        );
     }
 
     /// Rename a peer in the connection map after learning their real NodeId
@@ -205,7 +214,7 @@ impl Transport for TcpTransport {
         let peers = self.peers.read().await;
         let writer = peers
             .get(peer)
-            .ok_or_else(|| TransportError::PeerNotConnected(*peer))?;
+            .ok_or(TransportError::PeerNotConnected(*peer))?;
 
         // Serialize frame
         let mut frame_buf = BytesMut::new();
@@ -227,9 +236,7 @@ impl Transport for TcpTransport {
 
     async fn recv(&self) -> Result<(NodeId, TransportFrame), TransportError> {
         let mut rx = self.incoming_rx.lock().await;
-        rx.recv()
-            .await
-            .ok_or(TransportError::Shutdown)
+        rx.recv().await.ok_or(TransportError::Shutdown)
     }
 
     async fn connect(&self, peer: &PeerAddress) -> Result<(), TransportError> {
@@ -485,7 +492,10 @@ mod tests {
             .unwrap();
 
         transport_b
-            .connect(&PeerAddress { node_id: node_a, addr: addr_a })
+            .connect(&PeerAddress {
+                node_id: node_a,
+                addr: addr_a,
+            })
             .await
             .unwrap();
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
@@ -511,7 +521,10 @@ mod tests {
                 Err(e) => panic!("unexpected error: {e}"),
             }
         }
-        assert!(got_congested, "should hit Congested after saturating write queue");
+        assert!(
+            got_congested,
+            "should hit Congested after saturating write queue"
+        );
     }
 
     #[tokio::test]
@@ -540,10 +553,7 @@ mod tests {
 
         // Send 10 frames rapidly
         for i in 0..10u8 {
-            transport_b
-                .send(&node_a, make_frame(&[i]))
-                .await
-                .unwrap();
+            transport_b.send(&node_a, make_frame(&[i])).await.unwrap();
         }
 
         // Receive all 10

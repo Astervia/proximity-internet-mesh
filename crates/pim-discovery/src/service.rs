@@ -106,11 +106,11 @@ impl DiscoveryService {
     /// Send one broadcast advertisement on `socket`.
     pub async fn broadcast_presence(&self, socket: &UdpSocket) -> Result<()> {
         let payload = self.own_ad.serialize();
-        let dst = SocketAddr::V4(SocketAddrV4::new(
-            Ipv4Addr::BROADCAST,
-            self.discovery_port,
-        ));
-        socket.send_to(&payload, dst).await.context("broadcast send")?;
+        let dst = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::BROADCAST, self.discovery_port));
+        socket
+            .send_to(&payload, dst)
+            .await
+            .context("broadcast send")?;
         debug!(node_id = %self.own_ad.node_id, "sent discovery broadcast");
         Ok(())
     }
@@ -119,11 +119,7 @@ impl DiscoveryService {
     ///
     /// Returns the `PeerRecord` if the advertisement is valid and from a
     /// previously-unknown peer, otherwise `None`.
-    pub async fn handle_advertisement(
-        &self,
-        data: &[u8],
-        from: SocketAddr,
-    ) -> Option<PeerRecord> {
+    pub async fn handle_advertisement(&self, data: &[u8], from: SocketAddr) -> Option<PeerRecord> {
         let ad = DiscoveryAdvertisement::deserialize(data)?;
 
         // Ignore our own broadcasts
@@ -156,7 +152,10 @@ impl DiscoveryService {
     /// Binds a UDP socket on `0.0.0.0:<discovery_port>`, broadcasts presence,
     /// and processes incoming advertisements.
     pub async fn run(self: Arc<Self>, cancel: CancellationToken) -> Result<()> {
-        let bind_addr = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, self.discovery_port));
+        let bind_addr = SocketAddr::V4(SocketAddrV4::new(
+            Ipv4Addr::UNSPECIFIED,
+            self.discovery_port,
+        ));
         let socket = UdpSocket::bind(bind_addr)
             .await
             .context("failed to bind discovery UDP socket")?;
@@ -212,12 +211,7 @@ mod tests {
 
     fn make_service(self_id: u8, port: u16) -> (Arc<DiscoveryService>, mpsc::Receiver<PeerRecord>) {
         let id = NodeId::from_bytes([self_id; 16]);
-        let (svc, rx) = DiscoveryService::new(
-            id,
-            [self_id; 32],
-            NodeCapabilities::client(),
-            port,
-        );
+        let (svc, rx) = DiscoveryService::new(id, [self_id; 32], NodeCapabilities::client(), port);
         (Arc::new(svc.with_port(port)), rx)
     }
 

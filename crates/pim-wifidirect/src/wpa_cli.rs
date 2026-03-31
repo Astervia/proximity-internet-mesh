@@ -68,7 +68,9 @@ impl WpaCliController {
         if out.trim() == "OK" || out.contains("OK") {
             Ok(())
         } else {
-            Err(WifiDirectError::WpaCli(format!("p2p_find unexpected: {out}")))
+            Err(WifiDirectError::WpaCli(format!(
+                "p2p_find unexpected: {out}"
+            )))
         }
     }
 
@@ -78,7 +80,9 @@ impl WpaCliController {
         if out.trim() == "OK" || out.contains("OK") {
             Ok(())
         } else {
-            Err(WifiDirectError::WpaCli(format!("p2p_stop_find unexpected: {out}")))
+            Err(WifiDirectError::WpaCli(format!(
+                "p2p_stop_find unexpected: {out}"
+            )))
         }
     }
 
@@ -102,7 +106,9 @@ impl WpaCliController {
         if out.trim() == "OK" || out.contains("OK") {
             Ok(())
         } else {
-            Err(WifiDirectError::WpaCli(format!("p2p_connect pbc unexpected: {out}")))
+            Err(WifiDirectError::WpaCli(format!(
+                "p2p_connect pbc unexpected: {out}"
+            )))
         }
     }
 
@@ -112,7 +118,9 @@ impl WpaCliController {
         if out.trim() == "OK" || out.contains("OK") {
             Ok(())
         } else {
-            Err(WifiDirectError::WpaCli(format!("p2p_connect pin unexpected: {out}")))
+            Err(WifiDirectError::WpaCli(format!(
+                "p2p_connect pin unexpected: {out}"
+            )))
         }
     }
 
@@ -122,7 +130,9 @@ impl WpaCliController {
         if out.trim() == "OK" || out.contains("OK") {
             Ok(())
         } else {
-            Err(WifiDirectError::WpaCli(format!("p2p_group_add unexpected: {out}")))
+            Err(WifiDirectError::WpaCli(format!(
+                "p2p_group_add unexpected: {out}"
+            )))
         }
     }
 

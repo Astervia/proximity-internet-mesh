@@ -1,0 +1,35 @@
+# Single-node config for Docker-based Bluetooth seam testing.
+# No real Bluetooth hardware is required. The daemon reads interface state from
+# a fake sysfs tree via PIM_BLUETOOTH_SYSFS_ROOT.
+
+[node]
+name = "bluetooth-seam"
+data_dir = "/var/lib/pim"
+
+[interface]
+mesh_ip = "10.77.0.50/24"
+mtu = 1400
+
+[discovery]
+enabled = false
+
+[transport]
+listen_port = 9100
+
+[security]
+key_file = "/var/lib/pim/node.key"
+
+[bluetooth]
+enabled = true
+interface = "bnep0"
+radio_discovery_enabled = true
+device_name_prefix = "PIM-"
+local_alias = "PIM-bluetooth-seam"
+auto_discover_peers = true
+peer_addresses = []
+poll_interval_ms = 250
+scan_interval_ms = 250
+peer_discovery_interval_ms = 250
+bluetoothctl_timeout_s = 2
+discoverable_timeout_s = 60
+startup_timeout_ms = 6000

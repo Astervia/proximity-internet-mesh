@@ -38,7 +38,13 @@ impl fmt::Display for NodeId {
         write!(
             f,
             "{:02x}{:02x}{:02x}{:02x}..{:02x}{:02x}{:02x}{:02x}",
-            self.0[0], self.0[1], self.0[2], self.0[3], self.0[12], self.0[13], self.0[14],
+            self.0[0],
+            self.0[1],
+            self.0[2],
+            self.0[3],
+            self.0[12],
+            self.0[13],
+            self.0[14],
             self.0[15],
         )
     }
@@ -116,7 +122,10 @@ mod tests {
     fn node_id_different_keys_produce_different_ids() {
         let key1 = [1u8; 32];
         let key2 = [2u8; 32];
-        assert_ne!(NodeId::from_public_key(&key1), NodeId::from_public_key(&key2));
+        assert_ne!(
+            NodeId::from_public_key(&key1),
+            NodeId::from_public_key(&key2)
+        );
     }
 
     #[test]

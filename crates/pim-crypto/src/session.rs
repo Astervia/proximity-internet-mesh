@@ -70,8 +70,7 @@ impl SessionCipher {
     /// Rejects replayed frames: the counter embedded in `frame.nonce[8..12]` must
     /// be strictly greater than the last accepted counter.
     pub fn decrypt(&self, frame: &EncryptedFrame) -> Result<Vec<u8>, SessionError> {
-        let counter =
-            u32::from_be_bytes(frame.nonce[8..12].try_into().unwrap()) as u64;
+        let counter = u32::from_be_bytes(frame.nonce[8..12].try_into().unwrap()) as u64;
         let last = self.last_recv_counter.load(Ordering::SeqCst);
         if last != u64::MAX && counter <= last {
             return Err(SessionError::ReplayedNonce);
@@ -196,9 +195,7 @@ mod tests {
         let cipher = SessionCipher::new(&test_key(), test_prefix());
 
         // Set counter near the max
-        cipher
-            .counter
-            .store(MAX_NONCE_COUNTER, Ordering::SeqCst);
+        cipher.counter.store(MAX_NONCE_COUNTER, Ordering::SeqCst);
 
         let result = cipher.encrypt(b"should fail");
         assert!(matches!(result, Err(SessionError::NonceExhausted)));

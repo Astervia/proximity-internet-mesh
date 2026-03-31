@@ -312,11 +312,24 @@ fn cmd_route_on(config_path: PathBuf) -> Result<()> {
 
     for cidr in split_default_cidrs() {
         let status = process::Command::new("ip")
-            .args(["route", "replace", cidr, "via", &route_info.gateway_ip.to_string(), "dev", &route_info.iface, "onlink"])
+            .args([
+                "route",
+                "replace",
+                cidr,
+                "via",
+                &route_info.gateway_ip.to_string(),
+                "dev",
+                &route_info.iface,
+                "onlink",
+            ])
             .status()
             .with_context(|| format!("failed to run ip route replace for {cidr}"))?;
         if !status.success() {
-            bail!("ip route replace {cidr} via {} dev {} onlink failed", route_info.gateway_ip, route_info.iface);
+            bail!(
+                "ip route replace {cidr} via {} dev {} onlink failed",
+                route_info.gateway_ip,
+                route_info.iface
+            );
         }
     }
 
@@ -333,7 +346,15 @@ fn cmd_route_off(config_path: PathBuf) -> Result<()> {
 
     for cidr in split_default_cidrs() {
         let status = process::Command::new("ip")
-            .args(["route", "del", cidr, "via", &route_info.gateway_ip.to_string(), "dev", &route_info.iface])
+            .args([
+                "route",
+                "del",
+                cidr,
+                "via",
+                &route_info.gateway_ip.to_string(),
+                "dev",
+                &route_info.iface,
+            ])
             .status()
             .with_context(|| format!("failed to run ip route del for {cidr}"))?;
         if status.success() {
@@ -446,7 +467,11 @@ pub fn parse_stats_str(s: &str) -> Vec<(String, String)> {
 fn read_stats() -> Option<Vec<(String, String)>> {
     let content = std::fs::read_to_string(STATS_PATH).ok()?;
     let pairs = parse_stats_str(&content);
-    if pairs.is_empty() { None } else { Some(pairs) }
+    if pairs.is_empty() {
+        None
+    } else {
+        Some(pairs)
+    }
 }
 
 fn read_config_info() -> Option<ConfigInfo> {
@@ -545,7 +570,10 @@ fn read_ip_route_table() -> Result<String> {
         .output()
         .context("failed to run ip route show")?;
     if !output.status.success() {
-        bail!("ip route show exited with status {:?}", output.status.code());
+        bail!(
+            "ip route show exited with status {:?}",
+            output.status.code()
+        );
     }
     String::from_utf8(output.stdout).context("invalid UTF-8 from ip route show")
 }
@@ -582,7 +610,10 @@ fn render_config_template(roles: &[NodeRole], override_name: Option<&str>) -> St
     push_blank(&mut out);
 
     push_line(&mut out, "[node]");
-    push_line(&mut out, "# Human-readable node name used in logs and status output.");
+    push_line(
+        &mut out,
+        "# Human-readable node name used in logs and status output.",
+    );
     push_line(&mut out, &format!("name = {:?}", node_name));
     push_line(
         &mut out,
@@ -599,7 +630,10 @@ fn render_config_template(roles: &[NodeRole], override_name: Option<&str>) -> St
         "# Use a static CIDR for predictable labs or \"auto\" to request an address from a gateway.",
     );
     push_line(&mut out, &format!("mesh_ip = {:?}", mesh_ip));
-    push_line(&mut out, "# Keep this aligned with the mesh MTU expected by other peers.");
+    push_line(
+        &mut out,
+        "# Keep this aligned with the mesh MTU expected by other peers.",
+    );
     push_line(&mut out, "mtu = 1400");
     push_blank(&mut out);
 
@@ -692,10 +726,7 @@ fn render_config_template(roles: &[NodeRole], override_name: Option<&str>) -> St
     }
     push_line(&mut out, "# [[peers]]");
     push_line(&mut out, &format!("# address = {:?}", peer_example));
-    push_line(
-        &mut out,
-        "# label = \"replace-with-hostname-or-purpose\"",
-    );
+    push_line(&mut out, "# label = \"replace-with-hostname-or-purpose\"");
 
     if is_relay {
         push_line(
@@ -793,8 +824,14 @@ mod tests {
         assert_eq!(pairs.len(), 4);
         assert_eq!(pairs[0], ("peers".to_string(), "3".to_string()));
         assert_eq!(pairs[1], ("routes".to_string(), "5".to_string()));
-        assert_eq!(pairs[2], ("packets_forwarded".to_string(), "100".to_string()));
-        assert_eq!(pairs[3], ("bytes_forwarded".to_string(), "51200".to_string()));
+        assert_eq!(
+            pairs[2],
+            ("packets_forwarded".to_string(), "100".to_string())
+        );
+        assert_eq!(
+            pairs[3],
+            ("bytes_forwarded".to_string(), "51200".to_string())
+        );
     }
 
     #[test]
@@ -818,7 +855,7 @@ mod tests {
         assert!(rendered.contains("# [gateway]"));
         assert!(rendered.contains("mesh_ip = \"auto\""));
 
-        let config = pim_core::Config::from_str(&rendered).unwrap();
+        let config = pim_core::Config::from_toml_str(&rendered).unwrap();
         assert_eq!(config.node.name, "client-node");
         assert_eq!(config.interface.mesh_ip, "auto");
         assert!(!config.gateway.enabled);
@@ -830,7 +867,7 @@ mod tests {
         assert!(rendered.contains("[gateway]"));
         assert!(rendered.contains("enabled = true"));
 
-        let config = pim_core::Config::from_str(&rendered).unwrap();
+        let config = pim_core::Config::from_toml_str(&rendered).unwrap();
         assert_eq!(config.node.name, "edge-a");
         assert!(config.gateway.enabled);
         assert_eq!(config.interface.mesh_ip, "10.77.0.1/24");
@@ -838,13 +875,11 @@ mod tests {
 
     #[test]
     fn multi_role_template_deduplicates_roles() {
-        let rendered = render_config_template(
-            &[NodeRole::Relay, NodeRole::Gateway, NodeRole::Relay],
-            None,
-        );
+        let rendered =
+            render_config_template(&[NodeRole::Relay, NodeRole::Gateway, NodeRole::Relay], None);
 
         assert!(rendered.contains("# Roles enabled: relay, gateway"));
-        let config = pim_core::Config::from_str(&rendered).unwrap();
+        let config = pim_core::Config::from_toml_str(&rendered).unwrap();
         assert_eq!(config.node.name, "relay-gateway-node");
         assert!(config.gateway.enabled);
     }

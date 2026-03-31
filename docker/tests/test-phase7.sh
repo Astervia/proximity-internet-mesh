@@ -74,6 +74,10 @@ assert_ping "$COMPOSE_FILE" client "10.77.0.1" \
 # ── 7C Internet via discovered relay chain ────────────────────────────────────
 log_section "7C Internet access through discovered relay chain"
 
+assert_cmd \
+    "client enables split-default routing explicitly after auto-IP" \
+    enable_mesh_route "$COMPOSE_FILE" client
+
 assert_curl "$COMPOSE_FILE" client "http://example.com" \
     "client can curl http://example.com via discovered gateway"
 
@@ -107,6 +111,10 @@ assert_iface_addr "$COMPOSE_FILE" client "10.77.0." \
 
 assert_ping "$COMPOSE_FILE" client "10.77.0.1" \
     "late-joiner can reach gateway mesh IP"
+
+assert_cmd \
+    "late-joiner enables split-default routing explicitly" \
+    enable_mesh_route "$COMPOSE_FILE" client
 
 assert_curl "$COMPOSE_FILE" client "http://example.com" \
     "late-joiner has internet access via discovered gateway"

@@ -66,6 +66,10 @@ log_section "1.8 Client through mesh"
 assert_ping "$COMPOSE_FILE" client "10.77.0.1" \
     "client pings gateway mesh IP (10.77.0.1)"
 
+assert_cmd \
+    "client enables split-default routing explicitly" \
+    enable_mesh_route "$COMPOSE_FILE" client
+
 assert_dns  "$COMPOSE_FILE" client "example.com" \
     "client DNS resolution through mesh"
 

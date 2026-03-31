@@ -679,6 +679,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "pim-bluetooth"
+version = "0.1.0"
+dependencies = [
+ "pim-core",
+ "thiserror",
+ "tokio",
+ "tokio-util",
+ "tracing",
+]
+
+[[package]]
 name = "pim-cli"
 version = "0.1.0"
 dependencies = [
@@ -733,6 +744,7 @@ dependencies = [
  "ed25519-dalek",
  "hkdf",
  "libc",
+ "pim-bluetooth",
  "pim-core",
  "pim-crypto",
  "pim-discovery",

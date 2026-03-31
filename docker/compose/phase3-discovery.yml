@@ -13,88 +13,101 @@
 name: pim-phase3-discovery
 
 services:
-  gateway:
-    build:
-      context: ../..
-      dockerfile: Dockerfile
-    image: pim:latest
-    container_name: pim-p3-gw
-    hostname: gateway
-    volumes:
-      - ../configs/gateway.toml:/etc/pim/pim.toml:ro
-    cap_add:
-      - NET_ADMIN
-      - NET_RAW
-    devices:
-      - /dev/net/tun:/dev/net/tun
-    sysctls:
-      net.ipv4.ip_forward: "1"
-    networks:
-      pim-net:
-        ipv4_address: 172.33.0.10
-    healthcheck:
-      test: ["CMD-SHELL", "test -f /run/pim.pid && kill -0 $(cat /run/pim.pid) 2>/dev/null && ip link show pim0 2>/dev/null | grep -q UP"]
-      interval: 2s
-      timeout: 4s
-      retries: 25
-      start_period: 5s
+    gateway:
+        build:
+            context: ../..
+            dockerfile: Dockerfile
+        image: pim:latest
+        container_name: pim-p3-gw
+        hostname: gateway
+        volumes:
+            - ../configs/gateway.toml:/etc/pim/pim.toml:ro
+        cap_add:
+            - NET_ADMIN
+            - NET_RAW
+        devices:
+            - /dev/net/tun:/dev/net/tun
+        sysctls:
+            net.ipv4.ip_forward: "1"
+            net.ipv4.ip_local_port_range: "60000 65535"
+        networks:
+            pim-net:
+                ipv4_address: 172.33.0.10
+        healthcheck:
+            test:
+                [
+                    "CMD-SHELL",
+                    "test -f /run/pim.pid && kill -0 $(cat /run/pim.pid) 2>/dev/null && ip link show pim0 2>/dev/null | grep -q UP",
+                ]
+            interval: 2s
+            timeout: 4s
+            retries: 25
+            start_period: 5s
 
-  relay:
-    build:
-      context: ../..
-      dockerfile: Dockerfile
-    image: pim:latest
-    container_name: pim-p3-relay
-    hostname: relay
-    volumes:
-      - ../configs/relay.toml:/etc/pim/pim.toml:ro
-    cap_add:
-      - NET_ADMIN
-    devices:
-      - /dev/net/tun:/dev/net/tun
-    depends_on:
-      gateway:
-        condition: service_healthy
-    networks:
-      pim-net:
-        ipv4_address: 172.33.0.20
-    healthcheck:
-      test: ["CMD-SHELL", "test -f /run/pim.pid && kill -0 $(cat /run/pim.pid) 2>/dev/null && ip link show pim0 2>/dev/null | grep -q UP"]
-      interval: 2s
-      timeout: 4s
-      retries: 25
-      start_period: 8s
+    relay:
+        build:
+            context: ../..
+            dockerfile: Dockerfile
+        image: pim:latest
+        container_name: pim-p3-relay
+        hostname: relay
+        volumes:
+            - ../configs/relay.toml:/etc/pim/pim.toml:ro
+        cap_add:
+            - NET_ADMIN
+        devices:
+            - /dev/net/tun:/dev/net/tun
+        depends_on:
+            gateway:
+                condition: service_healthy
+        networks:
+            pim-net:
+                ipv4_address: 172.33.0.20
+        healthcheck:
+            test:
+                [
+                    "CMD-SHELL",
+                    "test -f /run/pim.pid && kill -0 $(cat /run/pim.pid) 2>/dev/null && ip link show pim0 2>/dev/null | grep -q UP",
+                ]
+            interval: 2s
+            timeout: 4s
+            retries: 25
+            start_period: 8s
 
-  client:
-    build:
-      context: ../..
-      dockerfile: Dockerfile
-    image: pim:latest
-    container_name: pim-p3-client
-    hostname: client
-    volumes:
-      - ../configs/client-relay.toml:/etc/pim/pim.toml:ro
-    cap_add:
-      - NET_ADMIN
-    devices:
-      - /dev/net/tun:/dev/net/tun
-    depends_on:
-      relay:
-        condition: service_healthy
-    networks:
-      pim-net:
-        ipv4_address: 172.33.0.30
-    healthcheck:
-      test: ["CMD-SHELL", "test -f /run/pim.pid && kill -0 $(cat /run/pim.pid) 2>/dev/null && ip link show pim0 2>/dev/null | grep -q UP"]
-      interval: 2s
-      timeout: 4s
-      retries: 25
-      start_period: 12s
+    client:
+        build:
+            context: ../..
+            dockerfile: Dockerfile
+        image: pim:latest
+        container_name: pim-p3-client
+        hostname: client
+        volumes:
+            - ../configs/client-relay.toml:/etc/pim/pim.toml:ro
+        cap_add:
+            - NET_ADMIN
+        devices:
+            - /dev/net/tun:/dev/net/tun
+        depends_on:
+            relay:
+                condition: service_healthy
+        networks:
+            pim-net:
+                ipv4_address: 172.33.0.30
+        healthcheck:
+            test:
+                [
+                    "CMD-SHELL",
+                    "test -f /run/pim.pid && kill -0 $(cat /run/pim.pid) 2>/dev/null && ip link show pim0 2>/dev/null | grep -q UP",
+                ]
+            interval: 2s
+            timeout: 4s
+            retries: 25
+            start_period: 12s
 
 networks:
-  pim-net:
-    driver: bridge
-    ipam:
-      driver: default
-      config:
-        - subnet: 172.33.0.0/24
+    pim-net:
+        driver: bridge
+        ipam:
+            driver: default
+            config:
+                - subnet: 172.33.0.0/24

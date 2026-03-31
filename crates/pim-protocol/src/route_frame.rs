@@ -60,7 +60,9 @@ impl FrameCodec for RouteUpdateFrame {
 
     fn decode(buf: &mut BytesMut) -> Result<Self, PimError> {
         if buf.len() < HEADER_SIZE {
-            return Err(PimError::Protocol("route update too short for header".into()));
+            return Err(PimError::Protocol(
+                "route update too short for header".into(),
+            ));
         }
 
         let mut origin_bytes = [0u8; 16];

@@ -218,7 +218,9 @@ mod tests {
     #[test]
     fn random_bytes_dont_panic() {
         for seed in 0..100u8 {
-            let random: Vec<u8> = (0..64).map(|i| seed.wrapping_add(i).wrapping_mul(37)).collect();
+            let random: Vec<u8> = (0..64)
+                .map(|i| seed.wrapping_add(i).wrapping_mul(37))
+                .collect();
             let mut buf = BytesMut::from(random.as_slice());
             // Should return Err, never panic
             let _ = TransportFrame::decode(&mut buf);

@@ -96,7 +96,7 @@ impl DiscoveryAdvertisement {
         if buf.len() < PACKET_SIZE {
             return None;
         }
-        if &buf[0..4] != &MAGIC {
+        if buf[0..4] != MAGIC {
             return None;
         }
         if buf[4] != VERSION {

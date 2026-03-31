@@ -26,15 +26,16 @@ Proximity Internet Mesh (PIM) presents itself as a **network adapter** on the ho
 │       └────────────┼────────────┘      │
 │                    │                   │
 │            ┌───────▼────────┐          │
-│            │   Transport    │          │
-│            │  (Wi-Fi Direct)│          │
+│            │   Link Setup   │          │
+│            │ (UDP / Wi-Fi   │          │
+│            │ Direct / BT)   │          │
 │            └───────┬────────┘          │
 └────────────────────┼───────────────────┘
                      │  mesh frames
               ┌──────▼──────┐
               │  Peer Mesh  │
-              │  (Wi-Fi     │
-              │   Direct)   │
+              │ (TCP over   │
+              │ local links)│
               └─────────────┘
 ```
 
@@ -47,7 +48,7 @@ The experience mirrors connecting to a Wi-Fi network:
                              Creates TUN interface `pim0`
                              Starts the PIM daemon
 
-2. Connect to network    →  Discovery finds nearby peers
+2. Connect to network    →  Discovery or link setup finds nearby peers
                              Handshake + key exchange
                              Routing table is built
                              pim0 gets an IP address (mesh-internal)
@@ -103,9 +104,9 @@ A single device can act as multiple roles simultaneously.
 │  └─────┬─────────────────────────────────────────┬───────────┘  │
 │        │                                         │              │
 │  ┌─────┴──────────┐                     ┌────────┴───────────┐  │
-│  │   Transport    │                     │   Crypto Engine    │  │
-│  │   Manager      │                     │                    │  │
-│  │  (Wi-Fi Direct)│                     │  (X25519 + AES)   │  │
+│  │ Link Setup /   │                     │   Crypto Engine    │  │
+│  │ Transport      │                     │                    │  │
+│  │  Handoff       │                     │  (X25519 + AES)   │  │
 │  └────────────────┘                     └────────────────────┘  │
 └──────────────────────────────────────────────────────────────────┘
 ```
@@ -120,7 +121,7 @@ A single device can act as multiple roles simultaneously.
 
 ### Discovery Service
 
-- Detects nearby PIM peers via broadcast/multicast over Wi-Fi Direct
+- Detects or accepts nearby PIM peers via UDP broadcast, Wi-Fi Direct, or Bluetooth PAN
 - Exchanges capability advertisements:
     - Node ID (public key fingerprint)
     - Role (client / relay / gateway)
@@ -147,13 +148,14 @@ Active only on gateway nodes:
 - Tracks active connections (conntrack) to route responses back
 - Rewrites destination on return packets and sends them back into the mesh
 
-### Transport Manager
+### Link Setup And Transport Manager
 
-- Manages Wi-Fi Direct group formation (Group Owner negotiation)
-- Provides framed, reliable delivery over Wi-Fi Direct sockets
+- Accepts peer endpoints from static config, UDP discovery, Wi-Fi Direct, or Bluetooth PAN
+- Manages optional link-establishment mechanisms such as Wi-Fi Direct group formation
+- Reuses the same TCP transport once a peer endpoint is reachable
 - Handles connection lifecycle: setup, keepalive, reconnection
 - Exposes a uniform `send(peer_id, frame)` / `recv() → (peer_id, frame)` interface
-- Future: pluggable backends (TCP loopback for testing, Wi-Fi Aware, etc.)
+- Future: pluggable backends (TCP loopback for testing, Wi-Fi Aware, BLE adapters, etc.)
 
 ### Crypto Engine
 
@@ -190,7 +192,7 @@ Routing Engine looks up path to gateway → next hop: Peer B
 Packet wrapped in MeshFrame { src, dst, ttl, encrypted_payload }
         │
         ▼
-Transport Manager sends frame to Peer B over Wi-Fi Direct
+Transport Manager sends frame to Peer B over the established direct link
         │
         ▼
 Peer B (relay): decrements TTL, looks up next hop → Peer C
@@ -228,8 +230,16 @@ broadcast_interval_ms = 5000
 peer_timeout_ms = 30000
 
 [transport]
-type = "wifi-direct"
+type = "tcp"
 listen_port = 9100
+
+[wifi_direct]
+enabled = false
+
+[bluetooth]
+enabled = false
+interface = "bnep0"
+peer_addresses = []
 
 [routing]
 max_hops = 10
