@@ -85,6 +85,12 @@ in_svc() {
     docker compose -f "$COMPOSE_DIR/$file" exec -T "$svc" "$@"
 }
 
+# enable_mesh_route <file> <service> [config]
+enable_mesh_route() {
+    local file="$1" svc="$2" config="${3:-/etc/pim/pim.toml}"
+    in_svc "$file" "$svc" pim route on --config "$config" >/dev/null 2>&1
+}
+
 # assert_ping <file> <from_svc> <target_ip> [desc]
 assert_ping() {
     local file="$1" from="$2" target="$3"

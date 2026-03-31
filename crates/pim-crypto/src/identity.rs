@@ -118,7 +118,7 @@ mod tests {
     fn load_invalid_length_fails() {
         let dir = TempDir::new().unwrap();
         let path = dir.path().join("bad.key");
-        std::fs::write(&path, &[0u8; 16]).unwrap();
+        std::fs::write(&path, [0u8; 16]).unwrap();
 
         let result = Identity::load(&path);
         assert!(result.is_err());

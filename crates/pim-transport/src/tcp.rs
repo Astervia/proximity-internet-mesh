@@ -214,7 +214,7 @@ impl Transport for TcpTransport {
         let peers = self.peers.read().await;
         let writer = peers
             .get(peer)
-            .ok_or_else(|| TransportError::PeerNotConnected(*peer))?;
+            .ok_or(TransportError::PeerNotConnected(*peer))?;
 
         // Serialize frame
         let mut frame_buf = BytesMut::new();

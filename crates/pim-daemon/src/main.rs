@@ -42,7 +42,7 @@ use std::net::{Ipv4Addr, SocketAddr};
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 use std::path::PathBuf;
 use std::process::Command;
-use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicU64, AtomicU8, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -163,6 +163,7 @@ impl ReconnectManager {
     }
 
     /// Return the configured SocketAddr for `peer_id`, if it is a configured peer.
+    #[cfg(test)]
     async fn configured_addr(&self, peer_id: &NodeId) -> Option<SocketAddr> {
         let addr = self.addr_by_peer.lock().await.get(peer_id).copied()?;
         self.configured_addrs.contains(&addr).then_some(addr)
@@ -227,6 +228,8 @@ struct DaemonState {
     /// Our mesh-local IP (e.g. 10.77.0.1 for gateway). Stored as u32 to allow
     /// atomic update when a dynamic IP is assigned.
     mesh_ip: AtomicU32,
+    /// Mesh prefix length used when deriving the first gateway host in the subnet.
+    mesh_prefix_len: AtomicU8,
     /// Whether this node expects a dynamic mesh IP from a gateway.
     request_dynamic_ip: bool,
     /// Our own X25519 public key (set only when is_gateway = true).
@@ -690,17 +693,19 @@ async fn run_conntrack_gc(state: Arc<DaemonState>) {
 /// Path to the runtime stats file read by `pim status --verbose`.
 pub const STATS_PATH: &str = "/run/pim.stats";
 
+pub struct StatsSnapshot {
+    pub peers: usize,
+    pub routes: usize,
+    pub packets_forwarded: u64,
+    pub bytes_forwarded: u64,
+    pub packets_dropped: u64,
+    pub congestion_drops: u64,
+    pub conntrack_size: usize,
+    pub uptime_secs: u64,
+}
+
 /// Collect current metrics and format them as a newline-delimited key=value string.
-pub fn format_stats(
-    peers: usize,
-    routes: usize,
-    packets_forwarded: u64,
-    bytes_forwarded: u64,
-    packets_dropped: u64,
-    congestion_drops: u64,
-    conntrack_size: usize,
-    uptime_secs: u64,
-) -> String {
+pub fn format_stats(stats: &StatsSnapshot) -> String {
     format!(
         "peers={peers}\n\
          routes={routes}\n\
@@ -709,7 +714,15 @@ pub fn format_stats(
          packets_dropped={packets_dropped}\n\
          congestion_drops={congestion_drops}\n\
          conntrack_size={conntrack_size}\n\
-         uptime_secs={uptime_secs}\n"
+         uptime_secs={uptime_secs}\n",
+        peers = stats.peers,
+        routes = stats.routes,
+        packets_forwarded = stats.packets_forwarded,
+        bytes_forwarded = stats.bytes_forwarded,
+        packets_dropped = stats.packets_dropped,
+        congestion_drops = stats.congestion_drops,
+        conntrack_size = stats.conntrack_size,
+        uptime_secs = stats.uptime_secs,
     )
 }
 
@@ -729,7 +742,7 @@ async fn run_stats_writer(state: Arc<DaemonState>) {
         };
         let uptime_secs = state.start_time.elapsed().unwrap_or_default().as_secs();
 
-        let content = format_stats(
+        let content = format_stats(&StatsSnapshot {
             peers,
             routes,
             packets_forwarded,
@@ -738,7 +751,7 @@ async fn run_stats_writer(state: Arc<DaemonState>) {
             congestion_drops,
             conntrack_size,
             uptime_secs,
-        );
+        });
 
         let tmp = format!("{STATS_PATH}.tmp");
         if let Err(e) = std::fs::write(&tmp, &content) {
@@ -1622,10 +1635,11 @@ async fn run_event_loop(state: Arc<DaemonState>) -> Result<()> {
                                         info!(%ip, prefix = subnet_mask, %gw, "received IP assignment");
                                         if let Err(e) = state.tun.set_ip(ip, subnet_mask) {
                                             warn!("TUN set_ip failed: {e}");
-                                        } else if let Err(e) = state.tun.add_default_route(gw) {
-                                            warn!("add_default_route failed: {e}");
                                         }
                                         state.mesh_ip.store(u32::from(ip), Ordering::Relaxed);
+                                        state
+                                            .mesh_prefix_len
+                                            .store(subnet_mask, Ordering::Relaxed);
                                         state.routing.lock().await.set_self_mesh_ip(ip);
                                     } else {
                                         debug!(%from_peer, "ignoring unsolicited IpAssign for statically configured mesh IP");
@@ -1682,6 +1696,15 @@ async fn run_event_loop(state: Arc<DaemonState>) -> Result<()> {
         .await;
     }
     tokio::time::sleep(Duration::from_millis(50)).await; // let Goodbye flush
+
+    if !state.is_gateway {
+        let mesh_ip = Ipv4Addr::from(state.mesh_ip.load(Ordering::Relaxed));
+        let prefix_len = state.mesh_prefix_len.load(Ordering::Relaxed);
+        let gateway_ip = first_host_in_subnet(mesh_ip, prefix_len);
+        if let Err(e) = state.tun.remove_default_route(gateway_ip) {
+            warn!(%gateway_ip, "default route cleanup failed: {e}");
+        }
+    }
 
     // Clean up
     for peer in peers {
@@ -1825,6 +1848,36 @@ fn first_host_in_subnet(network: Ipv4Addr, prefix_len: u8) -> Ipv4Addr {
         !((1u32 << (32 - prefix_len)) - 1)
     };
     Ipv4Addr::from((n & mask) | 1)
+}
+
+async fn install_signal_handler(cancel: CancellationToken) {
+    #[cfg(unix)]
+    {
+        let mut sigterm =
+            match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
+                Ok(sigterm) => sigterm,
+                Err(e) => {
+                    warn!("failed to install SIGTERM handler: {e}");
+                    tokio::signal::ctrl_c().await.ok();
+                    info!("shutdown signal received");
+                    cancel.cancel();
+                    return;
+                }
+            };
+
+        tokio::select! {
+            _ = tokio::signal::ctrl_c() => {}
+            _ = sigterm.recv() => {}
+        }
+    }
+
+    #[cfg(not(unix))]
+    {
+        tokio::signal::ctrl_c().await.ok();
+    }
+
+    info!("shutdown signal received");
+    cancel.cancel();
 }
 
 fn expand_tilde(path: &std::path::Path) -> PathBuf {
@@ -2162,9 +2215,7 @@ async fn main() -> Result<()> {
     {
         let cancel = cancel.clone();
         tokio::spawn(async move {
-            tokio::signal::ctrl_c().await.ok();
-            info!("shutdown signal received");
-            cancel.cancel();
+            install_signal_handler(cancel).await;
         });
     }
 
@@ -2194,6 +2245,7 @@ async fn main() -> Result<()> {
         identity: identity.clone(),
         is_gateway,
         mesh_ip: AtomicU32::new(u32::from(mesh_ip)),
+        mesh_prefix_len: AtomicU8::new(prefix_len),
         request_dynamic_ip,
         own_x25519_pub,
         sessions: Arc::new(RwLock::new(HashMap::new())),
@@ -2225,14 +2277,6 @@ async fn main() -> Result<()> {
     // ── Initiate connections to configured peers ───────────────────────────
     for peer_addr in configured_addrs {
         initiate_peer_connection(state.clone(), peer_addr).await;
-    }
-
-    // Add default route via gateway mesh IP for client nodes
-    if !is_gateway {
-        let gw_mesh_ip = first_host_in_subnet(mesh_ip, prefix_len);
-        if let Err(e) = state.tun.add_default_route(gw_mesh_ip) {
-            warn!("failed to add default route: {e}");
-        }
     }
 
     // ── Discovery service ──────────────────────────────────────────────────
@@ -2608,7 +2652,16 @@ mod tests {
 
     #[test]
     fn format_stats_contains_all_keys() {
-        let s = format_stats(3, 5, 100, 51200, 7, 2, 4, 3600);
+        let s = format_stats(&StatsSnapshot {
+            peers: 3,
+            routes: 5,
+            packets_forwarded: 100,
+            bytes_forwarded: 51200,
+            packets_dropped: 7,
+            congestion_drops: 2,
+            conntrack_size: 4,
+            uptime_secs: 3600,
+        });
         assert!(s.contains("peers=3"));
         assert!(s.contains("routes=5"));
         assert!(s.contains("packets_forwarded=100"));
@@ -2761,7 +2814,8 @@ mod tests {
     /// When `discovery.enabled = false`, the discovery service must not be started.
     #[test]
     fn discovery_disabled_in_config_skips_spawning() {
-        let config = Config::from_str("[node]\nname=\"t\"\n[discovery]\nenabled=false\n").unwrap();
+        let config =
+            Config::from_toml_str("[node]\nname=\"t\"\n[discovery]\nenabled=false\n").unwrap();
         assert!(
             !config.discovery.enabled,
             "discovery service must not start when enabled=false"
@@ -2771,15 +2825,15 @@ mod tests {
     // ── Phase 7: node_capabilities() tests ───────────────────────────────────
 
     fn cfg_gateway() -> Config {
-        Config::from_str("[node]\nname=\"t\"\n[gateway]\nenabled=true\n").unwrap()
+        Config::from_toml_str("[node]\nname=\"t\"\n[gateway]\nenabled=true\n").unwrap()
     }
 
     fn cfg_relay() -> Config {
-        Config::from_str("[node]\nname=\"t\"\n[relay]\nenabled=true\n").unwrap()
+        Config::from_toml_str("[node]\nname=\"t\"\n[relay]\nenabled=true\n").unwrap()
     }
 
     fn cfg_client() -> Config {
-        Config::from_str("[node]\nname=\"t\"\n").unwrap()
+        Config::from_toml_str("[node]\nname=\"t\"\n").unwrap()
     }
 
     #[test]
@@ -2840,7 +2894,7 @@ mod tests {
     /// Wi-Fi Direct service must be skipped — verified by checking config.
     #[test]
     fn wifidirect_disabled_config_skips_spawning() {
-        let config = Config::from_str("[node]\nname=\"t\"\n").unwrap();
+        let config = Config::from_toml_str("[node]\nname=\"t\"\n").unwrap();
         assert!(
             !config.wifi_direct.enabled,
             "Wi-Fi Direct service must not start when enabled=false"
@@ -2851,7 +2905,7 @@ mod tests {
     #[test]
     fn wifidirect_enabled_config_exposes_interface_and_port() {
         let toml = "[node]\nname=\"t\"\n[wifi_direct]\nenabled=true\ninterface=\"wlan1\"\n";
-        let config = Config::from_str(toml).unwrap();
+        let config = Config::from_toml_str(toml).unwrap();
         assert!(config.wifi_direct.enabled);
         assert_eq!(config.wifi_direct.interface, "wlan1");
         // listen_port comes from transport section, not wifi_direct.
@@ -2899,7 +2953,7 @@ mod tests {
     fn wifidirect_discovery_construction_from_config() {
         use pim_wifidirect::WifiDirectDiscovery;
         let toml = "[node]\nname=\"t\"\n[wifi_direct]\nenabled=true\n";
-        let config = Config::from_str(toml).unwrap();
+        let config = Config::from_toml_str(toml).unwrap();
         let (_svc, _rx) =
             WifiDirectDiscovery::new(config.wifi_direct, config.transport.listen_port);
         // Construction must not panic.
@@ -2907,7 +2961,7 @@ mod tests {
 
     #[test]
     fn bluetooth_disabled_config_skips_spawning() {
-        let config = Config::from_str("[node]\nname=\"t\"\n").unwrap();
+        let config = Config::from_toml_str("[node]\nname=\"t\"\n").unwrap();
         assert!(
             !config.bluetooth.enabled,
             "Bluetooth PAN watcher must not start when enabled=false"
@@ -2917,7 +2971,7 @@ mod tests {
     #[test]
     fn bluetooth_enabled_config_exposes_interface_and_peers() {
         let toml = "[node]\nname=\"t\"\n[bluetooth]\nenabled=true\ninterface=\"bnep1\"\npeer_addresses=[\"192.168.44.2\"]\n";
-        let config = Config::from_str(toml).unwrap();
+        let config = Config::from_toml_str(toml).unwrap();
         assert!(config.bluetooth.enabled);
         assert_eq!(config.bluetooth.interface, "bnep1");
         assert_eq!(config.bluetooth.peer_addresses, vec!["192.168.44.2"]);
@@ -2942,7 +2996,7 @@ mod tests {
         use pim_bluetooth::BluetoothDiscovery;
         let toml =
             "[node]\nname=\"t\"\n[bluetooth]\nenabled=true\npeer_addresses=[\"192.168.44.2\"]\n";
-        let config = Config::from_str(toml).unwrap();
+        let config = Config::from_toml_str(toml).unwrap();
         let (_svc, _rx) =
             BluetoothDiscovery::new(config.bluetooth, config.transport.listen_port).unwrap();
     }

@@ -938,7 +938,7 @@ mod tests {
         rt.apply_update(&upd, b);
 
         // There's no route to self in the table
-        assert!(rt.routes.get(&a).is_none());
+        assert!(!rt.routes.contains_key(&a));
         assert!(rt.lookup(a).is_none());
     }
 

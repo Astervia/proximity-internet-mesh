@@ -41,6 +41,10 @@ assert_ping "$COMPOSE_FILE" client "10.77.0.1" \
 assert_ping "$COMPOSE_FILE" client "10.77.0.2" \
     "client reaches gateway2 via relay"
 
+assert_cmd \
+    "client enables split-default routing explicitly" \
+    enable_mesh_route "$COMPOSE_FILE" client
+
 assert_curl "$COMPOSE_FILE" client "http://example.com" \
     "client internet access through preferred gateway"
 

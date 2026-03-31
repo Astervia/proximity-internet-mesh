@@ -413,10 +413,12 @@ mod tests {
 
     #[test]
     fn discovery_new_returns_receiver_and_targets() {
-        let mut config = BluetoothConfig::default();
-        config.radio_discovery_enabled = false;
-        config.auto_discover_peers = false;
-        config.peer_addresses = vec!["192.168.44.2".into(), "fd00::2".into()];
+        let config = BluetoothConfig {
+            radio_discovery_enabled: false,
+            auto_discover_peers: false,
+            peer_addresses: vec!["192.168.44.2".into(), "fd00::2".into()],
+            ..Default::default()
+        };
 
         let (svc, _rx) = BluetoothDiscovery::new(config, 9100).unwrap();
         assert_eq!(svc.target_socket_addrs().len(), 2);
@@ -432,10 +434,12 @@ mod tests {
 
     #[test]
     fn invalid_peer_address_is_rejected() {
-        let mut config = BluetoothConfig::default();
-        config.radio_discovery_enabled = false;
-        config.auto_discover_peers = false;
-        config.peer_addresses = vec!["not-an-ip".into()];
+        let config = BluetoothConfig {
+            radio_discovery_enabled: false,
+            auto_discover_peers: false,
+            peer_addresses: vec!["not-an-ip".into()],
+            ..Default::default()
+        };
 
         let err = BluetoothDiscovery::new(config, 9100).unwrap_err();
         assert!(matches!(err, BluetoothError::InvalidPeerAddress(addr) if addr == "not-an-ip"));
@@ -515,15 +519,17 @@ Device AA:BB:CC:DD:EE:03 PIM-client
         make_executable(&fake_bt_network);
         make_executable(&fake_ip);
 
-        let mut config = BluetoothConfig::default();
-        config.interface = "bnep0".into();
-        config.local_alias = "PIM-self".into();
-        config.peer_addresses = vec![];
-        config.poll_interval_ms = 10;
-        config.scan_interval_ms = 10;
-        config.peer_discovery_interval_ms = 10;
-        config.startup_timeout_ms = 500;
-        config.bluetoothctl_timeout_s = 1;
+        let config = BluetoothConfig {
+            interface: "bnep0".into(),
+            local_alias: "PIM-self".into(),
+            peer_addresses: vec![],
+            poll_interval_ms: 10,
+            scan_interval_ms: 10,
+            peer_discovery_interval_ms: 10,
+            startup_timeout_ms: 500,
+            bluetoothctl_timeout_s: 1,
+            ..Default::default()
+        };
 
         let (svc, mut rx) = BluetoothDiscovery::new_with_system_paths(
             config,

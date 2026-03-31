@@ -2,6 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
+use std::str::FromStr;
 
 use crate::PimError;
 
@@ -90,7 +91,7 @@ pub struct DiscoveryConfig {
     pub connect_gateways: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 /// Settings that control whether this node acts as a relay, forwarding traffic for other peers.
 pub struct RelayConfig {
     /// Enables relay forwarding when `true`. Gateway nodes are implicitly relays regardless of
@@ -393,12 +394,6 @@ impl Default for DiscoveryConfig {
     }
 }
 
-impl Default for RelayConfig {
-    fn default() -> Self {
-        Self { enabled: false }
-    }
-}
-
 impl Default for TransportConfig {
     fn default() -> Self {
         Self {
@@ -484,17 +479,25 @@ impl Config {
     /// Load configuration from a TOML file.
     pub fn load(path: &Path) -> Result<Self, PimError> {
         let content = std::fs::read_to_string(path).map_err(PimError::Io)?;
-        Self::from_str(&content)
+        content.parse()
     }
 
     /// Parse configuration from a TOML string.
-    pub fn from_str(s: &str) -> Result<Self, PimError> {
-        toml::from_str(s).map_err(|e| PimError::Config(e.to_string()))
+    pub fn from_toml_str(s: &str) -> Result<Self, PimError> {
+        s.parse()
     }
 
     /// Serialize configuration to a TOML string.
     pub fn to_toml_string(&self) -> Result<String, PimError> {
         toml::to_string_pretty(self).map_err(|e| PimError::Config(e.to_string()))
+    }
+}
+
+impl FromStr for Config {
+    type Err = PimError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        toml::from_str(s).map_err(|e| PimError::Config(e.to_string()))
     }
 }
 
@@ -572,7 +575,7 @@ startup_timeout_ms = 15000
 
     #[test]
     fn parse_minimal_config() {
-        let config = Config::from_str(MINIMAL_CONFIG).unwrap();
+        let config = Config::from_toml_str(MINIMAL_CONFIG).unwrap();
         assert_eq!(config.node.name, "test-node");
         // Defaults should be applied
         assert_eq!(config.interface.name, "pim0");
@@ -584,7 +587,7 @@ startup_timeout_ms = 15000
 
     #[test]
     fn parse_full_config() {
-        let config = Config::from_str(FULL_CONFIG).unwrap();
+        let config = Config::from_toml_str(FULL_CONFIG).unwrap();
         assert_eq!(config.node.name, "my-device");
         assert_eq!(config.node.data_dir, PathBuf::from("/tmp/pim"));
         assert!(config.gateway.enabled);
@@ -594,22 +597,22 @@ startup_timeout_ms = 15000
 
     #[test]
     fn config_round_trip() {
-        let config = Config::from_str(FULL_CONFIG).unwrap();
+        let config = Config::from_toml_str(FULL_CONFIG).unwrap();
         let serialized = config.to_toml_string().unwrap();
-        let reparsed = Config::from_str(&serialized).unwrap();
+        let reparsed = Config::from_toml_str(&serialized).unwrap();
         assert_eq!(config, reparsed);
     }
 
     #[test]
     fn invalid_toml_returns_error() {
-        let result = Config::from_str("not valid toml {{{}}}");
+        let result = Config::from_toml_str("not valid toml {{{}}}");
         assert!(result.is_err());
         assert!(format!("{}", result.unwrap_err()).contains("config error"));
     }
 
     #[test]
     fn discovery_defaults_when_section_absent() {
-        let config = Config::from_str(MINIMAL_CONFIG).unwrap();
+        let config = Config::from_toml_str(MINIMAL_CONFIG).unwrap();
         assert!(config.discovery.enabled);
         assert_eq!(config.discovery.port, 9101);
         assert_eq!(config.discovery.broadcast_interval_ms, 5000);
@@ -626,10 +629,10 @@ name = "t"
 [discovery]
 enabled = false
 "#;
-        let config = Config::from_str(toml).unwrap();
+        let config = Config::from_toml_str(toml).unwrap();
         assert!(!config.discovery.enabled);
         let serialized = config.to_toml_string().unwrap();
-        let reparsed = Config::from_str(&serialized).unwrap();
+        let reparsed = Config::from_toml_str(&serialized).unwrap();
         assert!(!reparsed.discovery.enabled);
     }
 
@@ -641,16 +644,16 @@ name = "t"
 [discovery]
 port = 19101
 "#;
-        let config = Config::from_str(toml).unwrap();
+        let config = Config::from_toml_str(toml).unwrap();
         assert_eq!(config.discovery.port, 19101);
         let serialized = config.to_toml_string().unwrap();
-        let reparsed = Config::from_str(&serialized).unwrap();
+        let reparsed = Config::from_toml_str(&serialized).unwrap();
         assert_eq!(reparsed.discovery.port, 19101);
     }
 
     #[test]
     fn relay_config_defaults_to_disabled() {
-        let config = Config::from_str(MINIMAL_CONFIG).unwrap();
+        let config = Config::from_toml_str(MINIMAL_CONFIG).unwrap();
         assert!(!config.relay.enabled);
     }
 
@@ -662,32 +665,32 @@ name = "t"
 [relay]
 enabled = true
 "#;
-        let config = Config::from_str(toml).unwrap();
+        let config = Config::from_toml_str(toml).unwrap();
         assert!(config.relay.enabled);
     }
 
     #[test]
     fn peers_section_is_optional() {
-        let config = Config::from_str(MINIMAL_CONFIG).unwrap();
+        let config = Config::from_toml_str(MINIMAL_CONFIG).unwrap();
         assert!(config.peers.is_empty());
     }
 
     #[test]
     fn config_round_trip_with_all_discovery_fields() {
-        let config = Config::from_str(FULL_CONFIG).unwrap();
+        let config = Config::from_toml_str(FULL_CONFIG).unwrap();
         assert!(config.discovery.enabled);
         assert_eq!(config.discovery.port, 9101);
         assert!(config.discovery.connect_relays);
         assert!(config.discovery.connect_gateways);
         assert!(!config.relay.enabled);
         let serialized = config.to_toml_string().unwrap();
-        let reparsed = Config::from_str(&serialized).unwrap();
+        let reparsed = Config::from_toml_str(&serialized).unwrap();
         assert_eq!(config, reparsed);
     }
 
     #[test]
     fn wifi_direct_defaults_to_disabled() {
-        let config = Config::from_str(MINIMAL_CONFIG).unwrap();
+        let config = Config::from_toml_str(MINIMAL_CONFIG).unwrap();
         assert!(!config.wifi_direct.enabled);
         assert_eq!(config.wifi_direct.interface, "wlan0");
         assert_eq!(config.wifi_direct.go_intent, 7);
@@ -704,10 +707,10 @@ name = "t"
 [wifi_direct]
 enabled = true
 "#;
-        let config = Config::from_str(toml).unwrap();
+        let config = Config::from_toml_str(toml).unwrap();
         assert!(config.wifi_direct.enabled);
         let serialized = config.to_toml_string().unwrap();
-        let reparsed = Config::from_str(&serialized).unwrap();
+        let reparsed = Config::from_toml_str(&serialized).unwrap();
         assert!(reparsed.wifi_direct.enabled);
     }
 
@@ -722,7 +725,7 @@ interface = "wlan1"
 go_intent = 12
 connect_method = "pin:12345670"
 "#;
-        let config = Config::from_str(toml).unwrap();
+        let config = Config::from_toml_str(toml).unwrap();
         assert_eq!(config.wifi_direct.interface, "wlan1");
         assert_eq!(config.wifi_direct.go_intent, 12);
         assert_eq!(config.wifi_direct.connect_method, "pin:12345670");
@@ -730,25 +733,25 @@ connect_method = "pin:12345670"
 
     #[test]
     fn wifi_direct_go_intent_default_is_neutral() {
-        let config = Config::from_str(MINIMAL_CONFIG).unwrap();
+        let config = Config::from_toml_str(MINIMAL_CONFIG).unwrap();
         assert_eq!(config.wifi_direct.go_intent, 7);
     }
 
     #[test]
     fn config_round_trip_with_wifi_direct_section() {
-        let config = Config::from_str(FULL_CONFIG).unwrap();
+        let config = Config::from_toml_str(FULL_CONFIG).unwrap();
         assert!(!config.wifi_direct.enabled);
         assert_eq!(config.wifi_direct.interface, "wlan0");
         assert_eq!(config.wifi_direct.go_intent, 7);
         assert_eq!(config.wifi_direct.connect_method, "pbc");
         let serialized = config.to_toml_string().unwrap();
-        let reparsed = Config::from_str(&serialized).unwrap();
+        let reparsed = Config::from_toml_str(&serialized).unwrap();
         assert_eq!(config, reparsed);
     }
 
     #[test]
     fn bluetooth_defaults_to_disabled() {
-        let config = Config::from_str(MINIMAL_CONFIG).unwrap();
+        let config = Config::from_toml_str(MINIMAL_CONFIG).unwrap();
         assert!(!config.bluetooth.enabled);
         assert_eq!(config.bluetooth.interface, "bnep0");
         assert!(config.bluetooth.radio_discovery_enabled);
@@ -777,7 +780,7 @@ local_alias = "PIM-t"
 auto_discover_peers = false
 peer_addresses = ["192.168.44.2"]
 "#;
-        let config = Config::from_str(toml).unwrap();
+        let config = Config::from_toml_str(toml).unwrap();
         assert!(config.bluetooth.enabled);
         assert!(config.bluetooth.radio_discovery_enabled);
         assert_eq!(config.bluetooth.device_name_prefix, "PIM-");
@@ -785,7 +788,7 @@ peer_addresses = ["192.168.44.2"]
         assert!(!config.bluetooth.auto_discover_peers);
         assert_eq!(config.bluetooth.peer_addresses, vec!["192.168.44.2"]);
         let serialized = config.to_toml_string().unwrap();
-        let reparsed = Config::from_str(&serialized).unwrap();
+        let reparsed = Config::from_toml_str(&serialized).unwrap();
         assert!(reparsed.bluetooth.enabled);
         assert!(!reparsed.bluetooth.auto_discover_peers);
         assert_eq!(reparsed.bluetooth.peer_addresses, vec!["192.168.44.2"]);
@@ -811,7 +814,7 @@ bluetoothctl_timeout_s = 20
 discoverable_timeout_s = 60
 startup_timeout_ms = 10000
 "#;
-        let config = Config::from_str(toml).unwrap();
+        let config = Config::from_toml_str(toml).unwrap();
         assert_eq!(config.bluetooth.interface, "bnep1");
         assert!(config.bluetooth.radio_discovery_enabled);
         assert_eq!(config.bluetooth.device_name_prefix, "MESH-");

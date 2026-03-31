@@ -199,7 +199,7 @@ impl GatewayEngine {
     ///
     /// `packet` is modified in-place. Returns the external port assigned to
     /// this flow (useful for tests).
-    pub async fn translate_outbound(&self, packet: &mut Vec<u8>) -> Result<u16, GatewayError> {
+    pub async fn translate_outbound(&self, packet: &mut [u8]) -> Result<u16, GatewayError> {
         let (proto, src_ip, src_port) = parse_flow(packet)?;
 
         let key = ConntrackKey {
@@ -246,7 +246,7 @@ impl GatewayEngine {
     /// original source, recalculate checksums.
     ///
     /// Returns the original client's IP address.
-    pub async fn translate_inbound(&self, packet: &mut Vec<u8>) -> Result<Ipv4Addr, GatewayError> {
+    pub async fn translate_inbound(&self, packet: &mut [u8]) -> Result<Ipv4Addr, GatewayError> {
         let proto = ip_protocol(packet)?;
         let dst_port = transport_dst_port(packet, proto)?;
 
@@ -673,6 +673,7 @@ fn check_cmd_quiet(program: &str, args: &[&str]) -> Result<bool, GatewayError> {
 // ── IP packet builder (test helper) ──────────────────────────────────────────
 
 #[cfg(test)]
+/// Test packet builders and helpers shared across gateway unit tests.
 pub mod test_util {
     use super::*;
 
@@ -938,7 +939,7 @@ mod tests {
         // After release, p is available; the pool counter advanced past PORT_MIN
         // so the next alloc gives PORT_MIN+1. After wraparound it gives PORT_MIN.
         // Just verify we got some valid port.
-        assert!(p2 >= PORT_MIN && p2 <= PORT_MAX);
+        assert!((PORT_MIN..=PORT_MAX).contains(&p2));
     }
 
     #[tokio::test]

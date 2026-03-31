@@ -855,7 +855,7 @@ mod tests {
         assert!(rendered.contains("# [gateway]"));
         assert!(rendered.contains("mesh_ip = \"auto\""));
 
-        let config = pim_core::Config::from_str(&rendered).unwrap();
+        let config = pim_core::Config::from_toml_str(&rendered).unwrap();
         assert_eq!(config.node.name, "client-node");
         assert_eq!(config.interface.mesh_ip, "auto");
         assert!(!config.gateway.enabled);
@@ -867,7 +867,7 @@ mod tests {
         assert!(rendered.contains("[gateway]"));
         assert!(rendered.contains("enabled = true"));
 
-        let config = pim_core::Config::from_str(&rendered).unwrap();
+        let config = pim_core::Config::from_toml_str(&rendered).unwrap();
         assert_eq!(config.node.name, "edge-a");
         assert!(config.gateway.enabled);
         assert_eq!(config.interface.mesh_ip, "10.77.0.1/24");
@@ -879,7 +879,7 @@ mod tests {
             render_config_template(&[NodeRole::Relay, NodeRole::Gateway, NodeRole::Relay], None);
 
         assert!(rendered.contains("# Roles enabled: relay, gateway"));
-        let config = pim_core::Config::from_str(&rendered).unwrap();
+        let config = pim_core::Config::from_toml_str(&rendered).unwrap();
         assert_eq!(config.node.name, "relay-gateway-node");
         assert!(config.gateway.enabled);
     }
