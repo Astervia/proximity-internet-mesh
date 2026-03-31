@@ -756,6 +756,7 @@ dependencies = [
  "pim-wifidirect",
  "rand",
  "serde",
+ "serde_json",
  "sha2",
  "tokio",
  "tokio-util",
