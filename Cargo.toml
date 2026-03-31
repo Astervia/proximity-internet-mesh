@@ -50,7 +50,7 @@ hmac = "0.12"
 rand = "0.8"
 
 # Networking
-nix = { version = "0.29", features = ["net", "ioctl"] }
+nix = { version = "0.31", features = ["net", "ioctl"] }
 libc = "0.2"
 
 # Async utilities
