@@ -7,7 +7,7 @@ This project is currently easiest to run on Linux because the daemon creates a T
 Host requirements:
 
 - Linux with `/dev/net/tun`
-- Rust toolchain
+- Rust toolchain when installing from source
 - `iproute2`
 - `iptables`
 - privileges to create `pim0` and update routing, usually `root` or `CAP_NET_ADMIN`
@@ -16,6 +16,22 @@ Optional but strongly recommended:
 
 - Docker Engine
 - Docker Compose v2
+
+## Install From GitHub Releases
+
+Published releases include a prebuilt Linux x86_64 tarball containing `pim` and `pim-daemon`.
+
+```bash
+VERSION="v0.1.0"
+ASSET="pim-${VERSION}-x86_64-unknown-linux-gnu"
+curl -LO "https://github.com/Astervia/proximity-internet-mesh/releases/download/${VERSION}/${ASSET}.tar.gz"
+curl -LO "https://github.com/Astervia/proximity-internet-mesh/releases/download/${VERSION}/${ASSET}.sha256"
+sha256sum -c "${ASSET}.sha256"
+tar -xzf "${ASSET}.tar.gz"
+sudo install -Dm755 "${ASSET}/pim" /usr/local/bin/pim
+sudo install -Dm755 "${ASSET}/pim-daemon" /usr/local/bin/pim-daemon
+sudo install -d /etc/pim /var/lib/pim /run
+```
 
 ## Build From Source
 
