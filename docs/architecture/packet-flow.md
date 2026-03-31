@@ -204,6 +204,7 @@ listen_port = 9100
 enabled = false
 
 [[peers]]
+mechanism = "tcp"
 address = "10.0.0.1:9100"
 ```
 

@@ -55,6 +55,7 @@ nat_interface = "eth0"
 key_file = "~/.pim/gateway-a.key"
 
 [[peers]]
+mechanism = "tcp"
 address = "10.0.0.2:9100"
 ```
 
@@ -87,9 +88,11 @@ enabled = false
 key_file = "~/.pim/relay-b.key"
 
 [[peers]]
+mechanism = "tcp"
 address = "10.0.0.1:9100"
 
 [[peers]]
+mechanism = "tcp"
 address = "10.0.0.3:9100"
 ```
 
@@ -120,6 +123,7 @@ enabled = false
 key_file = "~/.pim/client-c.key"
 
 [[peers]]
+mechanism = "tcp"
 address = "10.0.0.2:9100"
 ```
 

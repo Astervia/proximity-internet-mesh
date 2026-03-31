@@ -36,9 +36,6 @@ pub const DEFAULT_BT_NETWORK_COMMAND: &str = "bt-network";
 /// Errors produced by the Bluetooth subsystem.
 #[derive(Debug, thiserror::Error)]
 pub enum BluetoothError {
-    /// A configured peer address could not be parsed as an IP address.
-    #[error("invalid bluetooth peer address: {0}")]
-    InvalidPeerAddress(String),
     /// An I/O error occurred while reading interface state from sysfs or running commands.
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),
@@ -79,10 +76,12 @@ impl BluetoothDiscovery {
     pub fn new(
         config: BluetoothConfig,
         listen_port: u16,
+        static_targets: Vec<SocketAddr>,
     ) -> Result<(Self, mpsc::Receiver<SocketAddr>), BluetoothError> {
         Self::new_with_system_paths(
             config,
             listen_port,
+            static_targets,
             DEFAULT_SYSFS_ROOT,
             DEFAULT_IP_COMMAND,
             DEFAULT_BLUETOOTHCTL_COMMAND,
@@ -94,19 +93,13 @@ impl BluetoothDiscovery {
     pub fn new_with_system_paths(
         config: BluetoothConfig,
         listen_port: u16,
+        static_targets: Vec<SocketAddr>,
         sysfs_root: impl Into<PathBuf>,
         ip_command: impl Into<PathBuf>,
         bluetoothctl_command: impl Into<PathBuf>,
         bt_network_command: impl Into<PathBuf>,
     ) -> Result<(Self, mpsc::Receiver<SocketAddr>), BluetoothError> {
         let (peer_tx, peer_rx) = mpsc::channel(16);
-        let mut static_targets = Vec::with_capacity(config.peer_addresses.len());
-        for addr in &config.peer_addresses {
-            let ip = addr
-                .parse::<IpAddr>()
-                .map_err(|_| BluetoothError::InvalidPeerAddress(addr.clone()))?;
-            static_targets.push(SocketAddr::new(ip, listen_port));
-        }
 
         Ok((
             Self {
@@ -416,11 +409,18 @@ mod tests {
         let config = BluetoothConfig {
             radio_discovery_enabled: false,
             auto_discover_peers: false,
-            peer_addresses: vec!["192.168.44.2".into(), "fd00::2".into()],
             ..Default::default()
         };
 
-        let (svc, _rx) = BluetoothDiscovery::new(config, 9100).unwrap();
+        let (svc, _rx) = BluetoothDiscovery::new(
+            config,
+            9100,
+            vec![
+                "192.168.44.2:9100".parse().unwrap(),
+                "[fd00::2]:9100".parse().unwrap(),
+            ],
+        )
+        .unwrap();
         assert_eq!(svc.target_socket_addrs().len(), 2);
         assert_eq!(
             svc.target_socket_addrs()[0],
@@ -430,19 +430,6 @@ mod tests {
             svc.target_socket_addrs()[1],
             "[fd00::2]:9100".parse().unwrap()
         );
-    }
-
-    #[test]
-    fn invalid_peer_address_is_rejected() {
-        let config = BluetoothConfig {
-            radio_discovery_enabled: false,
-            auto_discover_peers: false,
-            peer_addresses: vec!["not-an-ip".into()],
-            ..Default::default()
-        };
-
-        let err = BluetoothDiscovery::new(config, 9100).unwrap_err();
-        assert!(matches!(err, BluetoothError::InvalidPeerAddress(addr) if addr == "not-an-ip"));
     }
 
     #[test]
@@ -522,7 +509,6 @@ Device AA:BB:CC:DD:EE:03 PIM-client
         let config = BluetoothConfig {
             interface: "bnep0".into(),
             local_alias: "PIM-self".into(),
-            peer_addresses: vec![],
             poll_interval_ms: 10,
             scan_interval_ms: 10,
             peer_discovery_interval_ms: 10,
@@ -534,6 +520,7 @@ Device AA:BB:CC:DD:EE:03 PIM-client
         let (svc, mut rx) = BluetoothDiscovery::new_with_system_paths(
             config,
             9100,
+            Vec::new(),
             fake_root.join("sysfs"),
             fake_ip,
             fake_bluetoothctl,

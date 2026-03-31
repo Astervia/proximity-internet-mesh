@@ -7,7 +7,8 @@ pub mod error;
 pub mod types;
 
 pub use config::{
-    BluetoothConfig, Config, DiscoveryConfig, PeerConfig, RelayConfig, WifiDirectConfig,
+    BluetoothConfig, Config, DiscoveryConfig, PeerConfig, PeerEndpointConfig, RelayConfig,
+    WifiDirectConfig,
 };
 pub use error::PimError;
 pub use types::{FrameCodec, MeshIp, NodeId};

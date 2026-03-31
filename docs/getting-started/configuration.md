@@ -92,6 +92,7 @@ key_file = "/var/lib/pim/node.key"
 require_encryption = true
 
 [[peers]]
+mechanism = "tcp"
 address = "gateway:9100"
 label = "gateway"
 ```
@@ -143,6 +144,7 @@ key_file = "/var/lib/pim/node.key"
 require_encryption = true
 
 [[peers]]
+mechanism = "tcp"
 address = "gateway:9100"
 label = "gateway"
 ```

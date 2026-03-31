@@ -716,7 +716,11 @@ fn render_config_template(roles: &[NodeRole], override_name: Option<&str>) -> St
     );
     push_line(
         &mut out,
-        "# Uncomment one or more entries and replace the example address with a real peer.",
+        "# Each peer declares its connection mechanism. Today `tcp` and `bluetooth` are supported.",
+    );
+    push_line(
+        &mut out,
+        "# Uncomment one or more entries and replace the example endpoint with a real peer.",
     );
     if is_gateway && !is_relay && !is_client {
         push_line(
@@ -725,6 +729,7 @@ fn render_config_template(roles: &[NodeRole], override_name: Option<&str>) -> St
         );
     }
     push_line(&mut out, "# [[peers]]");
+    push_line(&mut out, "# mechanism = \"tcp\"");
     push_line(&mut out, &format!("# address = {:?}", peer_example));
     push_line(&mut out, "# label = \"replace-with-hostname-or-purpose\"");
 
@@ -733,6 +738,7 @@ fn render_config_template(roles: &[NodeRole], override_name: Option<&str>) -> St
             &mut out,
             "# [[peers]]  # Relays commonly connect to a second upstream or downstream neighbor.",
         );
+        push_line(&mut out, "# mechanism = \"tcp\"");
         push_line(&mut out, "# address = \"another-peer:9100\"");
         push_line(&mut out, "# label = \"secondary-link\"");
     }
@@ -853,6 +859,7 @@ mod tests {
     fn client_template_has_commented_gateway_block_and_parses() {
         let rendered = render_config_template(&[NodeRole::Client], None);
         assert!(rendered.contains("# [gateway]"));
+        assert!(rendered.contains("# mechanism = \"tcp\""));
         assert!(rendered.contains("mesh_ip = \"auto\""));
 
         let config = pim_core::Config::from_toml_str(&rendered).unwrap();

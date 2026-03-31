@@ -38,7 +38,6 @@ radio_discovery_enabled = true
 device_name_prefix = "PIM-"
 local_alias = "PIM-my-node"  # optional; defaults from node.name
 auto_discover_peers = true
-peer_addresses = []   # optional static fallback
 poll_interval_ms = 2000
 scan_interval_ms = 5000
 peer_discovery_interval_ms = 2000
@@ -53,8 +52,9 @@ attempts `pair`, `trust`, `connect`, and then `bt-network -c <mac> nap`.
 
 When `auto_discover_peers = true`, the daemon also polls
 `ip neigh show dev <interface>` and converts discovered PAN neighbor IPs into
-`SocketAddr`s using `[transport] listen_port`. `peer_addresses` can still be
-provided as a fallback or for environments where neighbor discovery is incomplete.
+`SocketAddr`s using `[transport] listen_port`. Static Bluetooth peers can also
+be declared under `[[peers]]` with `mechanism = "bluetooth"` for environments
+where neighbor discovery is incomplete.
 
 ## Daemon Flow
 

@@ -29,6 +29,7 @@
 //! nat_interface = "eth0"
 //!
 //! [[peers]]
+//! mechanism = "tcp"
 //! address = "10.0.0.1:9100"   # peer's transport address
 //! ```
 
@@ -38,7 +39,7 @@ mod send_buffer;
 
 use std::collections::{HashMap, HashSet};
 use std::io;
-use std::net::{Ipv4Addr, SocketAddr};
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 use std::path::PathBuf;
 use std::process::Command;
@@ -55,7 +56,7 @@ use tracing::{debug, error, info, warn};
 
 use ed25519_dalek::VerifyingKey;
 use pim_bluetooth::BluetoothDiscovery;
-use pim_core::{Config, DiscoveryConfig, FrameCodec, NodeId};
+use pim_core::{Config, DiscoveryConfig, FrameCodec, NodeId, PeerEndpointConfig};
 use pim_crypto::{
     e2e_decrypt, e2e_encrypt, x25519_public_from_seed, EncryptedFrame, HandshakeConfirm,
     HandshakeInit, HandshakeResponse, Handshaker, Identity, SessionCipher,
@@ -136,62 +137,83 @@ fn nonce_prefix(session_key: &[u8; 32], is_initiator: bool) -> [u8; 8] {
 // ── Reconnect manager ─────────────────────────────────────────────────────────
 
 /// Tracks configured peer addresses and drives exponential-backoff reconnects.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+enum ConnectTarget {
+    Tcp(SocketAddr),
+    BluetoothPan(SocketAddr),
+}
+
+impl ConnectTarget {
+    fn addr(self) -> SocketAddr {
+        match self {
+            Self::Tcp(addr) | Self::BluetoothPan(addr) => addr,
+        }
+    }
+
+    fn mechanism_name(self) -> &'static str {
+        match self {
+            Self::Tcp(_) => "tcp",
+            Self::BluetoothPan(_) => "bluetooth_pan",
+        }
+    }
+}
+
 struct ReconnectManager {
-    /// SocketAddrs from `[[peers]]` config — always reconnect if lost.
-    configured_addrs: HashSet<SocketAddr>,
-    /// SocketAddrs learned from dynamic discovery — also reconnect if lost.
-    discovered_addrs: Mutex<HashSet<SocketAddr>>,
-    /// Maps real peer NodeId → SocketAddr (learned after handshake).
-    addr_by_peer: Mutex<HashMap<NodeId, SocketAddr>>,
+    /// Configured peer targets from `[[peers]]` config — always reconnect if lost.
+    configured_targets: HashSet<ConnectTarget>,
+    /// Targets learned from dynamic discovery — also reconnect if lost.
+    discovered_targets: Mutex<HashSet<ConnectTarget>>,
+    /// Maps real peer NodeId → connection target (learned after handshake).
+    target_by_peer: Mutex<HashMap<NodeId, ConnectTarget>>,
     /// Addresses that currently have an active reconnect task.
-    reconnecting: Mutex<HashSet<SocketAddr>>,
+    reconnecting: Mutex<HashSet<ConnectTarget>>,
 }
 
 impl ReconnectManager {
-    fn new(addrs: impl IntoIterator<Item = SocketAddr>) -> Self {
+    fn new(targets: impl IntoIterator<Item = ConnectTarget>) -> Self {
         Self {
-            configured_addrs: addrs.into_iter().collect(),
-            discovered_addrs: Mutex::new(HashSet::new()),
-            addr_by_peer: Mutex::new(HashMap::new()),
+            configured_targets: targets.into_iter().collect(),
+            discovered_targets: Mutex::new(HashSet::new()),
+            target_by_peer: Mutex::new(HashMap::new()),
             reconnecting: Mutex::new(HashSet::new()),
         }
     }
 
-    /// Record `peer_id → addr` after a successful handshake.
-    async fn register(&self, peer_id: NodeId, addr: SocketAddr) {
-        self.addr_by_peer.lock().await.insert(peer_id, addr);
+    /// Record `peer_id → target` after a successful handshake.
+    async fn register(&self, peer_id: NodeId, target: ConnectTarget) {
+        self.target_by_peer.lock().await.insert(peer_id, target);
     }
 
-    /// Return the configured SocketAddr for `peer_id`, if it is a configured peer.
+    /// Return the configured target for `peer_id`, if it is a configured peer.
     #[cfg(test)]
-    async fn configured_addr(&self, peer_id: &NodeId) -> Option<SocketAddr> {
-        let addr = self.addr_by_peer.lock().await.get(peer_id).copied()?;
-        self.configured_addrs.contains(&addr).then_some(addr)
+    async fn configured_target(&self, peer_id: &NodeId) -> Option<ConnectTarget> {
+        let target = self.target_by_peer.lock().await.get(peer_id).copied()?;
+        self.configured_targets.contains(&target).then_some(target)
     }
 
-    /// Register an address that came from dynamic peer discovery.
-    async fn register_discovered(&self, addr: SocketAddr) {
-        self.discovered_addrs.lock().await.insert(addr);
+    /// Register a target that came from dynamic peer discovery.
+    async fn register_discovered(&self, target: ConnectTarget) {
+        self.discovered_targets.lock().await.insert(target);
     }
 
-    /// Return the SocketAddr for `peer_id` if it is either a configured or
+    /// Return the target for `peer_id` if it is either a configured or
     /// discovered peer (both should be reconnected on loss).
-    async fn is_reconnectable_addr(&self, peer_id: &NodeId) -> Option<SocketAddr> {
-        let addr = self.addr_by_peer.lock().await.get(peer_id).copied()?;
-        let is_configured = self.configured_addrs.contains(&addr);
-        let is_discovered = self.discovered_addrs.lock().await.contains(&addr);
-        (is_configured || is_discovered).then_some(addr)
+    async fn is_reconnectable_target(&self, peer_id: &NodeId) -> Option<ConnectTarget> {
+        let target = self.target_by_peer.lock().await.get(peer_id).copied()?;
+        let is_configured = self.configured_targets.contains(&target);
+        let is_discovered = self.discovered_targets.lock().await.contains(&target);
+        (is_configured || is_discovered).then_some(target)
     }
 
-    /// Claim the reconnect slot for `addr`.  Returns `true` if a new reconnect
+    /// Claim the reconnect slot for `target`.  Returns `true` if a new reconnect
     /// task should be spawned (i.e., none was already running).
-    async fn begin_reconnect(&self, addr: SocketAddr) -> bool {
-        self.reconnecting.lock().await.insert(addr)
+    async fn begin_reconnect(&self, target: ConnectTarget) -> bool {
+        self.reconnecting.lock().await.insert(target)
     }
 
     /// Release the reconnect slot when the task finishes (success or cancel).
-    async fn end_reconnect(&self, addr: SocketAddr) {
-        self.reconnecting.lock().await.remove(&addr);
+    async fn end_reconnect(&self, target: ConnectTarget) {
+        self.reconnecting.lock().await.remove(&target);
     }
 }
 
@@ -566,11 +588,12 @@ async fn remove_peer(state: &Arc<DaemonState>, peer_id: NodeId) {
     }
 
     // Schedule reconnect if this was a configured or discovered peer
-    if let Some(addr) = state.reconnect.is_reconnectable_addr(&peer_id).await {
-        if state.reconnect.begin_reconnect(addr).await {
-            info!(%peer_id, %addr, "scheduling reconnect with backoff");
+    if let Some(target) = state.reconnect.is_reconnectable_target(&peer_id).await {
+        if state.reconnect.begin_reconnect(target).await {
+            let addr = target.addr();
+            info!(%peer_id, mechanism = target.mechanism_name(), %addr, "scheduling reconnect with backoff");
             let st = state.clone();
-            tokio::spawn(run_reconnect_task(st, addr));
+            tokio::spawn(run_reconnect_task(st, target));
         }
     }
 }
@@ -814,21 +837,22 @@ async fn run_gateway_probes(state: Arc<DaemonState>) {
 /// Background task that reconnects to a configured peer using exponential
 /// backoff + jitter.  Runs a full handshake after each successful TCP connect
 /// so a fresh session key is established.
-async fn run_reconnect_task(state: Arc<DaemonState>, addr: SocketAddr) {
+async fn run_reconnect_task(state: Arc<DaemonState>, target: ConnectTarget) {
+    let addr = target.addr();
     let mut attempt = 0u32;
     loop {
         let delay = backoff_duration(attempt);
-        info!(%addr, attempt, delay_ms = delay.as_millis(), "reconnect scheduled");
+        info!(%addr, mechanism = target.mechanism_name(), attempt, delay_ms = delay.as_millis(), "reconnect scheduled");
 
         tokio::select! {
             _ = tokio::time::sleep(delay) => {}
             _ = state.cancel.cancelled() => {
-                state.reconnect.end_reconnect(addr).await;
+                state.reconnect.end_reconnect(target).await;
                 return;
             }
         }
 
-        info!(%addr, attempt, "attempting reconnect");
+        info!(%addr, mechanism = target.mechanism_name(), attempt, "attempting reconnect");
 
         // Use a unique random placeholder so concurrent reconnects don't collide.
         let transport_key = NodeId::from_bytes(rand::random::<[u8; 16]>());
@@ -841,7 +865,7 @@ async fn run_reconnect_task(state: Arc<DaemonState>, addr: SocketAddr) {
             })
             .await
         {
-            warn!(%addr, attempt, "reconnect TCP connect failed: {e}");
+            warn!(%addr, mechanism = target.mechanism_name(), attempt, "reconnect TCP connect failed: {e}");
             attempt += 1;
             continue;
         }
@@ -852,14 +876,14 @@ async fn run_reconnect_task(state: Arc<DaemonState>, addr: SocketAddr) {
 
         match handshake_initiator(&state, transport_key, rx).await {
             Ok(peer_id) => {
-                state.reconnect.register(peer_id, addr).await;
+                state.reconnect.register(peer_id, target).await;
                 state.hs_channels.lock().await.remove(&transport_key);
-                info!(%peer_id, %addr, "reconnect succeeded (new session key)");
-                state.reconnect.end_reconnect(addr).await;
+                info!(%peer_id, %addr, mechanism = target.mechanism_name(), "reconnect succeeded (new session key)");
+                state.reconnect.end_reconnect(target).await;
                 return;
             }
             Err(e) => {
-                warn!(%addr, attempt, "reconnect handshake failed: {e}");
+                warn!(%addr, mechanism = target.mechanism_name(), attempt, "reconnect handshake failed: {e}");
                 // rename_peer only happens on success, so transport_key is still valid.
                 state.hs_channels.lock().await.remove(&transport_key);
                 state.transport.disconnect(&transport_key).await.ok();
@@ -1892,12 +1916,13 @@ fn expand_tilde(path: &std::path::Path) -> PathBuf {
 
 // ── Discovery helpers ─────────────────────────────────────────────────────────
 
-/// Initiate an outbound TCP connection and handshake to `peer_addr`.
+/// Initiate an outbound TCP connection and handshake to `target`.
 ///
 /// Uses a random temporary `NodeId` as the transport key so that concurrent
 /// connect attempts don't collide in the transport map.  The real `NodeId` is
 /// learned from the handshake response and registered in `reconnect` on success.
-async fn initiate_peer_connection(state: Arc<DaemonState>, peer_addr: SocketAddr) {
+async fn initiate_peer_connection(state: Arc<DaemonState>, target: ConnectTarget) {
+    let peer_addr = target.addr();
     // Use a random placeholder so concurrent reconnects don't collide.
     let transport_key = NodeId::from_bytes(rand::random::<[u8; 16]>());
 
@@ -1909,14 +1934,14 @@ async fn initiate_peer_connection(state: Arc<DaemonState>, peer_addr: SocketAddr
         })
         .await
     {
-        warn!(%peer_addr, "connect failed: {e}; reconnect will retry");
-        if state.reconnect.begin_reconnect(peer_addr).await {
+        warn!(%peer_addr, mechanism = target.mechanism_name(), "connect failed: {e}; reconnect will retry");
+        if state.reconnect.begin_reconnect(target).await {
             let st = state.clone();
-            tokio::spawn(run_reconnect_task(st, peer_addr));
+            tokio::spawn(run_reconnect_task(st, target));
         }
         return;
     }
-    info!(%peer_addr, "connected to peer");
+    info!(%peer_addr, mechanism = target.mechanism_name(), "connected to peer");
 
     let (tx, rx) = mpsc::channel(8);
     state.hs_channels.lock().await.insert(transport_key, tx);
@@ -1924,14 +1949,14 @@ async fn initiate_peer_connection(state: Arc<DaemonState>, peer_addr: SocketAddr
     tokio::spawn(async move {
         match handshake_initiator(&st, transport_key, rx).await {
             Ok(peer_id) => {
-                st.reconnect.register(peer_id, peer_addr).await;
-                info!(%peer_id, %peer_addr, "peer connected");
+                st.reconnect.register(peer_id, target).await;
+                info!(%peer_id, %peer_addr, mechanism = target.mechanism_name(), "peer connected");
             }
             Err(e) => {
-                warn!(%peer_addr, "handshake failed: {e}; reconnect will retry");
+                warn!(%peer_addr, mechanism = target.mechanism_name(), "handshake failed: {e}; reconnect will retry");
                 st.transport.disconnect(&transport_key).await.ok();
-                if st.reconnect.begin_reconnect(peer_addr).await {
-                    tokio::spawn(run_reconnect_task(st.clone(), peer_addr));
+                if st.reconnect.begin_reconnect(target).await {
+                    tokio::spawn(run_reconnect_task(st.clone(), target));
                 }
             }
         }
@@ -1993,8 +2018,9 @@ async fn run_discovery_consumer(
                 );
 
                 // Register for reconnect-on-loss, then initiate the connection.
-                state.reconnect.register_discovered(record.listen_addr).await;
-                initiate_peer_connection(state.clone(), record.listen_addr).await;
+                let target = ConnectTarget::Tcp(record.listen_addr);
+                state.reconnect.register_discovered(target).await;
+                initiate_peer_connection(state.clone(), target).await;
             }
             _ = state.cancel.cancelled() => break,
         }
@@ -2015,9 +2041,10 @@ async fn run_wifidirect_consumer(state: Arc<DaemonState>, mut addr_rx: mpsc::Rec
                 // Check if any existing session is already using this address.
                 // (We cannot check by NodeId here since we don't have it yet.)
                 // The sessions map will deduplicate at the handshake level.
-                info!(%addr, "Wi-Fi Direct: new peer addr — initiating connection");
-                state.reconnect.register_discovered(addr).await;
-                initiate_peer_connection(state.clone(), addr).await;
+                let target = ConnectTarget::Tcp(addr);
+                info!(%addr, mechanism = target.mechanism_name(), "Wi-Fi Direct: new peer addr — initiating connection");
+                state.reconnect.register_discovered(target).await;
+                initiate_peer_connection(state.clone(), target).await;
             }
             _ = state.cancel.cancelled() => break,
         }
@@ -2030,9 +2057,10 @@ async fn run_bluetooth_consumer(state: Arc<DaemonState>, mut addr_rx: mpsc::Rece
     loop {
         tokio::select! {
             Some(addr) = addr_rx.recv() => {
-                info!(%addr, "Bluetooth PAN: peer addr ready — initiating connection");
-                state.reconnect.register_discovered(addr).await;
-                initiate_peer_connection(state.clone(), addr).await;
+                let target = ConnectTarget::BluetoothPan(addr);
+                info!(%addr, mechanism = target.mechanism_name(), "Bluetooth PAN: peer addr ready — initiating connection");
+                state.reconnect.register_discovered(target).await;
+                initiate_peer_connection(state.clone(), target).await;
             }
             _ = state.cancel.cancelled() => break,
         }
@@ -2077,6 +2105,51 @@ fn bt_network_command_from_env(value: Option<std::ffi::OsString>) -> PathBuf {
 
 fn bt_network_command() -> PathBuf {
     bt_network_command_from_env(std::env::var_os("PIM_BLUETOOTH_BT_NETWORK_COMMAND"))
+}
+
+#[derive(Debug, Default)]
+struct ResolvedPeerTargets {
+    startup_targets: Vec<ConnectTarget>,
+    reconnect_targets: Vec<ConnectTarget>,
+    bluetooth_static_targets: Vec<SocketAddr>,
+}
+
+fn resolve_configured_peer_targets(config: &Config) -> Result<ResolvedPeerTargets> {
+    let mut resolved = ResolvedPeerTargets::default();
+
+    for peer in &config.peers {
+        match &peer.endpoint {
+            PeerEndpointConfig::Tcp { address } => {
+                use std::net::ToSocketAddrs;
+
+                let mut addrs = address
+                    .to_socket_addrs()
+                    .with_context(|| format!("failed to resolve TCP peer address {address}"))?;
+                let addr = addrs.next().with_context(|| {
+                    format!("no socket addresses resolved for TCP peer {address}")
+                })?;
+                let target = ConnectTarget::Tcp(addr);
+                resolved.startup_targets.push(target);
+                resolved.reconnect_targets.push(target);
+            }
+            PeerEndpointConfig::Bluetooth { ip } => {
+                if !config.bluetooth.enabled {
+                    bail!(
+                        "bluetooth peer {ip} configured in [[peers]] but [bluetooth].enabled is false"
+                    );
+                }
+                let ip = ip
+                    .parse::<IpAddr>()
+                    .with_context(|| format!("invalid Bluetooth peer IP {ip}"))?;
+                let addr = SocketAddr::new(ip, config.transport.listen_port);
+                let target = ConnectTarget::BluetoothPan(addr);
+                resolved.reconnect_targets.push(target);
+                resolved.bluetooth_static_targets.push(addr);
+            }
+        }
+    }
+
+    Ok(resolved)
 }
 
 /// Derive the [`NodeCapabilities`] bitfield from the loaded configuration.
@@ -2220,19 +2293,11 @@ async fn main() -> Result<()> {
     }
 
     // ── Build reconnect manager ───────────────────────────────────────────
-    let mut configured_addrs: Vec<SocketAddr> = Vec::new();
-    for p in &config.peers {
-        use std::net::ToSocketAddrs;
-        match p.address.to_socket_addrs() {
-            Ok(mut addrs) => {
-                if let Some(addr) = addrs.next() {
-                    configured_addrs.push(addr);
-                }
-            }
-            Err(e) => tracing::warn!("failed to resolve peer address {}: {}", p.address, e),
-        }
-    }
-    let reconnect = Arc::new(ReconnectManager::new(configured_addrs.iter().copied()));
+    let configured_targets =
+        resolve_configured_peer_targets(&config).context("failed to resolve configured peers")?;
+    let reconnect = Arc::new(ReconnectManager::new(
+        configured_targets.reconnect_targets.iter().copied(),
+    ));
 
     // ── Build shared state ────────────────────────────────────────────────
     let mut routing_table = RoutingTable::new(self_id, is_gateway);
@@ -2275,8 +2340,8 @@ async fn main() -> Result<()> {
     });
 
     // ── Initiate connections to configured peers ───────────────────────────
-    for peer_addr in configured_addrs {
-        initiate_peer_connection(state.clone(), peer_addr).await;
+    for target in configured_targets.startup_targets.iter().copied() {
+        initiate_peer_connection(state.clone(), target).await;
     }
 
     // ── Discovery service ──────────────────────────────────────────────────
@@ -2336,7 +2401,7 @@ async fn main() -> Result<()> {
         let bt_network_command = bt_network_command();
         info!(
             interface = %bluetooth_config.interface,
-            peers = bluetooth_config.peer_addresses.len(),
+            static_peers = configured_targets.bluetooth_static_targets.len(),
             sysfs_root = %bluetooth_sysfs_root.display(),
             ip_command = %bluetooth_ip_command.display(),
             bluetoothctl_command = %bluetoothctl_command.display(),
@@ -2347,6 +2412,7 @@ async fn main() -> Result<()> {
         let (bt_svc, addr_rx) = BluetoothDiscovery::new_with_system_paths(
             bluetooth_config,
             config.transport.listen_port,
+            configured_targets.bluetooth_static_targets.clone(),
             bluetooth_sysfs_root,
             bluetooth_ip_command,
             bluetoothctl_command,
@@ -2461,56 +2527,59 @@ mod tests {
         "127.0.0.1:9999".parse().unwrap()
     }
 
+    fn test_target() -> ConnectTarget {
+        ConnectTarget::Tcp(test_addr())
+    }
+
     fn peer_id(b: u8) -> NodeId {
         NodeId::from_bytes([b; 16])
     }
 
     #[tokio::test]
     async fn begin_reconnect_returns_true_once() {
-        let mgr = ReconnectManager::new([test_addr()]);
+        let mgr = ReconnectManager::new([test_target()]);
         assert!(
-            mgr.begin_reconnect(test_addr()).await,
+            mgr.begin_reconnect(test_target()).await,
             "first claim should succeed"
         );
         assert!(
-            !mgr.begin_reconnect(test_addr()).await,
+            !mgr.begin_reconnect(test_target()).await,
             "second claim should fail"
         );
     }
 
     #[tokio::test]
     async fn end_reconnect_allows_begin_again() {
-        let mgr = ReconnectManager::new([test_addr()]);
-        mgr.begin_reconnect(test_addr()).await;
-        mgr.end_reconnect(test_addr()).await;
+        let mgr = ReconnectManager::new([test_target()]);
+        mgr.begin_reconnect(test_target()).await;
+        mgr.end_reconnect(test_target()).await;
         assert!(
-            mgr.begin_reconnect(test_addr()).await,
+            mgr.begin_reconnect(test_target()).await,
             "should be able to claim after release"
         );
     }
 
     #[tokio::test]
     async fn configured_addr_none_for_unknown_peer() {
-        let mgr = ReconnectManager::new([test_addr()]);
-        assert!(mgr.configured_addr(&peer_id(1)).await.is_none());
+        let mgr = ReconnectManager::new([test_target()]);
+        assert!(mgr.configured_target(&peer_id(1)).await.is_none());
     }
 
     #[tokio::test]
-    async fn configured_addr_returns_addr_after_register() {
-        let addr = test_addr();
-        let mgr = ReconnectManager::new([addr]);
-        mgr.register(peer_id(1), addr).await;
-        assert_eq!(mgr.configured_addr(&peer_id(1)).await, Some(addr));
+    async fn configured_target_returns_target_after_register() {
+        let target = test_target();
+        let mgr = ReconnectManager::new([target]);
+        mgr.register(peer_id(1), target).await;
+        assert_eq!(mgr.configured_target(&peer_id(1)).await, Some(target));
     }
 
     #[tokio::test]
-    async fn configured_addr_none_for_unconfigured_addr() {
-        let configured = "127.0.0.1:9999".parse::<SocketAddr>().unwrap();
-        let other: SocketAddr = "127.0.0.1:8888".parse().unwrap();
+    async fn configured_target_none_for_unconfigured_target() {
+        let configured = ConnectTarget::Tcp("127.0.0.1:9999".parse::<SocketAddr>().unwrap());
+        let other = ConnectTarget::Tcp("127.0.0.1:8888".parse::<SocketAddr>().unwrap());
         let mgr = ReconnectManager::new([configured]);
-        // Register with an address not in the configured list.
         mgr.register(peer_id(1), other).await;
-        assert!(mgr.configured_addr(&peer_id(1)).await.is_none());
+        assert!(mgr.configured_target(&peer_id(1)).await.is_none());
     }
 
     // ── Flow control (Phase 4.3) tests ────────────────────────────────────────
@@ -2583,18 +2652,20 @@ mod tests {
     async fn multiple_configured_peers_tracked_independently() {
         let addr_a: SocketAddr = "127.0.0.1:9001".parse().unwrap();
         let addr_b: SocketAddr = "127.0.0.1:9002".parse().unwrap();
-        let mgr = ReconnectManager::new([addr_a, addr_b]);
+        let target_a = ConnectTarget::Tcp(addr_a);
+        let target_b = ConnectTarget::Tcp(addr_b);
+        let mgr = ReconnectManager::new([target_a, target_b]);
 
-        mgr.register(peer_id(1), addr_a).await;
-        mgr.register(peer_id(2), addr_b).await;
+        mgr.register(peer_id(1), target_a).await;
+        mgr.register(peer_id(2), target_b).await;
 
-        assert_eq!(mgr.configured_addr(&peer_id(1)).await, Some(addr_a));
-        assert_eq!(mgr.configured_addr(&peer_id(2)).await, Some(addr_b));
+        assert_eq!(mgr.configured_target(&peer_id(1)).await, Some(target_a));
+        assert_eq!(mgr.configured_target(&peer_id(2)).await, Some(target_b));
 
         // Reconnect slots are independent.
-        assert!(mgr.begin_reconnect(addr_a).await);
-        assert!(mgr.begin_reconnect(addr_b).await);
-        assert!(!mgr.begin_reconnect(addr_a).await);
+        assert!(mgr.begin_reconnect(target_a).await);
+        assert!(mgr.begin_reconnect(target_b).await);
+        assert!(!mgr.begin_reconnect(target_a).await);
     }
 
     // ── Phase 5: Gateway probe / load wiring ──────────────────────────────────
@@ -2741,13 +2812,17 @@ mod tests {
     async fn register_discovered_makes_peer_reconnectable() {
         let mgr = ReconnectManager::new([]);
         let addr: SocketAddr = "127.0.0.1:9200".parse().unwrap();
+        let target = ConnectTarget::Tcp(addr);
         // Before registration: not reconnectable.
-        assert!(mgr.is_reconnectable_addr(&peer_id(50)).await.is_none());
+        assert!(mgr.is_reconnectable_target(&peer_id(50)).await.is_none());
         // Register as discovered and bind the NodeId → addr.
-        mgr.register_discovered(addr).await;
-        mgr.register(peer_id(50), addr).await;
+        mgr.register_discovered(target).await;
+        mgr.register(peer_id(50), target).await;
         // Now the peer should be reconnectable.
-        assert_eq!(mgr.is_reconnectable_addr(&peer_id(50)).await, Some(addr));
+        assert_eq!(
+            mgr.is_reconnectable_target(&peer_id(50)).await,
+            Some(target)
+        );
     }
 
     /// Both configured and discovered peers are reconnectable.
@@ -2755,21 +2830,23 @@ mod tests {
     async fn is_reconnectable_covers_configured_and_discovered() {
         let configured: SocketAddr = "127.0.0.1:9100".parse().unwrap();
         let discovered: SocketAddr = "127.0.0.1:9200".parse().unwrap();
+        let configured = ConnectTarget::Tcp(configured);
+        let discovered = ConnectTarget::Tcp(discovered);
         let mgr = ReconnectManager::new([configured]);
         mgr.register(peer_id(51), configured).await;
         mgr.register(peer_id(52), discovered).await;
         mgr.register_discovered(discovered).await;
 
         assert!(
-            mgr.is_reconnectable_addr(&peer_id(51)).await.is_some(),
+            mgr.is_reconnectable_target(&peer_id(51)).await.is_some(),
             "configured peer must be reconnectable"
         );
         assert!(
-            mgr.is_reconnectable_addr(&peer_id(52)).await.is_some(),
+            mgr.is_reconnectable_target(&peer_id(52)).await.is_some(),
             "discovered peer must be reconnectable"
         );
         assert!(
-            mgr.is_reconnectable_addr(&peer_id(99)).await.is_none(),
+            mgr.is_reconnectable_target(&peer_id(99)).await.is_none(),
             "unknown peer must not be reconnectable"
         );
     }
@@ -2917,12 +2994,13 @@ mod tests {
     async fn wifidirect_addr_registered_for_reconnect() {
         let mgr = ReconnectManager::new([]);
         let addr: SocketAddr = "192.168.49.100:9100".parse().unwrap();
-        mgr.register_discovered(addr).await;
+        let target = ConnectTarget::Tcp(addr);
+        mgr.register_discovered(target).await;
         // Bind a fake NodeId to the address to enable the lookup.
-        mgr.register(peer_id(60), addr).await;
+        mgr.register(peer_id(60), target).await;
         assert_eq!(
-            mgr.is_reconnectable_addr(&peer_id(60)).await,
-            Some(addr),
+            mgr.is_reconnectable_target(&peer_id(60)).await,
+            Some(target),
             "Wi-Fi Direct discovered peer must be reconnectable"
         );
     }
@@ -2934,16 +3012,18 @@ mod tests {
         let mgr = ReconnectManager::new([]);
         let udp_addr: SocketAddr = "172.34.0.20:9100".parse().unwrap();
         let wfd_addr: SocketAddr = "192.168.49.100:9100".parse().unwrap();
-        mgr.register_discovered(udp_addr).await;
-        mgr.register_discovered(wfd_addr).await;
-        mgr.register(peer_id(61), udp_addr).await;
-        mgr.register(peer_id(62), wfd_addr).await;
+        let udp_target = ConnectTarget::Tcp(udp_addr);
+        let wfd_target = ConnectTarget::Tcp(wfd_addr);
+        mgr.register_discovered(udp_target).await;
+        mgr.register_discovered(wfd_target).await;
+        mgr.register(peer_id(61), udp_target).await;
+        mgr.register(peer_id(62), wfd_target).await;
         assert!(
-            mgr.is_reconnectable_addr(&peer_id(61)).await.is_some(),
+            mgr.is_reconnectable_target(&peer_id(61)).await.is_some(),
             "UDP peer reconnectable"
         );
         assert!(
-            mgr.is_reconnectable_addr(&peer_id(62)).await.is_some(),
+            mgr.is_reconnectable_target(&peer_id(62)).await.is_some(),
             "WFD peer reconnectable"
         );
     }
@@ -2969,12 +3049,12 @@ mod tests {
     }
 
     #[test]
-    fn bluetooth_enabled_config_exposes_interface_and_peers() {
-        let toml = "[node]\nname=\"t\"\n[bluetooth]\nenabled=true\ninterface=\"bnep1\"\npeer_addresses=[\"192.168.44.2\"]\n";
+    fn bluetooth_enabled_config_exposes_interface_and_static_peer_entries() {
+        let toml = "[node]\nname=\"t\"\n[bluetooth]\nenabled=true\ninterface=\"bnep1\"\n[[peers]]\nmechanism=\"bluetooth\"\nip=\"192.168.44.2\"\n";
         let config = Config::from_toml_str(toml).unwrap();
         assert!(config.bluetooth.enabled);
         assert_eq!(config.bluetooth.interface, "bnep1");
-        assert_eq!(config.bluetooth.peer_addresses, vec!["192.168.44.2"]);
+        assert_eq!(config.peers.len(), 1);
         assert_eq!(config.transport.listen_port, 9100);
     }
 
@@ -2982,11 +3062,12 @@ mod tests {
     async fn bluetooth_addr_registered_for_reconnect() {
         let mgr = ReconnectManager::new([]);
         let addr: SocketAddr = "192.168.44.2:9100".parse().unwrap();
-        mgr.register_discovered(addr).await;
-        mgr.register(peer_id(63), addr).await;
+        let target = ConnectTarget::BluetoothPan(addr);
+        mgr.register_discovered(target).await;
+        mgr.register(peer_id(63), target).await;
         assert_eq!(
-            mgr.is_reconnectable_addr(&peer_id(63)).await,
-            Some(addr),
+            mgr.is_reconnectable_target(&peer_id(63)).await,
+            Some(target),
             "Bluetooth-discovered peer must be reconnectable"
         );
     }
@@ -2994,11 +3075,14 @@ mod tests {
     #[test]
     fn bluetooth_discovery_construction_from_config() {
         use pim_bluetooth::BluetoothDiscovery;
-        let toml =
-            "[node]\nname=\"t\"\n[bluetooth]\nenabled=true\npeer_addresses=[\"192.168.44.2\"]\n";
+        let toml = "[node]\nname=\"t\"\n[bluetooth]\nenabled=true\n";
         let config = Config::from_toml_str(toml).unwrap();
-        let (_svc, _rx) =
-            BluetoothDiscovery::new(config.bluetooth, config.transport.listen_port).unwrap();
+        let (_svc, _rx) = BluetoothDiscovery::new(
+            config.bluetooth,
+            config.transport.listen_port,
+            vec!["192.168.44.2:9100".parse().unwrap()],
+        )
+        .unwrap();
     }
 
     #[test]

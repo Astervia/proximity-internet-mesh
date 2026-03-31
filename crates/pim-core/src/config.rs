@@ -188,8 +188,8 @@ pub struct WifiDirectConfig {
 /// layer and it does not manage pairing. Instead, it waits for a Bluetooth PAN
 /// interface to appear, then learns peer IPs from the PAN neighbor table and
 /// hands them to the daemon so the existing TCP transport and handshake logic
-/// can connect normally. Statically configured peer IPs remain supported as an
-/// additive fallback.
+/// can connect normally. Static Bluetooth peers are configured under
+/// `[[peers]]` with `mechanism = "bluetooth"`.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct BluetoothConfig {
     /// Enable Bluetooth PAN link monitoring. Defaults to `false` (opt-in).
@@ -210,9 +210,6 @@ pub struct BluetoothConfig {
     /// Automatically discover peer IPs from the PAN interface neighbor table.
     #[serde(default = "default_bluetooth_auto_discover_peers")]
     pub auto_discover_peers: bool,
-    /// Optional static peer IPv4 or IPv6 addresses reachable over the Bluetooth PAN link.
-    #[serde(default)]
-    pub peer_addresses: Vec<String>,
     /// Poll interval used while waiting for the PAN interface to become ready.
     #[serde(default = "default_bluetooth_poll_interval_ms")]
     pub poll_interval_ms: u64,
@@ -423,14 +420,31 @@ impl Default for GatewayConfig {
     }
 }
 
-/// A statically configured peer (used for Phase 1 before discovery is active).
+/// A statically configured peer target.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct PeerConfig {
-    /// TCP address to connect to, e.g. "192.168.1.1:9100".
-    pub address: String,
     /// Optional human-readable label.
     #[serde(default)]
     pub label: String,
+    /// Connection mechanism and endpoint details for this peer.
+    #[serde(flatten)]
+    pub endpoint: PeerEndpointConfig,
+}
+
+/// Mechanism-specific peer connection settings.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "mechanism", rename_all = "snake_case")]
+pub enum PeerEndpointConfig {
+    /// A directly reachable transport endpoint.
+    Tcp {
+        /// TCP address to connect to, e.g. "192.168.1.1:9100".
+        address: String,
+    },
+    /// A peer expected to be reachable over a Bluetooth PAN link.
+    Bluetooth {
+        /// IPv4 or IPv6 address reachable on the Bluetooth PAN interface.
+        ip: String,
+    },
 }
 
 impl Default for WifiDirectConfig {
@@ -455,7 +469,6 @@ impl Default for BluetoothConfig {
             device_name_prefix: default_bluetooth_device_name_prefix(),
             local_alias: String::new(),
             auto_discover_peers: default_bluetooth_auto_discover_peers(),
-            peer_addresses: Vec::new(),
             poll_interval_ms: default_bluetooth_poll_interval_ms(),
             scan_interval_ms: default_bluetooth_scan_interval_ms(),
             peer_discovery_interval_ms: default_bluetooth_peer_discovery_interval_ms(),
@@ -564,7 +577,6 @@ radio_discovery_enabled = true
 device_name_prefix = "PIM-"
 local_alias = ""
 auto_discover_peers = true
-peer_addresses = []
 poll_interval_ms = 2000
 scan_interval_ms = 5000
 peer_discovery_interval_ms = 2000
@@ -758,7 +770,6 @@ connect_method = "pin:12345670"
         assert_eq!(config.bluetooth.device_name_prefix, "PIM-");
         assert_eq!(config.bluetooth.local_alias, "");
         assert!(config.bluetooth.auto_discover_peers);
-        assert!(config.bluetooth.peer_addresses.is_empty());
         assert_eq!(config.bluetooth.poll_interval_ms, 2_000);
         assert_eq!(config.bluetooth.scan_interval_ms, 5_000);
         assert_eq!(config.bluetooth.peer_discovery_interval_ms, 2_000);
@@ -778,7 +789,6 @@ radio_discovery_enabled = true
 device_name_prefix = "PIM-"
 local_alias = "PIM-t"
 auto_discover_peers = false
-peer_addresses = ["192.168.44.2"]
 "#;
         let config = Config::from_toml_str(toml).unwrap();
         assert!(config.bluetooth.enabled);
@@ -786,12 +796,10 @@ peer_addresses = ["192.168.44.2"]
         assert_eq!(config.bluetooth.device_name_prefix, "PIM-");
         assert_eq!(config.bluetooth.local_alias, "PIM-t");
         assert!(!config.bluetooth.auto_discover_peers);
-        assert_eq!(config.bluetooth.peer_addresses, vec!["192.168.44.2"]);
         let serialized = config.to_toml_string().unwrap();
         let reparsed = Config::from_toml_str(&serialized).unwrap();
         assert!(reparsed.bluetooth.enabled);
         assert!(!reparsed.bluetooth.auto_discover_peers);
-        assert_eq!(reparsed.bluetooth.peer_addresses, vec!["192.168.44.2"]);
     }
 
     #[test]
@@ -806,7 +814,6 @@ radio_discovery_enabled = true
 device_name_prefix = "MESH-"
 local_alias = "MESH-t"
 auto_discover_peers = true
-peer_addresses = ["10.33.0.2", "fd00::2"]
 poll_interval_ms = 500
 scan_interval_ms = 750
 peer_discovery_interval_ms = 750
@@ -820,15 +827,46 @@ startup_timeout_ms = 10000
         assert_eq!(config.bluetooth.device_name_prefix, "MESH-");
         assert_eq!(config.bluetooth.local_alias, "MESH-t");
         assert!(config.bluetooth.auto_discover_peers);
-        assert_eq!(
-            config.bluetooth.peer_addresses,
-            vec!["10.33.0.2", "fd00::2"]
-        );
         assert_eq!(config.bluetooth.poll_interval_ms, 500);
         assert_eq!(config.bluetooth.scan_interval_ms, 750);
         assert_eq!(config.bluetooth.peer_discovery_interval_ms, 750);
         assert_eq!(config.bluetooth.bluetoothctl_timeout_s, 20);
         assert_eq!(config.bluetooth.discoverable_timeout_s, 60);
         assert_eq!(config.bluetooth.startup_timeout_ms, 10_000);
+    }
+
+    #[test]
+    fn peer_configs_parse_with_mechanism_specific_fields() {
+        let toml = r#"
+[node]
+name = "t"
+
+[[peers]]
+label = "relay"
+mechanism = "tcp"
+address = "relay:9100"
+
+[[peers]]
+label = "phone"
+mechanism = "bluetooth"
+ip = "192.168.44.2"
+"#;
+
+        let config = Config::from_toml_str(toml).unwrap();
+        assert_eq!(config.peers.len(), 2);
+        assert_eq!(config.peers[0].label, "relay");
+        assert_eq!(
+            config.peers[0].endpoint,
+            PeerEndpointConfig::Tcp {
+                address: "relay:9100".into()
+            }
+        );
+        assert_eq!(config.peers[1].label, "phone");
+        assert_eq!(
+            config.peers[1].endpoint,
+            PeerEndpointConfig::Bluetooth {
+                ip: "192.168.44.2".into()
+            }
+        );
     }
 }

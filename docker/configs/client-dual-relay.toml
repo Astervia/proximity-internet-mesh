@@ -16,9 +16,11 @@ listen_port = 9100
 key_file = "/var/lib/pim/node.key"
 
 [[peers]]
+mechanism = "tcp"
 address = "relay1:9100"
 label = "relay1"
 
 [[peers]]
+mechanism = "tcp"
 address = "relay2:9100"
 label = "relay2"

@@ -239,7 +239,6 @@ enabled = false
 [bluetooth]
 enabled = false
 interface = "bnep0"
-peer_addresses = []
 
 [routing]
 max_hops = 10
