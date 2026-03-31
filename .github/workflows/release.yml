@@ -49,7 +49,10 @@ jobs:
                   install -Dm755 target/release/pim-daemon "dist/${ASSET_DIR}/pim-daemon"
 
                   tar -C dist -czf "dist/${ASSET_DIR}.tar.gz" "${ASSET_DIR}"
-                  sha256sum "dist/${ASSET_DIR}.tar.gz" > "dist/${ASSET_DIR}.sha256"
+                  (
+                      cd dist
+                      sha256sum "${ASSET_DIR}.tar.gz" > "${ASSET_DIR}.sha256"
+                  )
 
             - name: Publish GitHub release
               uses: softprops/action-gh-release@v2

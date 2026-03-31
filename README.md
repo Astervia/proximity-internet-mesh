@@ -90,10 +90,11 @@ Published releases include prebuilt Linux x86_64 binaries, so a local Rust toolc
 Install the latest released binaries:
 
 ```bash
-VERSION="v0.1.0"
+VERSION="v0.1.1"
 ASSET="pim-${VERSION}-x86_64-unknown-linux-gnu"
 curl -LO "https://github.com/Astervia/proximity-internet-mesh/releases/download/${VERSION}/${ASSET}.tar.gz"
 curl -LO "https://github.com/Astervia/proximity-internet-mesh/releases/download/${VERSION}/${ASSET}.sha256"
+sed -i 's#dist/##' "${ASSET}.sha256"
 sha256sum -c "${ASSET}.sha256"
 tar -xzf "${ASSET}.tar.gz"
 sudo install -Dm755 "${ASSET}/pim" /usr/local/bin/pim
