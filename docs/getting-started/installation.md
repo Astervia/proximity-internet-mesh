@@ -22,7 +22,7 @@ Optional but strongly recommended:
 Published releases include a prebuilt Linux x86_64 tarball containing `pim` and `pim-daemon`.
 
 ```bash
-VERSION="v0.1.1"
+VERSION="v0.1.2"
 ASSET="pim-${VERSION}-x86_64-unknown-linux-gnu"
 curl -LO "https://github.com/Astervia/proximity-internet-mesh/releases/download/${VERSION}/${ASSET}.tar.gz"
 curl -LO "https://github.com/Astervia/proximity-internet-mesh/releases/download/${VERSION}/${ASSET}.sha256"
