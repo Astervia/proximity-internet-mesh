@@ -633,6 +633,14 @@ impl RoutingTable {
         self.routes.len()
     }
 
+    /// Return a cloned snapshot of all installed routes.
+    pub fn routes_snapshot(&self) -> Vec<(NodeId, RouteTableEntry)> {
+        self.routes
+            .iter()
+            .map(|(dst, entry)| (*dst, entry.clone()))
+            .collect()
+    }
+
     /// Return the set of directly connected peers.
     pub fn direct_peers(&self) -> &HashSet<NodeId> {
         &self.direct_peers

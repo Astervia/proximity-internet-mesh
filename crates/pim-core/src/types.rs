@@ -3,6 +3,7 @@
 use bytes::BytesMut;
 use std::fmt;
 use std::net::Ipv4Addr;
+use std::str::FromStr;
 
 use sha2::{Digest, Sha256};
 
@@ -30,6 +31,11 @@ impl NodeId {
     pub fn as_bytes(&self) -> &[u8; 16] {
         &self.0
     }
+
+    /// Return the full 16-byte identifier as 32 lowercase hex characters.
+    pub fn to_hex(&self) -> String {
+        self.0.iter().map(|b| format!("{b:02x}")).collect()
+    }
 }
 
 impl fmt::Display for NodeId {
@@ -52,8 +58,29 @@ impl fmt::Display for NodeId {
 
 impl fmt::Debug for NodeId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let hex: String = self.0.iter().map(|b| format!("{b:02x}")).collect();
-        write!(f, "NodeId({hex})")
+        write!(f, "NodeId({})", self.to_hex())
+    }
+}
+
+impl FromStr for NodeId {
+    type Err = PimError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        if s.len() != 32 {
+            return Err(PimError::Config(format!(
+                "node id must be 32 hex characters, got {}",
+                s.len()
+            )));
+        }
+
+        let mut bytes = [0u8; 16];
+        for (idx, chunk) in s.as_bytes().chunks_exact(2).enumerate() {
+            let hex = std::str::from_utf8(chunk)
+                .map_err(|_| PimError::Config("node id contains invalid utf-8".into()))?;
+            bytes[idx] = u8::from_str_radix(hex, 16)
+                .map_err(|_| PimError::Config(format!("node id contains invalid hex: {hex}")))?;
+        }
+        Ok(Self(bytes))
     }
 }
 
@@ -136,6 +163,14 @@ mod tests {
         ];
         let id = NodeId::from_bytes(bytes);
         assert_eq!(format!("{id}"), "a3f1b2c4..9d32e0f8");
+    }
+
+    #[test]
+    fn node_id_hex_round_trip() {
+        let id = NodeId::from_bytes([0xab; 16]);
+        let hex = id.to_hex();
+        assert_eq!(hex, "abababababababababababababababab");
+        assert_eq!(hex.parse::<NodeId>().unwrap(), id);
     }
 
     #[test]

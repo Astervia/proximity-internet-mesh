@@ -36,6 +36,7 @@ make test-p2
 make test-p3
 make test-p4
 make test-p5
+make test-debug-cli
 make test-bluetooth
 make test-all
 ```
@@ -55,6 +56,7 @@ They validate real daemon startup, TUN interface handling, peer connectivity, ro
 - `test-p3`: discovery and peer lifecycle
 - `test-p4`: resilience, buffering, congestion, and slow NAT timeout checks
 - `test-p5`: dual-gateway failover and gateway selection behavior
+- `test-debug-cli`: `pim debug` output from the client view in the dual-gateway Docker lab
 - `test-bluetooth`: Bluetooth PAN automatic peer discovery seam using fake sysfs and `ip neigh` fixtures in Docker
 
 ## Local Workflow

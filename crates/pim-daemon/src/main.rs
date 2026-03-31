@@ -56,12 +56,16 @@ use tracing::{debug, error, info, warn};
 
 use ed25519_dalek::VerifyingKey;
 use pim_bluetooth::BluetoothDiscovery;
-use pim_core::{Config, DiscoveryConfig, FrameCodec, NodeId, PeerEndpointConfig};
+use pim_core::{
+    Config, DebugDiscoveredPeerSnapshot, DebugGatewaySnapshot, DebugNodeSnapshot,
+    DebugPeerSnapshot, DebugRouteSnapshot, DebugSnapshot, DebugStatsSnapshot, DiscoveryConfig,
+    FrameCodec, NodeId, PeerEndpointConfig,
+};
 use pim_crypto::{
     e2e_decrypt, e2e_encrypt, x25519_public_from_seed, EncryptedFrame, HandshakeConfirm,
     HandshakeInit, HandshakeResponse, Handshaker, Identity, SessionCipher,
 };
-use pim_discovery::{DiscoveryService, NodeCapabilities, PeerRecord};
+use pim_discovery::{DiscoveryService, NodeCapabilities, PeerRecord, PeerTable};
 use pim_gateway::{GatewayEngine, IpPool};
 use pim_protocol::{
     fragment_packet, ControlFrame, DataFlags, FragmentFrame, FrameType, HandshakeFrameType,
@@ -69,6 +73,7 @@ use pim_protocol::{
     TransportFrame,
 };
 use pim_routing::{
+    gateway_score,
     signing::{sign_route_update, verify_route_update},
     RoutingTable,
 };
@@ -205,6 +210,14 @@ impl ReconnectManager {
         (is_configured || is_discovered).then_some(target)
     }
 
+    /// Return snapshot-friendly metadata for a connected peer.
+    async fn peer_info(&self, peer_id: &NodeId) -> Option<(ConnectTarget, bool, bool)> {
+        let target = self.target_by_peer.lock().await.get(peer_id).copied()?;
+        let configured = self.configured_targets.contains(&target);
+        let discovered = self.discovered_targets.lock().await.contains(&target);
+        Some((target, configured, discovered))
+    }
+
     /// Claim the reconnect slot for `target`.  Returns `true` if a new reconnect
     /// task should be spawned (i.e., none was already running).
     async fn begin_reconnect(&self, target: ConnectTarget) -> bool {
@@ -244,6 +257,7 @@ type SessionMap = Arc<RwLock<HashMap<NodeId, Arc<Session>>>>;
 type HsChannels = Arc<Mutex<HashMap<NodeId, mpsc::Sender<HandshakeWireFrame>>>>;
 
 struct DaemonState {
+    node_name: String,
     self_id: NodeId,
     identity: Arc<Identity>,
     is_gateway: bool,
@@ -295,6 +309,8 @@ struct DaemonState {
     cancel: CancellationToken,
     /// Discovery configuration — cloned at startup for use in the consumer task.
     discovery_config: DiscoveryConfig,
+    /// Discovery peer table when the discovery service is enabled.
+    discovery_peer_table: Option<Arc<Mutex<PeerTable>>>,
 }
 
 impl DaemonState {
@@ -715,6 +731,8 @@ async fn run_conntrack_gc(state: Arc<DaemonState>) {
 
 /// Path to the runtime stats file read by `pim status --verbose`.
 pub const STATS_PATH: &str = "/run/pim.stats";
+/// Path to the structured runtime snapshot read by `pim debug`.
+pub const DEBUG_SNAPSHOT_PATH: &str = "/run/pim-debug.json";
 
 pub struct StatsSnapshot {
     pub peers: usize,
@@ -725,6 +743,31 @@ pub struct StatsSnapshot {
     pub congestion_drops: u64,
     pub conntrack_size: usize,
     pub uptime_secs: u64,
+}
+
+async fn collect_stats(state: &Arc<DaemonState>) -> StatsSnapshot {
+    let peers = state.sessions.read().await.len();
+    let routes = state.routing.lock().await.route_count();
+    let packets_forwarded = state.packets_forwarded.load(Ordering::Relaxed);
+    let bytes_forwarded = state.bytes_forwarded.load(Ordering::Relaxed);
+    let packets_dropped = state.packets_dropped.load(Ordering::Relaxed);
+    let congestion_drops = state.congestion_drops.load(Ordering::Relaxed);
+    let conntrack_size = match &state.gw_engine {
+        Some(gw) => gw.conntrack_size().await,
+        None => 0,
+    };
+    let uptime_secs = state.start_time.elapsed().unwrap_or_default().as_secs();
+
+    StatsSnapshot {
+        peers,
+        routes,
+        packets_forwarded,
+        bytes_forwarded,
+        packets_dropped,
+        congestion_drops,
+        conntrack_size,
+        uptime_secs,
+    }
 }
 
 /// Collect current metrics and format them as a newline-delimited key=value string.
@@ -753,35 +796,174 @@ async fn run_stats_writer(state: Arc<DaemonState>) {
     let mut interval = tokio::time::interval(Duration::from_secs(5));
     loop {
         interval.tick().await;
-        let peers = state.sessions.read().await.len();
-        let routes = state.routing.lock().await.route_count();
-        let packets_forwarded = state.packets_forwarded.load(Ordering::Relaxed);
-        let bytes_forwarded = state.bytes_forwarded.load(Ordering::Relaxed);
-        let packets_dropped = state.packets_dropped.load(Ordering::Relaxed);
-        let congestion_drops = state.congestion_drops.load(Ordering::Relaxed);
-        let conntrack_size = match &state.gw_engine {
-            Some(gw) => gw.conntrack_size().await,
-            None => 0,
-        };
-        let uptime_secs = state.start_time.elapsed().unwrap_or_default().as_secs();
+        let stats = collect_stats(&state).await;
+        let content = format_stats(&stats);
+        if let Err(e) = atomic_write(STATS_PATH, content.as_bytes()) {
+            debug!("stats write failed: {e}");
+        }
+    }
+}
 
-        let content = format_stats(&StatsSnapshot {
-            peers,
-            routes,
-            packets_forwarded,
-            bytes_forwarded,
-            packets_dropped,
-            congestion_drops,
-            conntrack_size,
-            uptime_secs,
+fn atomic_write(path: &str, content: &[u8]) -> io::Result<()> {
+    let tmp = format!("{path}.tmp");
+    std::fs::write(&tmp, content)?;
+    std::fs::rename(&tmp, path)?;
+    Ok(())
+}
+
+async fn build_debug_snapshot(state: &Arc<DaemonState>) -> DebugSnapshot {
+    let stats = collect_stats(state).await;
+    let sessions: Vec<NodeId> = state.sessions.read().await.keys().copied().collect();
+    let peer_last_hb = state.peer_last_hb.lock().await.clone();
+    let direct_peers = {
+        let routing = state.routing.lock().await;
+        routing.direct_peers().clone()
+    };
+
+    let mut peers = Vec::with_capacity(sessions.len());
+    for peer_id in sessions {
+        let info = state.reconnect.peer_info(&peer_id).await;
+        let (addr, mechanism, configured, discovered) = match info {
+            Some((target, configured, discovered)) => (
+                Some(target.addr().to_string()),
+                Some(target.mechanism_name().to_string()),
+                configured,
+                discovered,
+            ),
+            None => (None, None, false, false),
+        };
+        peers.push(DebugPeerSnapshot {
+            node_id: peer_id.to_hex(),
+            short_id: peer_id.to_string(),
+            addr,
+            mechanism,
+            direct: direct_peers.contains(&peer_id),
+            configured,
+            discovered,
+            last_heartbeat_age_ms: peer_last_hb
+                .get(&peer_id)
+                .map(|seen| seen.elapsed().as_millis().min(u64::MAX as u128) as u64),
+        });
+    }
+    peers.sort_by(|a, b| a.short_id.cmp(&b.short_id));
+
+    let routing = state.routing.lock().await;
+    let route_entries = routing.routes_snapshot();
+    let selected_gateway = routing.nearest_gateway_route().map(|(gw_id, _)| gw_id);
+    let mut routes = Vec::with_capacity(route_entries.len());
+    let mut gateways = Vec::new();
+    for (dst, entry) in route_entries {
+        let mesh_ip = entry.mesh_ip.map(|ip| ip.to_string());
+        let age_ms = entry.last_seen.elapsed().as_millis().min(u64::MAX as u128) as u64;
+        let next_hop_blacklisted = routing.is_blacklisted(&entry.next_hop);
+        routes.push(DebugRouteSnapshot {
+            destination_id: dst.to_hex(),
+            destination_short_id: dst.to_string(),
+            next_hop_id: entry.next_hop.to_hex(),
+            next_hop_short_id: entry.next_hop.to_string(),
+            learned_from_id: entry.learned_from.to_hex(),
+            learned_from_short_id: entry.learned_from.to_string(),
+            hops: entry.hops,
+            is_gateway: entry.is_gateway,
+            gateway_load: entry.gateway_load,
+            rtt_ms: entry.rtt_ms,
+            mesh_ip: mesh_ip.clone(),
+            age_ms,
+            next_hop_blacklisted,
         });
 
-        let tmp = format!("{STATS_PATH}.tmp");
-        if let Err(e) = std::fs::write(&tmp, &content) {
-            debug!("stats write failed: {e}");
-            continue;
+        if entry.is_gateway {
+            gateways.push(DebugGatewaySnapshot {
+                node_id: dst.to_hex(),
+                short_id: dst.to_string(),
+                next_hop_id: entry.next_hop.to_hex(),
+                next_hop_short_id: entry.next_hop.to_string(),
+                hops: entry.hops,
+                gateway_load: entry.gateway_load,
+                rtt_ms: entry.rtt_ms,
+                score: gateway_score(entry.hops, entry.gateway_load, entry.rtt_ms),
+                selected: selected_gateway == Some(dst),
+                mesh_ip,
+            });
         }
-        std::fs::rename(&tmp, STATS_PATH).ok();
+    }
+    drop(routing);
+
+    routes.sort_by(|a, b| a.destination_short_id.cmp(&b.destination_short_id));
+    gateways.sort_by_key(|gateway| {
+        (
+            u8::from(!gateway.selected),
+            gateway.score,
+            gateway.short_id.clone(),
+        )
+    });
+
+    let discovered_peers = match &state.discovery_peer_table {
+        Some(peer_table) => {
+            let peer_table = peer_table.lock().await;
+            let mut peers: Vec<DebugDiscoveredPeerSnapshot> = peer_table
+                .all()
+                .map(|record| DebugDiscoveredPeerSnapshot {
+                    node_id: record.node_id.to_hex(),
+                    short_id: record.node_id.to_string(),
+                    addr: record.listen_addr.to_string(),
+                    is_client: record.capabilities.is_client(),
+                    is_relay: record.capabilities.is_relay(),
+                    is_gateway: record.capabilities.is_gateway(),
+                    last_seen_age_ms: record.last_seen.elapsed().as_millis().min(u64::MAX as u128)
+                        as u64,
+                })
+                .collect();
+            peers.sort_by(|a, b| a.short_id.cmp(&b.short_id));
+            peers
+        }
+        None => Vec::new(),
+    };
+
+    DebugSnapshot {
+        version: 1,
+        generated_at_unix_secs: std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs(),
+        node: DebugNodeSnapshot {
+            name: state.node_name.clone(),
+            node_id: state.self_id.to_hex(),
+            short_id: state.self_id.to_string(),
+            is_gateway: state.is_gateway,
+            mesh_ip: Ipv4Addr::from(state.mesh_ip.load(Ordering::Relaxed)).to_string(),
+            mesh_prefix_len: state.mesh_prefix_len.load(Ordering::Relaxed),
+            request_dynamic_ip: state.request_dynamic_ip,
+        },
+        stats: DebugStatsSnapshot {
+            peers: stats.peers,
+            routes: stats.routes,
+            packets_forwarded: stats.packets_forwarded,
+            bytes_forwarded: stats.bytes_forwarded,
+            packets_dropped: stats.packets_dropped,
+            congestion_drops: stats.congestion_drops,
+            conntrack_size: stats.conntrack_size,
+            uptime_secs: stats.uptime_secs,
+        },
+        peers,
+        discovered_peers,
+        routes,
+        gateways,
+    }
+}
+
+async fn run_debug_snapshot_writer(state: Arc<DaemonState>) {
+    let mut interval = tokio::time::interval(Duration::from_secs(2));
+    loop {
+        interval.tick().await;
+        match serde_json::to_vec_pretty(&build_debug_snapshot(&state).await) {
+            Ok(content) => {
+                if let Err(e) = atomic_write(DEBUG_SNAPSHOT_PATH, &content) {
+                    debug!("debug snapshot write failed: {e}");
+                }
+            }
+            Err(e) => debug!("debug snapshot serialize failed: {e}"),
+        }
     }
 }
 
@@ -2299,6 +2481,24 @@ async fn main() -> Result<()> {
         configured_targets.reconnect_targets.iter().copied(),
     ));
 
+    let discovery_runtime = if config.discovery.enabled {
+        let pubkey: [u8; 32] = identity.signing_key().verifying_key().to_bytes();
+        let caps = node_capabilities(&config);
+        let (discovery_svc, new_peer_rx) =
+            DiscoveryService::new(self_id, pubkey, caps, config.transport.listen_port);
+        let discovery_svc = Arc::new(
+            discovery_svc
+                .with_port(config.discovery.port)
+                .with_broadcast_interval(Duration::from_millis(
+                    config.discovery.broadcast_interval_ms,
+                ))
+                .with_peer_timeout(Duration::from_millis(config.discovery.peer_timeout_ms)),
+        );
+        Some((discovery_svc, new_peer_rx))
+    } else {
+        None
+    };
+
     // ── Build shared state ────────────────────────────────────────────────
     let mut routing_table = RoutingTable::new(self_id, is_gateway);
     if !request_dynamic_ip {
@@ -2306,6 +2506,7 @@ async fn main() -> Result<()> {
     }
     let routing = Arc::new(Mutex::new(routing_table));
     let state = Arc::new(DaemonState {
+        node_name: config.node.name.clone(),
         self_id,
         identity: identity.clone(),
         is_gateway,
@@ -2337,6 +2538,9 @@ async fn main() -> Result<()> {
         reputation: Arc::new(Mutex::new(ReputationTracker::new())),
         cancel: cancel.clone(),
         discovery_config: config.discovery.clone(),
+        discovery_peer_table: discovery_runtime
+            .as_ref()
+            .map(|(discovery_svc, _)| discovery_svc.peer_table()),
     });
 
     // ── Initiate connections to configured peers ───────────────────────────
@@ -2345,19 +2549,7 @@ async fn main() -> Result<()> {
     }
 
     // ── Discovery service ──────────────────────────────────────────────────
-    if config.discovery.enabled {
-        let pubkey: [u8; 32] = identity.signing_key().verifying_key().to_bytes();
-        let caps = node_capabilities(&config);
-        let (discovery_svc, new_peer_rx) =
-            DiscoveryService::new(self_id, pubkey, caps, config.transport.listen_port);
-        let discovery_svc = Arc::new(
-            discovery_svc
-                .with_port(config.discovery.port)
-                .with_broadcast_interval(Duration::from_millis(
-                    config.discovery.broadcast_interval_ms,
-                ))
-                .with_peer_timeout(Duration::from_millis(config.discovery.peer_timeout_ms)),
-        );
+    if let Some((discovery_svc, new_peer_rx)) = discovery_runtime {
         info!(port = config.discovery.port, "discovery enabled");
         tokio::spawn({
             let svc = discovery_svc.clone();
@@ -2436,6 +2628,7 @@ async fn main() -> Result<()> {
     tokio::spawn(run_buffer_gc(state.clone()));
     tokio::spawn(run_buffer_flush(state.clone()));
     tokio::spawn(run_stats_writer(state.clone()));
+    tokio::spawn(run_debug_snapshot_writer(state.clone()));
     tokio::spawn(run_gateway_probes(state.clone()));
     if state.is_gateway {
         tokio::spawn(run_gateway_return(state.clone()));

@@ -10,7 +10,7 @@ docker-build:
 
 # ── Test phases ───────────────────────────────────────────────────────────────
 
-.PHONY: test-p1 test-p2 test-p3 test-p4 test-p5 test-p7 test-bluetooth test-all
+.PHONY: test-p1 test-p2 test-p3 test-p4 test-p5 test-p7 test-debug-cli test-bluetooth test-all
 
 test-p1: docker-build
 	bash $(TEST_DIR)/test-phase1.sh
@@ -33,6 +33,9 @@ test-p5: docker-build
 
 test-p7: docker-build
 	bash $(TEST_DIR)/test-phase7.sh
+
+test-debug-cli: docker-build
+	bash $(TEST_DIR)/test-debug-cli.sh
 
 test-bluetooth: docker-build
 	bash $(TEST_DIR)/test-bluetooth.sh
@@ -194,6 +197,7 @@ help:
 	@echo "  make test-p4-full       Phase 4: includes 6-min NAT timeout test"
 	@echo "  make test-p5            Phase 5: multi-gateway + failover + load"
 	@echo "  make test-p7            Phase 7: zero-config auto-discovery"
+	@echo "  make test-debug-cli     Debug CLI output in multi-gateway and discovery labs"
 	@echo "  make test-bluetooth     Bluetooth fake-sysfs seam test in Docker"
 	@echo "  make test-all           All phases (slow tests skipped)"
 	@echo "  make test-unit          Rust unit tests (no Docker)"

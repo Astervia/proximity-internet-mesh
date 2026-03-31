@@ -48,6 +48,7 @@ docker/
     phase5-multigateway.yml      — gateway1 + gateway2 + relay + client
   tests/
     test-bluetooth.sh           — Bluetooth seam test runner
+    test-debug-cli.sh           — debug CLI output runner
     common.sh                    — shared assertion and lifecycle helpers
     test-phase1.sh               — phase 1 test runner
     test-phase2.sh               — phase 2 test runner
@@ -122,6 +123,7 @@ make test-all
 # Run a single phase
 make test-p1
 make test-p2
+make test-debug-cli
 make test-bluetooth
 
 # Interactive: bring up a stack and poke around
@@ -166,6 +168,23 @@ script returns the resulting peer IP. The test then asserts that the daemon:
 - radio-discovers and prepares a new Bluetooth peer
 - auto-discovers the PAN neighbor IP
 - hands the resulting address into the normal connection path
+
+## Debug CLI Test Lane
+
+`make test-debug-cli` validates operator-facing output for the new `pim debug`
+commands from the client container in `phase5-multigateway.yml`.
+
+That single stack is enough to cover:
+
+- direct peer visibility
+- installed route visibility
+- gateway ranking output
+- route explanation for `internet`
+- route explanation for a specific mesh IP
+- non-empty discovery output, because discovery remains enabled by default
+
+This keeps the test deterministic while still exercising a realistic mesh with
+multiple gateways.
 
 ## Writing a New Docker Test
 
