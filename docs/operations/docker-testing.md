@@ -49,6 +49,7 @@ docker/
   tests/
     test-bluetooth.sh           — Bluetooth seam test runner
     test-debug-cli.sh           — debug CLI output runner
+    test-route-cli.sh           — split-default route CLI runner
     common.sh                    — shared assertion and lifecycle helpers
     test-phase1.sh               — phase 1 test runner
     test-phase2.sh               — phase 2 test runner
@@ -124,6 +125,7 @@ make test-all
 make test-p1
 make test-p2
 make test-debug-cli
+make test-route-cli
 make test-bluetooth
 
 # Interactive: bring up a stack and poke around
@@ -185,6 +187,19 @@ That single stack is enough to cover:
 
 This keeps the test deterministic while still exercising a realistic mesh with
 multiple gateways.
+
+## Route CLI Test Lane
+
+`make test-route-cli` reuses `phase1-single-hop.yml` to validate the operator
+workflow around split-default routing from inside the client container:
+
+- `pim route status` starts disabled
+- `pim route on` installs both split-default routes
+- `pim route status` reports the expected gateway and interface
+- `pim route off` removes both routes again
+
+This lane specifically protects the TUN and route-management behavior that the
+daemon relies on after startup.
 
 ## Writing a New Docker Test
 
