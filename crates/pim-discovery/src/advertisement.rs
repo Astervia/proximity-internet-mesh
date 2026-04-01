@@ -185,6 +185,8 @@ impl DiscoveryAdvertisement {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rand::rngs::StdRng;
+    use rand::SeedableRng;
 
     fn sample_ad() -> DiscoveryAdvertisement {
         DiscoveryAdvertisement {
@@ -193,6 +195,13 @@ mod tests {
             capabilities: NodeCapabilities::relay(),
             listen_port: 9100,
         }
+    }
+
+    fn test_key(seed: u64) -> [u8; 32] {
+        let mut rng = StdRng::seed_from_u64(seed);
+        let mut key = [0u8; 32];
+        rng.fill_bytes(&mut key);
+        key
     }
 
     #[test]
@@ -260,7 +269,7 @@ mod tests {
     #[test]
     fn encrypted_round_trip() {
         let ad = sample_ad();
-        let key = [0x11; 32];
+        let key = test_key(1);
         let decoded =
             DiscoveryAdvertisement::deserialize_encrypted(&ad.serialize_encrypted(&key), &key)
                 .unwrap();
@@ -270,7 +279,9 @@ mod tests {
     #[test]
     fn encrypted_wrong_key_rejected() {
         let ad = sample_ad();
-        let bytes = ad.serialize_encrypted(&[0x11; 32]);
-        assert!(DiscoveryAdvertisement::deserialize_encrypted(&bytes, &[0x22; 32]).is_none());
+        let key = test_key(1);
+        let wrong_key = test_key(2);
+        let bytes = ad.serialize_encrypted(&key);
+        assert!(DiscoveryAdvertisement::deserialize_encrypted(&bytes, &wrong_key).is_none());
     }
 }
