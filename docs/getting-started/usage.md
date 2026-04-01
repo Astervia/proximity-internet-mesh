@@ -2,6 +2,14 @@
 
 This page documents the CLI that exists in the repository today.
 
+For gateway-specific bring-up, including how to discover the correct internet,
+Wi-Fi Direct, and Bluetooth interfaces, see
+[gateway-usage.md](gateway-usage.md).
+
+For client-specific bring-up, including Wi-Fi Direct and Bluetooth interface
+selection and dynamic mesh IP assignment, see
+[client-usage.md](client-usage.md).
+
 ## Commands
 
 The `pim` binary exposes three commands:
