@@ -54,6 +54,21 @@ assert_cmd_output() {
     fi
 }
 
+# assert_peer_count <file> <service> <expected> [desc]
+assert_peer_count() {
+    local file="$1" svc="$2" expected="$3"
+    local desc="${4:-$svc has $expected peer(s)}"
+    local count
+    count=$(in_svc "$file" "$svc" pim status --verbose 2>/dev/null \
+        | awk -F'[:=]' '/^[[:space:]]*peers[=:]/ {gsub(/[[:space:]]/, "", $2); print $2; exit}')
+    count="${count:-0}"
+    if [ "$count" = "$expected" ]; then
+        log_ok "$desc"
+    else
+        log_fail "$desc (expected $expected, got ${count:-missing})"
+    fi
+}
+
 # assert_logs_contain <file> <service> <expected_substring> [desc]
 assert_logs_contain() {
     local file="$1" svc="$2" expected="$3"
@@ -218,7 +233,8 @@ wait_for_peers() {
     while [ $elapsed -lt $max ]; do
         local count
         count=$(in_svc "$file" "$svc" pim status --verbose 2>/dev/null \
-            | grep -oP '(?<=^peers=)\d+' || echo "0")
+            | awk -F'[:=]' '/^[[:space:]]*peers[=:]/ {gsub(/[[:space:]]/, "", $2); print $2; exit}')
+        count="${count:-0}"
         if [ "${count:-0}" -ge "$min" ]; then
             log_info "$svc has $count peer(s)"
             return 0
