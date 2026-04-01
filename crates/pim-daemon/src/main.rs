@@ -319,11 +319,13 @@ impl DaemonState {
     }
 }
 
+#[cfg(target_os = "linux")]
 struct InternetGatewayLink {
     send_fd: tokio::io::unix::AsyncFd<OwnedFd>,
     recv_fd: tokio::io::unix::AsyncFd<OwnedFd>,
 }
 
+#[cfg(target_os = "linux")]
 impl InternetGatewayLink {
     fn new(interface: &str) -> Result<Self> {
         let send_fd = create_raw_send_socket(interface)?;
@@ -400,6 +402,24 @@ impl InternetGatewayLink {
     }
 }
 
+#[cfg(not(target_os = "linux"))]
+struct InternetGatewayLink;
+
+#[cfg(not(target_os = "linux"))]
+impl InternetGatewayLink {
+    fn new(_interface: &str) -> Result<Self> {
+        bail!("gateway internet link is only supported on Linux")
+    }
+
+    async fn send_packet(&self, _packet: &[u8]) -> Result<()> {
+        bail!("gateway internet link is only supported on Linux")
+    }
+
+    async fn recv_packet(&self, _buf: &mut [u8]) -> Result<usize> {
+        bail!("gateway internet link is only supported on Linux")
+    }
+}
+
 fn ipv4_destination(packet: &[u8]) -> Option<Ipv4Addr> {
     if packet.len() < 20 || (packet[0] >> 4) != 4 {
         return None;
@@ -436,6 +456,7 @@ fn parse_interface_ipv4_output(output: &str) -> Option<Ipv4Addr> {
         .and_then(|ip| ip.parse().ok())
 }
 
+#[cfg(target_os = "linux")]
 fn create_raw_send_socket(interface: &str) -> Result<OwnedFd> {
     let fd = unsafe {
         libc::socket(
@@ -460,6 +481,7 @@ fn create_raw_send_socket(interface: &str) -> Result<OwnedFd> {
     Ok(fd)
 }
 
+#[cfg(target_os = "linux")]
 fn create_packet_recv_socket(interface: &str) -> Result<OwnedFd> {
     const ETH_P_IP: u16 = 0x0800;
     let fd = unsafe {
@@ -498,6 +520,7 @@ fn create_packet_recv_socket(interface: &str) -> Result<OwnedFd> {
     Ok(fd)
 }
 
+#[cfg(target_os = "linux")]
 fn bind_socket_to_device(fd: i32, interface: &str) -> Result<()> {
     let mut name = interface.as_bytes().to_vec();
     name.push(0);
@@ -505,6 +528,7 @@ fn bind_socket_to_device(fd: i32, interface: &str) -> Result<()> {
         .with_context(|| format!("SO_BINDTODEVICE failed for {interface}"))
 }
 
+#[cfg(target_os = "linux")]
 fn setsockopt_bytes(fd: i32, level: i32, optname: i32, value: &[u8]) -> Result<()> {
     let rc = unsafe {
         libc::setsockopt(
@@ -2379,6 +2403,9 @@ async fn main() -> Result<()> {
     info!(%self_id, "identity loaded");
 
     let is_gateway = config.gateway.enabled;
+    if is_gateway && !cfg!(target_os = "linux") {
+        bail!("gateway mode is currently Linux-only; disable [gateway] on macOS");
+    }
     let own_x25519_pub = x25519_public_from_seed(&identity.signing_key().to_bytes());
 
     // ── TUN setup ──────────────────────────────────────────────────────────
