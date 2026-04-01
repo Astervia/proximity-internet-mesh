@@ -34,7 +34,7 @@ Before editing, inspect:
 
 Optional helper:
 
-- `agent/tools/inspect-connectivity-surface.sh`
+- `.agent/tools/inspect-connectivity-surface.sh`
 
 ## Workflow
 

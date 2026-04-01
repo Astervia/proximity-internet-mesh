@@ -16,7 +16,7 @@ Repository-specific guidance:
 
 - `pim-daemon` is the runtime integration point for most cross-crate behavior.
 - `pim-core` owns shared config, common types, and error vocabulary.
-- `agent/core/DOCS_MAP.md` points to the general documentation in `./docs`.
+- `.agent/core/DOCS_MAP.md` points to the general documentation in `./docs`.
 - Docker phase tests matter for changes that affect multi-node or runtime behavior.
 
 Expected output:

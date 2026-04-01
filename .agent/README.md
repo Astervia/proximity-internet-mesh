@@ -23,7 +23,7 @@ Start with the generic assets in `core/` and `prompts/` for most work:
 - `prompts/review-change.md` — prompt for code review work
 
 Use `./docs` as the main source of broader repository context. The files under
-`agent/` should stay concise and point to the relevant material in `./docs`
+`.agent/` should stay concise and point to the relevant material in `./docs`
 rather than duplicating it.
 
 ## Domain-Specific Assets
