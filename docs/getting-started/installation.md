@@ -27,7 +27,7 @@ Published releases include tarballs containing `pim` and `pim-daemon` for:
 Pick the archive that matches your host:
 
 ```bash
-VERSION="v0.1.4"
+VERSION="v0.1.5"
 
 case "$(uname -s)-$(uname -m)" in
   Linux-x86_64) ASSET="pim-${VERSION}-x86_64-unknown-linux-musl" ;;
