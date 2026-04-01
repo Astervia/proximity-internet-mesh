@@ -41,6 +41,7 @@ use std::collections::{HashMap, HashSet};
 use std::io;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+use std::path::Path;
 use std::path::PathBuf;
 use std::process::Command;
 use std::sync::atomic::{AtomicU32, AtomicU64, AtomicU8, Ordering};
@@ -1192,7 +1193,11 @@ async fn handshake_initiator(
 
     // Derive the peer's real NodeId from their Ed25519 public key.
     let peer_id = NodeId::from_public_key(&sender_pub);
-    match state.authorization.authorize_authenticated_peer(peer_id).await? {
+    match state
+        .authorization
+        .authorize_authenticated_peer(peer_id)
+        .await?
+    {
         AuthorizationDecision::Allowed => {}
         AuthorizationDecision::TrustedOnFirstUse => {
             info!(%peer_id, "peer trusted on first use");
@@ -2229,12 +2234,12 @@ fn load_trusted_peers(path: &PathBuf) -> Result<HashSet<NodeId>> {
     }
     let content = std::fs::read_to_string(path)
         .with_context(|| format!("read trust store {}", path.display()))?;
-    let file: TrustedPeersFile =
-        toml::from_str(&content).with_context(|| format!("parse trust store {}", path.display()))?;
+    let file: TrustedPeersFile = toml::from_str(&content)
+        .with_context(|| format!("parse trust store {}", path.display()))?;
     Ok(file.peers.into_iter().collect())
 }
 
-fn persist_trusted_peers(path: &PathBuf, peers: &HashSet<NodeId>) -> Result<()> {
+fn persist_trusted_peers(path: &Path, peers: &HashSet<NodeId>) -> Result<()> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)
             .with_context(|| format!("create trust store dir {}", parent.display()))?;
@@ -2258,8 +2263,8 @@ fn parse_discovery_shared_key(value: &str) -> Result<[u8; 32]> {
     let mut key = [0u8; 32];
     for (idx, chunk) in value.as_bytes().chunks_exact(2).enumerate() {
         let hex = std::str::from_utf8(chunk).context("discovery.shared_key must be valid UTF-8")?;
-        key[idx] =
-            u8::from_str_radix(hex, 16).with_context(|| format!("invalid discovery key byte {hex}"))?;
+        key[idx] = u8::from_str_radix(hex, 16)
+            .with_context(|| format!("invalid discovery key byte {hex}"))?;
     }
     Ok(key)
 }
@@ -2934,16 +2939,16 @@ mod tests {
     #[tokio::test]
     async fn authorization_allow_list_rejects_unlisted_peer() {
         let path = temp_trust_store_path();
-        let manager = AuthorizationManager::new(
-            AuthorizationPolicy::AllowList,
-            [peer_id(1)],
-            path.clone(),
-        )
-        .unwrap();
+        let manager =
+            AuthorizationManager::new(AuthorizationPolicy::AllowList, [peer_id(1)], path.clone())
+                .unwrap();
         assert!(manager.authorize_discovered_peer(peer_id(1)).await);
         assert!(!manager.authorize_discovered_peer(peer_id(2)).await);
         assert_eq!(
-            manager.authorize_authenticated_peer(peer_id(2)).await.unwrap(),
+            manager
+                .authorize_authenticated_peer(peer_id(2))
+                .await
+                .unwrap(),
             AuthorizationDecision::Rejected
         );
         std::fs::remove_file(path).ok();
@@ -2952,25 +2957,25 @@ mod tests {
     #[tokio::test]
     async fn authorization_tofu_persists_new_peer() {
         let path = temp_trust_store_path();
-        let manager = AuthorizationManager::new(
-            AuthorizationPolicy::TrustOnFirstUse,
-            [],
-            path.clone(),
-        )
-        .unwrap();
+        let manager =
+            AuthorizationManager::new(AuthorizationPolicy::TrustOnFirstUse, [], path.clone())
+                .unwrap();
         assert_eq!(
-            manager.authorize_authenticated_peer(peer_id(7)).await.unwrap(),
+            manager
+                .authorize_authenticated_peer(peer_id(7))
+                .await
+                .unwrap(),
             AuthorizationDecision::TrustedOnFirstUse
         );
 
-        let reloaded = AuthorizationManager::new(
-            AuthorizationPolicy::TrustOnFirstUse,
-            [],
-            path.clone(),
-        )
-        .unwrap();
+        let reloaded =
+            AuthorizationManager::new(AuthorizationPolicy::TrustOnFirstUse, [], path.clone())
+                .unwrap();
         assert_eq!(
-            reloaded.authorize_authenticated_peer(peer_id(7)).await.unwrap(),
+            reloaded
+                .authorize_authenticated_peer(peer_id(7))
+                .await
+                .unwrap(),
             AuthorizationDecision::Allowed
         );
         std::fs::remove_file(path).ok();

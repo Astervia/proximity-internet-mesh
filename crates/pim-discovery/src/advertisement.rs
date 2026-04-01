@@ -261,11 +261,9 @@ mod tests {
     fn encrypted_round_trip() {
         let ad = sample_ad();
         let key = [0x11; 32];
-        let decoded = DiscoveryAdvertisement::deserialize_encrypted(
-            &ad.serialize_encrypted(&key),
-            &key,
-        )
-        .unwrap();
+        let decoded =
+            DiscoveryAdvertisement::deserialize_encrypted(&ad.serialize_encrypted(&key), &key)
+                .unwrap();
         assert_eq!(ad, decoded);
     }
 

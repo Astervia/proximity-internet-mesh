@@ -313,8 +313,7 @@ mod tests {
     #[tokio::test]
     async fn encrypted_service_ignores_plaintext_packets() {
         let id = NodeId::from_bytes([1; 16]);
-        let (svc, mut rx) =
-            DiscoveryService::new(id, [1; 32], NodeCapabilities::client(), 9205);
+        let (svc, mut rx) = DiscoveryService::new(id, [1; 32], NodeCapabilities::client(), 9205);
         let svc = Arc::new(svc.with_port(9205).with_shared_key([0x33; 32]));
         let ad = peer_advertisement(4, 9100);
         let from = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(10, 0, 0, 4)), 9101);
@@ -327,8 +326,7 @@ mod tests {
     #[tokio::test]
     async fn encrypted_service_accepts_keyed_packets() {
         let id = NodeId::from_bytes([1; 16]);
-        let (svc, mut rx) =
-            DiscoveryService::new(id, [1; 32], NodeCapabilities::client(), 9206);
+        let (svc, mut rx) = DiscoveryService::new(id, [1; 32], NodeCapabilities::client(), 9206);
         let svc = Arc::new(svc.with_port(9206).with_shared_key([0x44; 32]));
 
         let ad = peer_advertisement(5, 9100);

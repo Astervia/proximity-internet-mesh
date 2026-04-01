@@ -1169,12 +1169,18 @@ fn render_config_template(roles: &[NodeRole], override_name: Option<&str>) -> St
         &mut out,
         "# Used only when authorization_policy = \"allow_list\".",
     );
-    push_line(&mut out, "# authorized_peers = [\"0123456789abcdef0123456789abcdef\"]");
+    push_line(
+        &mut out,
+        "# authorized_peers = [\"0123456789abcdef0123456789abcdef\"]",
+    );
     push_line(
         &mut out,
         "# Used only when authorization_policy = \"trust_on_first_use\".",
     );
-    push_line(&mut out, "trust_store_file = \"/var/lib/pim/trusted-peers.toml\"");
+    push_line(
+        &mut out,
+        "trust_store_file = \"/var/lib/pim/trusted-peers.toml\"",
+    );
     push_blank(&mut out);
 
     push_line(
