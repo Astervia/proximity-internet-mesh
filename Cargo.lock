@@ -769,11 +769,13 @@ dependencies = [
 name = "pim-discovery"
 version = "0.1.0"
 dependencies = [
+ "aes-gcm",
  "anyhow",
  "bytes",
  "pim-core",
  "pim-crypto",
  "pim-transport",
+ "rand",
  "thiserror",
  "tokio",
  "tokio-util",

@@ -1088,6 +1088,14 @@ fn render_config_template(roles: &[NodeRole], override_name: Option<&str>) -> St
     );
     push_line(&mut out, "broadcast_interval_ms = 5000");
     push_line(&mut out, "peer_timeout_ms = 30000");
+    push_line(
+        &mut out,
+        "# Optional 64-hex-character group key. When set, only nodes with the same key can decode discovery broadcasts.",
+    );
+    push_line(
+        &mut out,
+        "# shared_key = \"00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff\"",
+    );
     push_blank(&mut out);
 
     push_line(&mut out, "[transport]");
@@ -1152,6 +1160,21 @@ fn render_config_template(roles: &[NodeRole], override_name: Option<&str>) -> St
         "# Reject direct peer sessions that do not complete the authenticated handshake.",
     );
     push_line(&mut out, "require_encryption = true");
+    push_line(
+        &mut out,
+        "# Authorization policy: allow_all, allow_list, or trust_on_first_use.",
+    );
+    push_line(&mut out, "authorization_policy = \"allow_all\"");
+    push_line(
+        &mut out,
+        "# Used only when authorization_policy = \"allow_list\".",
+    );
+    push_line(&mut out, "# authorized_peers = [\"0123456789abcdef0123456789abcdef\"]");
+    push_line(
+        &mut out,
+        "# Used only when authorization_policy = \"trust_on_first_use\".",
+    );
+    push_line(&mut out, "trust_store_file = \"/var/lib/pim/trusted-peers.toml\"");
     push_blank(&mut out);
 
     push_line(

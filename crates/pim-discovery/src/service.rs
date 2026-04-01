@@ -20,7 +20,9 @@ use tracing::{debug, info, warn};
 
 use pim_core::NodeId;
 
-use crate::advertisement::{DiscoveryAdvertisement, NodeCapabilities, PACKET_SIZE};
+use crate::advertisement::{
+    DiscoveryAdvertisement, NodeCapabilities, ENCRYPTED_PACKET_SIZE, PACKET_SIZE,
+};
 use crate::peer_table::{PeerRecord, PeerTable};
 
 /// Default UDP port used for discovery broadcasts.
@@ -45,6 +47,7 @@ pub struct DiscoveryService {
     discovery_port: u16,
     broadcast_interval: Duration,
     peer_timeout: Duration,
+    shared_key: Option<[u8; 32]>,
     peer_table: Arc<Mutex<PeerTable>>,
     /// Sender for notifying the daemon when a new peer is discovered.
     new_peer_tx: mpsc::Sender<PeerRecord>,
@@ -74,6 +77,7 @@ impl DiscoveryService {
             discovery_port: DEFAULT_DISCOVERY_PORT,
             broadcast_interval: DEFAULT_BROADCAST_INTERVAL,
             peer_timeout: DEFAULT_PEER_TIMEOUT,
+            shared_key: None,
             peer_table: Arc::new(Mutex::new(PeerTable::new())),
             new_peer_tx,
         };
@@ -98,6 +102,12 @@ impl DiscoveryService {
         self
     }
 
+    /// Configure a shared key for encrypted discovery advertisements.
+    pub fn with_shared_key(mut self, key: [u8; 32]) -> Self {
+        self.shared_key = Some(key);
+        self
+    }
+
     /// A shared reference to the peer table (for the daemon to query).
     pub fn peer_table(&self) -> Arc<Mutex<PeerTable>> {
         self.peer_table.clone()
@@ -105,7 +115,10 @@ impl DiscoveryService {
 
     /// Send one broadcast advertisement on `socket`.
     pub async fn broadcast_presence(&self, socket: &UdpSocket) -> Result<()> {
-        let payload = self.own_ad.serialize();
+        let payload = match self.shared_key {
+            Some(key) => self.own_ad.serialize_encrypted(&key).to_vec(),
+            None => self.own_ad.serialize().to_vec(),
+        };
         let dst = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::BROADCAST, self.discovery_port));
         socket
             .send_to(&payload, dst)
@@ -120,7 +133,10 @@ impl DiscoveryService {
     /// Returns the `PeerRecord` if the advertisement is valid and from a
     /// previously-unknown peer, otherwise `None`.
     pub async fn handle_advertisement(&self, data: &[u8], from: SocketAddr) -> Option<PeerRecord> {
-        let ad = DiscoveryAdvertisement::deserialize(data)?;
+        let ad = match self.shared_key {
+            Some(key) => DiscoveryAdvertisement::deserialize_encrypted(data, &key)?,
+            None => DiscoveryAdvertisement::deserialize(data)?,
+        };
 
         // Ignore our own broadcasts
         if ad.node_id == self.own_ad.node_id {
@@ -165,7 +181,7 @@ impl DiscoveryService {
 
         let mut broadcast_interval = tokio::time::interval(self.broadcast_interval);
         let mut gc_interval = tokio::time::interval(self.peer_timeout / 2);
-        let mut recv_buf = vec![0u8; PACKET_SIZE + 16];
+        let mut recv_buf = vec![0u8; ENCRYPTED_PACKET_SIZE.max(PACKET_SIZE + 16)];
 
         loop {
             tokio::select! {
@@ -292,5 +308,36 @@ mod tests {
         let result = svc.handle_advertisement(b"garbage", from).await;
         assert!(result.is_none());
         assert!(rx.try_recv().is_err());
+    }
+
+    #[tokio::test]
+    async fn encrypted_service_ignores_plaintext_packets() {
+        let id = NodeId::from_bytes([1; 16]);
+        let (svc, mut rx) =
+            DiscoveryService::new(id, [1; 32], NodeCapabilities::client(), 9205);
+        let svc = Arc::new(svc.with_port(9205).with_shared_key([0x33; 32]));
+        let ad = peer_advertisement(4, 9100);
+        let from = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(10, 0, 0, 4)), 9101);
+
+        let result = svc.handle_advertisement(&ad.serialize(), from).await;
+        assert!(result.is_none());
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[tokio::test]
+    async fn encrypted_service_accepts_keyed_packets() {
+        let id = NodeId::from_bytes([1; 16]);
+        let (svc, mut rx) =
+            DiscoveryService::new(id, [1; 32], NodeCapabilities::client(), 9206);
+        let svc = Arc::new(svc.with_port(9206).with_shared_key([0x44; 32]));
+
+        let ad = peer_advertisement(5, 9100);
+        let from = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(10, 0, 0, 5)), 9101);
+
+        let result = svc
+            .handle_advertisement(&ad.serialize_encrypted(&[0x44; 32]), from)
+            .await;
+        assert!(result.is_some());
+        assert!(rx.try_recv().is_ok());
     }
 }
