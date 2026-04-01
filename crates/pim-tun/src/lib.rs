@@ -110,15 +110,15 @@ mod platform {
     use tokio::io::unix::AsyncFd;
     use tracing::{debug, info};
 
-    const TUNSETIFF: libc::c_ulong = 0x4004_54ca;
+    const TUNSETIFF: libc::Ioctl = 0x4004_54ca;
     const IFF_TUN: i16 = 0x0001;
     const IFF_NO_PI: i16 = 0x1000;
 
-    const SIOCSIFADDR: libc::c_ulong = 0x8916;
-    const SIOCSIFNETMASK: libc::c_ulong = 0x891c;
-    const SIOCSIFMTU: libc::c_ulong = 0x8922;
-    const SIOCGIFFLAGS: libc::c_ulong = 0x8913;
-    const SIOCSIFFLAGS: libc::c_ulong = 0x8914;
+    const SIOCSIFADDR: libc::Ioctl = 0x8916;
+    const SIOCSIFNETMASK: libc::Ioctl = 0x891c;
+    const SIOCSIFMTU: libc::Ioctl = 0x8922;
+    const SIOCGIFFLAGS: libc::Ioctl = 0x8913;
+    const SIOCSIFFLAGS: libc::Ioctl = 0x8914;
     const IFF_UP: i16 = 0x0001;
     const IFF_RUNNING: i16 = 0x0040;
 
@@ -180,11 +180,11 @@ mod platform {
         }
     }
 
-    fn do_ioctl(fd: libc::c_int, request: libc::c_ulong, ifr: &mut Ifreq) -> Result<(), TunError> {
+    fn do_ioctl(fd: libc::c_int, request: libc::Ioctl, ifr: &mut Ifreq) -> Result<(), TunError> {
         let ret = unsafe { libc::ioctl(fd, request, ifr as *mut Ifreq) };
         if ret < 0 {
             Err(TunError::Ioctl(
-                format!("0x{request:08x}"),
+                format!("0x{:08x}", request),
                 io::Error::last_os_error(),
             ))
         } else {
