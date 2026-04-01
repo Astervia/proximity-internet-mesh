@@ -1,12 +1,12 @@
 # Proximity Internet Mesh
 
-Proximity Internet Mesh (PIM) is a Rust workspace for running a local mesh adapter that forwards IP traffic across nearby peers until it reaches a node with internet access. On Linux, the daemon creates a TUN interface such as `pim0`, accepts packets from the host network stack, forwards them through the mesh, and lets a gateway node NAT traffic out to the public internet.
+Proximity Internet Mesh (PIM) is a Rust workspace for running a local mesh adapter that forwards IP traffic across nearby peers until it reaches a node with internet access. The daemon now supports local TUN operation on Linux and macOS, accepts packets from the host network stack, and forwards them through the mesh. Gateway NAT remains Linux-only.
 
 The codebase is currently centered on a Linux daemon, a small CLI, and Docker-based multi-node test environments. The long-term architecture targets proximity transports such as Wi-Fi Direct, but the transport implemented in the repository today is TCP. The documentation below distinguishes current behavior from broader design material.
 
 ## Current Scope
 
-- Linux-first runtime with a TUN interface
+- Linux and macOS client/relay runtime with a TUN interface
 - Rust workspace with separate crates for protocol, crypto, routing, transport, gateway, discovery, daemon, and CLI
 - `pim` CLI with `up`, `down`, `status`, and `route on|off|status`
 - `pim-daemon` runtime that handles peer sessions, routing, fragmentation, metrics, and gateway NAT
@@ -28,11 +28,10 @@ The codebase is currently centered on a Linux daemon, a small CLI, and Docker-ba
 
 For local development and manual runs:
 
-- Linux with `/dev/net/tun`
+- Linux or macOS
 - Rust toolchain new enough to build the workspace when installing from source
-- `iproute2`
-- `iptables`
 - privileges to create a TUN interface and update routes, typically `root` or `CAP_NET_ADMIN`
+- Linux gateways additionally require `/dev/net/tun`, `iproute2`, and `iptables`
 
 For Docker-based integration testing:
 
@@ -91,7 +90,7 @@ Published releases include prebuilt archives for:
 - macOS Intel via `x86_64-apple-darwin`
 - macOS Apple Silicon via `aarch64-apple-darwin`
 
-Full daemon operation is still Linux-first because the runtime creates a Linux TUN device, adjusts routes, and may install NAT rules. The macOS release artifacts are useful for the CLI, config generation, and local inspection, but a production mesh node still needs Linux.
+The daemon can now run as a client or relay on macOS using `utunN` interfaces and macOS route management. Gateway mode, NAT setup, and the Docker integration labs still require Linux.
 
 Install the latest released binaries for your host:
 
@@ -133,7 +132,9 @@ If you need to build from source instead:
 cargo build --workspace --release
 sudo install -Dm755 target/release/pim /usr/local/bin/pim
 sudo install -Dm755 target/release/pim-daemon /usr/local/bin/pim-daemon
-sudo install -d /etc/pim /var/lib/pim /run
+if [ "$(uname -s)" = "Linux" ]; then
+  sudo install -d /etc/pim /var/lib/pim /run
+fi
 ```
 
 Then create `/etc/pim/pim.toml`. The easiest starting point is:
@@ -150,7 +151,7 @@ name = "client-a"
 data_dir = "/var/lib/pim"
 
 [interface]
-name = "pim0"
+name = "pim0" # use "utun0" on macOS
 mesh_ip = "10.77.0.100/24"
 mtu = 1400
 

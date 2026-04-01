@@ -1,16 +1,15 @@
 # Installation
 
-This project is currently easiest to run on Linux because the daemon creates a TUN interface, manipulates routes, and may install NAT rules. Release binaries are also published for macOS so the CLI and config workflow are easy to access there, but the full mesh dataplane remains Linux-first.
+This project supports client and relay nodes on Linux and macOS. Gateway mode remains Linux-only because the daemon still depends on Linux NAT and raw-socket behavior for internet egress.
 
 ## Requirements
 
 Host requirements:
 
-- Linux with `/dev/net/tun`
+- Linux or macOS
 - Rust toolchain when installing from source
-- `iproute2`
-- `iptables`
-- privileges to create `pim0` and update routing, usually `root` or `CAP_NET_ADMIN`
+- privileges to create the TUN interface and update routing, usually `root` or `CAP_NET_ADMIN`
+- Linux gateways additionally need `/dev/net/tun`, `iproute2`, and `iptables`
 
 Optional but strongly recommended:
 
@@ -83,14 +82,16 @@ This produces:
 ```bash
 sudo install -Dm755 target/release/pim /usr/local/bin/pim
 sudo install -Dm755 target/release/pim-daemon /usr/local/bin/pim-daemon
-sudo install -d /etc/pim /var/lib/pim /run
+if [ "$(uname -s)" = "Linux" ]; then
+  sudo install -d /etc/pim /var/lib/pim /run
+fi
 ```
 
 If you prefer not to install globally, you can run the binaries directly from `target/release/`, but `pim` must still be able to find `pim-daemon` either beside it or on `PATH`.
 
 ## Prepare A Config File
 
-Create `/etc/pim/pim.toml`. Start from the examples in [configuration.md](configuration.md).
+Create `/etc/pim/pim.toml`. On macOS, use a `utunN` interface name such as `utun0`. Start from the examples in [configuration.md](configuration.md).
 
 ## Verify The CLI
 
