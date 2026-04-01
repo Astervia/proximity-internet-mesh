@@ -148,6 +148,10 @@ crate_changed_since_tag() {
     return 0
 }
 
+list_workspace_crate_manifests() {
+    rg --files crates | rg '/Cargo\.toml$' | sort
+}
+
 FETCH_TAGS=true
 DRY_RUN=false
 
@@ -223,10 +227,13 @@ declare -a changed_manifests=()
 
 while IFS= read -r manifest; do
     [[ -n "$manifest" ]] || continue
+    if [[ "$manifest" == "$MASTER_MANIFEST" ]]; then
+        continue
+    fi
     if crate_changed_since_tag "$LATEST_TAG" "$manifest"; then
         changed_manifests+=("$manifest")
     fi
-done < <(rg --files crates -g '*/Cargo.toml' | sort)
+done < <(list_workspace_crate_manifests)
 
 if [[ ${#changed_manifests[@]} -eq 0 ]]; then
     echo "No crate path changes detected since $LATEST_TAG."
