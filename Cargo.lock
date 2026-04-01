@@ -691,7 +691,7 @@ dependencies = [
 
 [[package]]
 name = "pim-cli"
-version = "0.1.0"
+version = "0.1.6"
 dependencies = [
  "anyhow",
  "clap",
