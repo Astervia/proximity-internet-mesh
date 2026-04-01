@@ -82,6 +82,6 @@ This map is the default orientation for agent work in this repository.
   `make test-p1` through `make test-p5`
 
 For broader repository context, use `core/DOCS_MAP.md` to navigate `./docs`
-before adding new summary material under `agent/`.
+before adding new summary material under `.agent/`.
 
 Use the domain-specific skills or prompts only after locating the owning layer.

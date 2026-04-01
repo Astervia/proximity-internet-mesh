@@ -42,7 +42,7 @@ For most tasks:
 2. Identify the owning crate and the integration points around it.
 3. Change the smallest public surface that solves the task.
 4. Preserve backward compatibility unless the task explicitly requires a break.
-5. Use `./docs` for broader project context instead of recreating that context in `agent/`.
+5. Use `./docs` for broader project context instead of recreating that context in `.agent/`.
 6. Update docs when behavior, config, or operator workflow changes.
 
 ## Testing Expectations
@@ -68,6 +68,6 @@ Update the closest user-facing or architecture-facing document when the behavior
 - `docs/architecture/` for protocol, packet flow, transport, discovery, routing, or security changes
 - `docs/operations/` for testing, deployment, or debugging workflow changes
 
-When looking for context before editing, start with `agent/core/DOCS_MAP.md`
+When looking for context before editing, start with `.agent/core/DOCS_MAP.md`
 and follow into `./docs` rather than expanding the agent folder with duplicate
 background material.

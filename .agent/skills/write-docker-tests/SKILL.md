@@ -40,7 +40,7 @@ existing structure, helper scripts, and docs.
 5. Document the new lane.
     - Update `docs/operations/docker-testing.md`
     - Update `docs/operations/testing.md` if the workflow changed
-    - Update `agent/README.md` or `agent/skills/README.md` if discoverability matters
+    - Update `.agent/README.md` or `.agent/skills/README.md` if discoverability matters
 
 ## Repository-Specific Rules
 
