@@ -382,26 +382,7 @@ fn cmd_route_on(config_path: PathBuf) -> Result<()> {
     ensure_pim_interface_present(&route_info.iface)?;
 
     for cidr in split_default_cidrs() {
-        let status = process::Command::new("ip")
-            .args([
-                "route",
-                "replace",
-                cidr,
-                "via",
-                &route_info.gateway_ip.to_string(),
-                "dev",
-                &route_info.iface,
-                "onlink",
-            ])
-            .status()
-            .with_context(|| format!("failed to run ip route replace for {cidr}"))?;
-        if !status.success() {
-            bail!(
-                "ip route replace {cidr} via {} dev {} onlink failed",
-                route_info.gateway_ip,
-                route_info.iface
-            );
-        }
+        replace_split_default_route(cidr, &route_info)?;
     }
 
     println!(
@@ -416,19 +397,7 @@ fn cmd_route_off(config_path: PathBuf) -> Result<()> {
     let mut removed = 0usize;
 
     for cidr in split_default_cidrs() {
-        let status = process::Command::new("ip")
-            .args([
-                "route",
-                "del",
-                cidr,
-                "via",
-                &route_info.gateway_ip.to_string(),
-                "dev",
-                &route_info.iface,
-            ])
-            .status()
-            .with_context(|| format!("failed to run ip route del for {cidr}"))?;
-        if status.success() {
+        if remove_split_default_route(cidr, &route_info)? {
             removed += 1;
         }
     }
@@ -443,10 +412,9 @@ fn cmd_route_off(config_path: PathBuf) -> Result<()> {
 
 fn cmd_route_status(config_path: PathBuf) -> Result<()> {
     let route_info = load_route_info(&config_path)?;
-    let routes = read_ip_route_table()?;
     let active = split_default_cidrs()
         .iter()
-        .all(|cidr| route_present(&routes, cidr, route_info.gateway_ip, &route_info.iface));
+        .all(|cidr| split_default_route_present(cidr, &route_info).unwrap_or(false));
 
     if active {
         println!(
@@ -796,8 +764,7 @@ fn load_route_info(config_path: &PathBuf) -> Result<RouteInfo> {
 }
 
 fn ensure_pim_interface_present(iface: &str) -> Result<()> {
-    let status = process::Command::new("ip")
-        .args(["link", "show", "dev", iface])
+    let status = interface_present_command(iface)
         .status()
         .with_context(|| format!("failed to inspect interface {iface}"))?;
     if !status.success() {
@@ -807,10 +774,7 @@ fn ensure_pim_interface_present(iface: &str) -> Result<()> {
 }
 
 fn active_gateway_ip(iface: &str) -> Option<Ipv4Addr> {
-    let output = process::Command::new("ip")
-        .args(["-4", "-o", "addr", "show", "dev", iface])
-        .output()
-        .ok()?;
+    let output = interface_ipv4_command(iface).output().ok()?;
     if !output.status.success() {
         return None;
     }
@@ -855,6 +819,147 @@ fn split_default_cidrs() -> [&'static str; 2] {
     ["0.0.0.0/1", "128.0.0.0/1"]
 }
 
+fn replace_split_default_route(cidr: &str, route_info: &RouteInfo) -> Result<()> {
+    #[cfg(target_os = "linux")]
+    {
+        let status = process::Command::new("ip")
+            .args([
+                "route",
+                "replace",
+                cidr,
+                "via",
+                &route_info.gateway_ip.to_string(),
+                "dev",
+                &route_info.iface,
+                "onlink",
+            ])
+            .status()
+            .with_context(|| format!("failed to run ip route replace for {cidr}"))?;
+        if !status.success() {
+            bail!(
+                "ip route replace {cidr} via {} dev {} onlink failed",
+                route_info.gateway_ip,
+                route_info.iface
+            );
+        }
+        Ok(())
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        let _ = process::Command::new("route")
+            .args([
+                "-n",
+                "delete",
+                "-net",
+                cidr,
+                "-interface",
+                &route_info.iface,
+            ])
+            .status();
+        let status = process::Command::new("route")
+            .args(["-n", "add", "-net", cidr, "-interface", &route_info.iface])
+            .status()
+            .with_context(|| format!("failed to run route add for {cidr}"))?;
+        if !status.success() {
+            bail!(
+                "route add -net {cidr} -interface {} failed",
+                route_info.iface
+            );
+        }
+        Ok(())
+    }
+
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    {
+        let _ = (cidr, route_info);
+        bail!("split-default route management is not supported on this platform")
+    }
+}
+
+fn remove_split_default_route(cidr: &str, route_info: &RouteInfo) -> Result<bool> {
+    #[cfg(target_os = "linux")]
+    {
+        let status = process::Command::new("ip")
+            .args([
+                "route",
+                "del",
+                cidr,
+                "via",
+                &route_info.gateway_ip.to_string(),
+                "dev",
+                &route_info.iface,
+            ])
+            .status()
+            .with_context(|| format!("failed to run ip route del for {cidr}"))?;
+        Ok(status.success())
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        let status = process::Command::new("route")
+            .args([
+                "-n",
+                "delete",
+                "-net",
+                cidr,
+                "-interface",
+                &route_info.iface,
+            ])
+            .status()
+            .with_context(|| format!("failed to run route delete for {cidr}"))?;
+        Ok(status.success())
+    }
+
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    {
+        let _ = (cidr, route_info);
+        bail!("split-default route management is not supported on this platform")
+    }
+}
+
+fn split_default_route_present(cidr: &str, route_info: &RouteInfo) -> Result<bool> {
+    #[cfg(target_os = "linux")]
+    {
+        let routes = read_ip_route_table()?;
+        Ok(route_present_linux(
+            &routes,
+            cidr,
+            route_info.gateway_ip,
+            &route_info.iface,
+        ))
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        let probe = if cidr == "0.0.0.0/1" {
+            "1.1.1.1"
+        } else {
+            "129.0.0.1"
+        };
+        let output = process::Command::new("route")
+            .args(["-n", "get", probe])
+            .output()
+            .with_context(|| format!("failed to run route get for {probe}"))?;
+        if !output.status.success() {
+            return Ok(false);
+        }
+        let stdout =
+            String::from_utf8(output.stdout).context("invalid UTF-8 from route get output")?;
+        Ok(stdout
+            .lines()
+            .filter_map(|line| line.split_once(':'))
+            .any(|(key, value)| key.trim() == "interface" && value.trim() == route_info.iface))
+    }
+
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    {
+        let _ = (cidr, route_info);
+        bail!("split-default route management is not supported on this platform")
+    }
+}
+
+#[cfg(target_os = "linux")]
 fn read_ip_route_table() -> Result<String> {
     let output = process::Command::new("ip")
         .args(["route", "show"])
@@ -869,9 +974,54 @@ fn read_ip_route_table() -> Result<String> {
     String::from_utf8(output.stdout).context("invalid UTF-8 from ip route show")
 }
 
-fn route_present(routes: &str, cidr: &str, gateway_ip: Ipv4Addr, iface: &str) -> bool {
+#[cfg(target_os = "linux")]
+fn route_present_linux(routes: &str, cidr: &str, gateway_ip: Ipv4Addr, iface: &str) -> bool {
     let expected = format!("{cidr} via {gateway_ip} dev {iface}");
     routes.lines().any(|line| line.contains(&expected))
+}
+
+fn interface_present_command(iface: &str) -> process::Command {
+    #[cfg(target_os = "linux")]
+    {
+        let mut cmd = process::Command::new("ip");
+        cmd.args(["link", "show", "dev", iface]);
+        cmd
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        let mut cmd = process::Command::new("ifconfig");
+        cmd.arg(iface);
+        cmd
+    }
+
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    {
+        let mut cmd = process::Command::new("false");
+        cmd
+    }
+}
+
+fn interface_ipv4_command(iface: &str) -> process::Command {
+    #[cfg(target_os = "linux")]
+    {
+        let mut cmd = process::Command::new("ip");
+        cmd.args(["-4", "-o", "addr", "show", "dev", iface]);
+        cmd
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        let mut cmd = process::Command::new("ifconfig");
+        cmd.arg(iface);
+        cmd
+    }
+
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    {
+        let mut cmd = process::Command::new("false");
+        cmd
+    }
 }
 
 fn render_config_template(roles: &[NodeRole], override_name: Option<&str>) -> String {
@@ -914,8 +1064,11 @@ fn render_config_template(roles: &[NodeRole], override_name: Option<&str>) -> St
     push_blank(&mut out);
 
     push_line(&mut out, "[interface]");
-    push_line(&mut out, "# Linux TUN interface exposed by the daemon.");
-    push_line(&mut out, "name = \"pim0\"");
+    push_line(
+        &mut out,
+        "# TUN interface exposed by the daemon. Linux commonly uses pim0; macOS must use a utunN name.",
+    );
+    push_line(&mut out, &format!("name = {:?}", default_interface_name()));
     push_line(
         &mut out,
         "# Use a static CIDR for predictable labs or \"auto\" to request an address from a gateway.",
@@ -1091,6 +1244,18 @@ fn default_mesh_ip(roles: &BTreeSet<NodeRole>) -> &'static str {
     }
 }
 
+fn default_interface_name() -> &'static str {
+    #[cfg(target_os = "macos")]
+    {
+        "utun0"
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        "pim0"
+    }
+}
+
 fn default_peer_example(roles: &BTreeSet<NodeRole>) -> &'static str {
     if roles.contains(&NodeRole::Gateway) && !roles.contains(&NodeRole::Relay) {
         "relay:9100"
@@ -1196,13 +1361,20 @@ mod tests {
     }
 
     #[test]
+    #[cfg(target_os = "linux")]
     fn route_present_matches_split_default_route() {
         let routes = "0.0.0.0/1 via 10.77.0.1 dev pim0 onlink\n";
-        assert!(route_present(
+        assert!(route_present_linux(
             routes,
             "0.0.0.0/1",
             Ipv4Addr::new(10, 77, 0, 1),
             "pim0"
         ));
+    }
+
+    #[test]
+    fn config_template_uses_platform_interface_name() {
+        let rendered = render_config_template(&[NodeRole::Client], None);
+        assert!(rendered.contains(&format!("name = {:?}", default_interface_name())));
     }
 }

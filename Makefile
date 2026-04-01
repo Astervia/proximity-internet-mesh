@@ -10,7 +10,7 @@ docker-build:
 
 # ── Test phases ───────────────────────────────────────────────────────────────
 
-.PHONY: test-p1 test-p2 test-p3 test-p4 test-p5 test-p7 test-debug-cli test-bluetooth test-all
+.PHONY: test-p1 test-p2 test-p3 test-p4 test-p5 test-p7 test-debug-cli test-route-cli test-bluetooth test-all
 
 test-p1: docker-build
 	bash $(TEST_DIR)/test-phase1.sh
@@ -37,6 +37,9 @@ test-p7: docker-build
 test-debug-cli: docker-build
 	bash $(TEST_DIR)/test-debug-cli.sh
 
+test-route-cli: docker-build
+	bash $(TEST_DIR)/test-route-cli.sh
+
 test-bluetooth: docker-build
 	bash $(TEST_DIR)/test-bluetooth.sh
 
@@ -46,6 +49,7 @@ test-all: docker-build
 	 bash $(TEST_DIR)/test-phase3.sh && \
 	 SKIP_SLOW=1 bash $(TEST_DIR)/test-phase4.sh && \
 	 bash $(TEST_DIR)/test-phase5.sh && \
+	 bash $(TEST_DIR)/test-route-cli.sh && \
 	 bash $(TEST_DIR)/test-bluetooth.sh
 
 # ── Manual stack management ───────────────────────────────────────────────────
@@ -198,6 +202,7 @@ help:
 	@echo "  make test-p5            Phase 5: multi-gateway + failover + load"
 	@echo "  make test-p7            Phase 7: zero-config auto-discovery"
 	@echo "  make test-debug-cli     Debug CLI output in multi-gateway and discovery labs"
+	@echo "  make test-route-cli     Split-default route CLI flow in the single-hop Docker lab"
 	@echo "  make test-bluetooth     Bluetooth fake-sysfs seam test in Docker"
 	@echo "  make test-all           All phases (slow tests skipped)"
 	@echo "  make test-unit          Rust unit tests (no Docker)"
