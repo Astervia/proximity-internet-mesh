@@ -13,3 +13,5 @@ tracing = { workspace = true }
 thiserror = { workspace = true }
 anyhow = { workspace = true }
 bytes = { workspace = true }
+aes-gcm = { workspace = true }
+rand = { workspace = true }

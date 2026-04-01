@@ -10,7 +10,7 @@ docker-build:
 
 # ── Test phases ───────────────────────────────────────────────────────────────
 
-.PHONY: test-p1 test-p2 test-p3 test-p4 test-p5 test-p7 test-debug-cli test-route-cli test-bluetooth test-all
+.PHONY: test-p1 test-p2 test-p3 test-p4 test-p5 test-p7 test-auth test-debug-cli test-route-cli test-bluetooth test-all
 
 test-p1: docker-build
 	bash $(TEST_DIR)/test-phase1.sh
@@ -34,6 +34,9 @@ test-p5: docker-build
 test-p7: docker-build
 	bash $(TEST_DIR)/test-phase7.sh
 
+test-auth: docker-build
+	bash $(TEST_DIR)/test-authorization.sh
+
 test-debug-cli: docker-build
 	bash $(TEST_DIR)/test-debug-cli.sh
 
@@ -49,6 +52,7 @@ test-all: docker-build
 	 bash $(TEST_DIR)/test-phase3.sh && \
 	 SKIP_SLOW=1 bash $(TEST_DIR)/test-phase4.sh && \
 	 bash $(TEST_DIR)/test-phase5.sh && \
+	 bash $(TEST_DIR)/test-authorization.sh && \
 	 bash $(TEST_DIR)/test-route-cli.sh && \
 	 bash $(TEST_DIR)/test-bluetooth.sh
 
@@ -175,6 +179,10 @@ docker-clean:
 	    $(COMPOSE_DIR)/phase4-flow-control.yml \
 	    $(COMPOSE_DIR)/phase5-multigateway.yml \
 	    $(COMPOSE_DIR)/phase7-auto-discovery.yml \
+	    $(COMPOSE_DIR)/auth-allow-all.yml \
+	    $(COMPOSE_DIR)/auth-allow-list.yml \
+	    $(COMPOSE_DIR)/auth-tofu.yml \
+	    $(COMPOSE_DIR)/auth-discovery-key.yml \
 	    $(COMPOSE_DIR)/bluetooth-seam.yml; do \
 	    docker compose -f $$f down -v --remove-orphans 2>/dev/null || true; \
 	done
@@ -201,6 +209,7 @@ help:
 	@echo "  make test-p4-full       Phase 4: includes 6-min NAT timeout test"
 	@echo "  make test-p5            Phase 5: multi-gateway + failover + load"
 	@echo "  make test-p7            Phase 7: zero-config auto-discovery"
+	@echo "  make test-auth          Authorization policies + keyed discovery"
 	@echo "  make test-debug-cli     Debug CLI output in multi-gateway and discovery labs"
 	@echo "  make test-route-cli     Split-default route CLI flow in the single-hop Docker lab"
 	@echo "  make test-bluetooth     Bluetooth fake-sysfs seam test in Docker"

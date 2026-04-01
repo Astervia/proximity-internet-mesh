@@ -1,6 +1,7 @@
 //! Shared foundational types and wire-codec traits.
 
 use bytes::BytesMut;
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::fmt;
 use std::net::Ipv4Addr;
 use std::str::FromStr;
@@ -81,6 +82,25 @@ impl FromStr for NodeId {
                 .map_err(|_| PimError::Config(format!("node id contains invalid hex: {hex}")))?;
         }
         Ok(Self(bytes))
+    }
+}
+
+impl Serialize for NodeId {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(&self.to_hex())
+    }
+}
+
+impl<'de> Deserialize<'de> for NodeId {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let s = String::deserialize(deserializer)?;
+        s.parse().map_err(serde::de::Error::custom)
     }
 }
 

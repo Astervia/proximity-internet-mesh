@@ -89,6 +89,9 @@ pub struct DiscoveryConfig {
     /// Automatically initiate connections to discovered peers advertising gateway capability.
     #[serde(default = "default_connect_gateways")]
     pub connect_gateways: bool,
+    /// Optional 32-byte discovery group key encoded as 64 hex characters.
+    #[serde(default)]
+    pub shared_key: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
@@ -148,6 +151,28 @@ pub struct SecurityConfig {
     /// Whether unencrypted sessions should be rejected.
     #[serde(default = "default_require_encryption")]
     pub require_encryption: bool,
+    /// Authorization policy applied after peer identity is authenticated.
+    #[serde(default)]
+    pub authorization_policy: AuthorizationPolicy,
+    /// Explicitly authorized peers when `authorization_policy = "allow_list"`.
+    #[serde(default)]
+    pub authorized_peers: Vec<crate::NodeId>,
+    /// Persistent trust store used by `trust_on_first_use`.
+    #[serde(default = "default_trust_store_file")]
+    pub trust_store_file: PathBuf,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+/// Direct-peer authorization policy.
+pub enum AuthorizationPolicy {
+    /// Admit any authenticated peer.
+    #[default]
+    AllowAll,
+    /// Admit only peers listed in `authorized_peers`.
+    AllowList,
+    /// Admit authenticated peers on first contact and persist their identity locally.
+    TrustOnFirstUse,
 }
 
 /// Wi-Fi Direct (IEEE 802.11 P2P) discovery and group negotiation configuration.
@@ -308,6 +333,10 @@ fn default_require_encryption() -> bool {
     true
 }
 
+fn default_trust_store_file() -> PathBuf {
+    PathBuf::from("~/.pim/trusted-peers.toml")
+}
+
 fn default_wfd_interface() -> String {
     "wlan0".into()
 }
@@ -387,6 +416,7 @@ impl Default for DiscoveryConfig {
             peer_timeout_ms: default_peer_timeout_ms(),
             connect_relays: default_connect_relays(),
             connect_gateways: default_connect_gateways(),
+            shared_key: None,
         }
     }
 }
@@ -484,6 +514,9 @@ impl Default for SecurityConfig {
         Self {
             key_file: default_key_file(),
             require_encryption: default_require_encryption(),
+            authorization_policy: AuthorizationPolicy::default(),
+            authorized_peers: Vec::new(),
+            trust_store_file: default_trust_store_file(),
         }
     }
 }
@@ -540,6 +573,7 @@ broadcast_interval_ms = 5000
 peer_timeout_ms = 30000
 connect_relays = true
 connect_gateways = true
+shared_key = "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"
 
 [relay]
 enabled = false
@@ -561,6 +595,9 @@ max_connections = 200
 [security]
 key_file = "/tmp/pim/node.key"
 require_encryption = true
+authorization_policy = "allow_list"
+authorized_peers = ["abababababababababababababababab"]
+trust_store_file = "/tmp/pim/trusted-peers.toml"
 
 [wifi_direct]
 enabled = false
@@ -595,6 +632,12 @@ startup_timeout_ms = 15000
         assert_eq!(config.routing.max_hops, 10);
         assert!(!config.gateway.enabled);
         assert!(config.security.require_encryption);
+        assert_eq!(
+            config.security.authorization_policy,
+            AuthorizationPolicy::AllowAll
+        );
+        assert!(config.security.authorized_peers.is_empty());
+        assert!(config.discovery.shared_key.is_none());
     }
 
     #[test]
@@ -605,6 +648,19 @@ startup_timeout_ms = 15000
         assert!(config.gateway.enabled);
         assert_eq!(config.gateway.nat_interface, "wlan0");
         assert_eq!(config.transport.listen_port, 9100);
+        assert_eq!(
+            config.discovery.shared_key.as_deref(),
+            Some("00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff")
+        );
+        assert_eq!(
+            config.security.authorization_policy,
+            AuthorizationPolicy::AllowList
+        );
+        assert_eq!(config.security.authorized_peers.len(), 1);
+        assert_eq!(
+            config.security.trust_store_file,
+            PathBuf::from("/tmp/pim/trusted-peers.toml")
+        );
     }
 
     #[test]
@@ -631,6 +687,7 @@ startup_timeout_ms = 15000
         assert_eq!(config.discovery.peer_timeout_ms, 30000);
         assert!(config.discovery.connect_relays);
         assert!(config.discovery.connect_gateways);
+        assert!(config.discovery.shared_key.is_none());
     }
 
     #[test]
@@ -694,7 +751,33 @@ enabled = true
         assert_eq!(config.discovery.port, 9101);
         assert!(config.discovery.connect_relays);
         assert!(config.discovery.connect_gateways);
+        assert!(config.discovery.shared_key.is_some());
         assert!(!config.relay.enabled);
+        let serialized = config.to_toml_string().unwrap();
+        let reparsed = Config::from_toml_str(&serialized).unwrap();
+        assert_eq!(config, reparsed);
+    }
+
+    #[test]
+    fn authorization_policy_round_trips() {
+        let toml = r#"
+[node]
+name = "t"
+[security]
+authorization_policy = "trust_on_first_use"
+authorized_peers = ["abababababababababababababababab"]
+trust_store_file = "/tmp/pim/trusted-peers.toml"
+"#;
+        let config = Config::from_toml_str(toml).unwrap();
+        assert_eq!(
+            config.security.authorization_policy,
+            AuthorizationPolicy::TrustOnFirstUse
+        );
+        assert_eq!(config.security.authorized_peers.len(), 1);
+        assert_eq!(
+            config.security.trust_store_file,
+            PathBuf::from("/tmp/pim/trusted-peers.toml")
+        );
         let serialized = config.to_toml_string().unwrap();
         let reparsed = Config::from_toml_str(&serialized).unwrap();
         assert_eq!(config, reparsed);

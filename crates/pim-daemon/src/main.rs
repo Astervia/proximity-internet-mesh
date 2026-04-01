@@ -50,6 +50,7 @@ use std::time::{Duration, Instant};
 use anyhow::{bail, Context, Result};
 use bytes::BytesMut;
 use rand::Rng as _;
+use serde::{Deserialize, Serialize};
 use tokio::sync::{mpsc, Mutex, RwLock};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, warn};
@@ -57,9 +58,9 @@ use tracing::{debug, error, info, warn};
 use ed25519_dalek::VerifyingKey;
 use pim_bluetooth::BluetoothDiscovery;
 use pim_core::{
-    Config, DebugDiscoveredPeerSnapshot, DebugGatewaySnapshot, DebugNodeSnapshot,
-    DebugPeerSnapshot, DebugRouteSnapshot, DebugSnapshot, DebugStatsSnapshot, DiscoveryConfig,
-    FrameCodec, NodeId, PeerEndpointConfig,
+    AuthorizationPolicy, Config, DebugDiscoveredPeerSnapshot, DebugGatewaySnapshot,
+    DebugNodeSnapshot, DebugPeerSnapshot, DebugRouteSnapshot, DebugSnapshot, DebugStatsSnapshot,
+    DiscoveryConfig, FrameCodec, NodeId, PeerEndpointConfig,
 };
 use pim_crypto::{
     e2e_decrypt, e2e_encrypt, x25519_public_from_seed, EncryptedFrame, HandshakeConfirm,
@@ -306,6 +307,7 @@ struct DaemonState {
     rate_limiter: Arc<Mutex<RateLimiter>>,
     /// Peer reputation tracker; drives automatic blacklisting.
     reputation: Arc<Mutex<ReputationTracker>>,
+    authorization: Arc<AuthorizationManager>,
     cancel: CancellationToken,
     /// Discovery configuration — cloned at startup for use in the consumer task.
     discovery_config: DiscoveryConfig,
@@ -1190,6 +1192,15 @@ async fn handshake_initiator(
 
     // Derive the peer's real NodeId from their Ed25519 public key.
     let peer_id = NodeId::from_public_key(&sender_pub);
+    match state.authorization.authorize_authenticated_peer(peer_id).await? {
+        AuthorizationDecision::Allowed => {}
+        AuthorizationDecision::TrustedOnFirstUse => {
+            info!(%peer_id, "peer trusted on first use");
+        }
+        AuthorizationDecision::Rejected => {
+            bail!("peer {peer_id} rejected by authorization policy");
+        }
+    }
 
     hs.finalize_initiator(&response)
         .context("handshake finalize")?;
@@ -1269,6 +1280,20 @@ async fn handshake_responder(
     };
 
     let mut hs = Handshaker::new(&state.identity);
+    let presented_peer_id = NodeId::from_public_key(&init.sender_pub);
+    match state
+        .authorization
+        .authorize_authenticated_peer(presented_peer_id)
+        .await?
+    {
+        AuthorizationDecision::Allowed => {}
+        AuthorizationDecision::TrustedOnFirstUse => {
+            info!(%presented_peer_id, "peer trusted on first use");
+        }
+        AuthorizationDecision::Rejected => {
+            bail!("peer {presented_peer_id} rejected by authorization policy");
+        }
+    }
     let response = hs.respond(&init).context("handshake respond")?;
 
     send_handshake(
@@ -2120,6 +2145,125 @@ fn expand_tilde(path: &std::path::Path) -> PathBuf {
     path.to_path_buf()
 }
 
+#[derive(Debug, Serialize, Deserialize, Default)]
+struct TrustedPeersFile {
+    #[serde(default)]
+    peers: Vec<NodeId>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AuthorizationDecision {
+    Allowed,
+    TrustedOnFirstUse,
+    Rejected,
+}
+
+struct AuthorizationManager {
+    policy: AuthorizationPolicy,
+    allow_list: HashSet<NodeId>,
+    trusted_peers: RwLock<HashSet<NodeId>>,
+    trust_store_file: PathBuf,
+}
+
+impl AuthorizationManager {
+    fn new(
+        policy: AuthorizationPolicy,
+        allow_list: impl IntoIterator<Item = NodeId>,
+        trust_store_file: PathBuf,
+    ) -> Result<Self> {
+        let trust_store_file = expand_tilde(&trust_store_file);
+        let trusted_peers = if policy == AuthorizationPolicy::TrustOnFirstUse {
+            load_trusted_peers(&trust_store_file)?
+        } else {
+            HashSet::new()
+        };
+        Ok(Self {
+            policy,
+            allow_list: allow_list.into_iter().collect(),
+            trusted_peers: RwLock::new(trusted_peers),
+            trust_store_file,
+        })
+    }
+
+    async fn authorize_discovered_peer(&self, peer_id: NodeId) -> bool {
+        match self.policy {
+            AuthorizationPolicy::AllowAll | AuthorizationPolicy::TrustOnFirstUse => true,
+            AuthorizationPolicy::AllowList => self.allow_list.contains(&peer_id),
+        }
+    }
+
+    async fn authorize_authenticated_peer(&self, peer_id: NodeId) -> Result<AuthorizationDecision> {
+        match self.policy {
+            AuthorizationPolicy::AllowAll => Ok(AuthorizationDecision::Allowed),
+            AuthorizationPolicy::AllowList => Ok(if self.allow_list.contains(&peer_id) {
+                AuthorizationDecision::Allowed
+            } else {
+                AuthorizationDecision::Rejected
+            }),
+            AuthorizationPolicy::TrustOnFirstUse => {
+                {
+                    let trusted = self.trusted_peers.read().await;
+                    if trusted.contains(&peer_id) {
+                        return Ok(AuthorizationDecision::Allowed);
+                    }
+                }
+
+                let mut trusted = self.trusted_peers.write().await;
+                if trusted.contains(&peer_id) {
+                    return Ok(AuthorizationDecision::Allowed);
+                }
+                trusted.insert(peer_id);
+                if let Err(err) = persist_trusted_peers(&self.trust_store_file, &trusted) {
+                    trusted.remove(&peer_id);
+                    return Err(err).context("persist TOFU trust store");
+                }
+                Ok(AuthorizationDecision::TrustedOnFirstUse)
+            }
+        }
+    }
+}
+
+fn load_trusted_peers(path: &PathBuf) -> Result<HashSet<NodeId>> {
+    if !path.exists() {
+        return Ok(HashSet::new());
+    }
+    let content = std::fs::read_to_string(path)
+        .with_context(|| format!("read trust store {}", path.display()))?;
+    let file: TrustedPeersFile =
+        toml::from_str(&content).with_context(|| format!("parse trust store {}", path.display()))?;
+    Ok(file.peers.into_iter().collect())
+}
+
+fn persist_trusted_peers(path: &PathBuf, peers: &HashSet<NodeId>) -> Result<()> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("create trust store dir {}", parent.display()))?;
+    }
+    let mut ordered: Vec<NodeId> = peers.iter().copied().collect();
+    ordered.sort_by_key(|peer| peer.to_hex());
+    let content = toml::to_string_pretty(&TrustedPeersFile { peers: ordered })
+        .context("serialize trust store")?;
+    atomic_write(
+        path.to_str()
+            .with_context(|| format!("non-utf8 trust store path {}", path.display()))?,
+        content.as_bytes(),
+    )
+    .with_context(|| format!("write trust store {}", path.display()))
+}
+
+fn parse_discovery_shared_key(value: &str) -> Result<[u8; 32]> {
+    if value.len() != 64 {
+        bail!("discovery.shared_key must be 64 hex characters");
+    }
+    let mut key = [0u8; 32];
+    for (idx, chunk) in value.as_bytes().chunks_exact(2).enumerate() {
+        let hex = std::str::from_utf8(chunk).context("discovery.shared_key must be valid UTF-8")?;
+        key[idx] =
+            u8::from_str_radix(hex, 16).with_context(|| format!("invalid discovery key byte {hex}"))?;
+    }
+    Ok(key)
+}
+
 // ── Discovery helpers ─────────────────────────────────────────────────────────
 
 /// Initiate an outbound TCP connection and handshake to `target`.
@@ -2187,6 +2331,14 @@ async fn run_discovery_consumer(
             Some(record) = new_peer_rx.recv() => {
                 // Defense-in-depth: ignore own advertisements.
                 if record.node_id == state.self_id {
+                    continue;
+                }
+
+                if !state.authorization.authorize_discovered_peer(record.node_id).await {
+                    info!(
+                        peer_id = %record.node_id,
+                        "discovered peer rejected by authorization policy"
+                    );
                     continue;
                 }
 
@@ -2507,20 +2659,39 @@ async fn main() -> Result<()> {
     let reconnect = Arc::new(ReconnectManager::new(
         configured_targets.reconnect_targets.iter().copied(),
     ));
+    let authorization = Arc::new(
+        AuthorizationManager::new(
+            config.security.authorization_policy.clone(),
+            config.security.authorized_peers.iter().copied(),
+            config.security.trust_store_file.clone(),
+        )
+        .context("build authorization manager")?,
+    );
+    let discovery_shared_key = config
+        .discovery
+        .shared_key
+        .as_deref()
+        .map(parse_discovery_shared_key)
+        .transpose()
+        .context("parse discovery shared key")?;
 
     let discovery_runtime = if config.discovery.enabled {
         let pubkey: [u8; 32] = identity.signing_key().verifying_key().to_bytes();
         let caps = node_capabilities(&config);
         let (discovery_svc, new_peer_rx) =
             DiscoveryService::new(self_id, pubkey, caps, config.transport.listen_port);
-        let discovery_svc = Arc::new(
+        let discovery_svc = discovery_svc
+            .with_port(config.discovery.port)
+            .with_broadcast_interval(Duration::from_millis(
+                config.discovery.broadcast_interval_ms,
+            ))
+            .with_peer_timeout(Duration::from_millis(config.discovery.peer_timeout_ms));
+        let discovery_svc = if let Some(key) = discovery_shared_key {
+            discovery_svc.with_shared_key(key)
+        } else {
             discovery_svc
-                .with_port(config.discovery.port)
-                .with_broadcast_interval(Duration::from_millis(
-                    config.discovery.broadcast_interval_ms,
-                ))
-                .with_peer_timeout(Duration::from_millis(config.discovery.peer_timeout_ms)),
-        );
+        };
+        let discovery_svc = Arc::new(discovery_svc);
         Some((discovery_svc, new_peer_rx))
     } else {
         None
@@ -2563,6 +2734,7 @@ async fn main() -> Result<()> {
         peer_pubkeys: Arc::new(RwLock::new(HashMap::new())),
         rate_limiter: Arc::new(Mutex::new(RateLimiter::new(DEFAULT_BURST, DEFAULT_RATE))),
         reputation: Arc::new(Mutex::new(ReputationTracker::new())),
+        authorization,
         cancel: cancel.clone(),
         discovery_config: config.discovery.clone(),
         discovery_peer_table: discovery_runtime
@@ -2753,6 +2925,62 @@ mod tests {
 
     fn peer_id(b: u8) -> NodeId {
         NodeId::from_bytes([b; 16])
+    }
+
+    fn temp_trust_store_path() -> PathBuf {
+        std::env::temp_dir().join(format!("pim-trust-{}.toml", rand::random::<u64>()))
+    }
+
+    #[tokio::test]
+    async fn authorization_allow_list_rejects_unlisted_peer() {
+        let path = temp_trust_store_path();
+        let manager = AuthorizationManager::new(
+            AuthorizationPolicy::AllowList,
+            [peer_id(1)],
+            path.clone(),
+        )
+        .unwrap();
+        assert!(manager.authorize_discovered_peer(peer_id(1)).await);
+        assert!(!manager.authorize_discovered_peer(peer_id(2)).await);
+        assert_eq!(
+            manager.authorize_authenticated_peer(peer_id(2)).await.unwrap(),
+            AuthorizationDecision::Rejected
+        );
+        std::fs::remove_file(path).ok();
+    }
+
+    #[tokio::test]
+    async fn authorization_tofu_persists_new_peer() {
+        let path = temp_trust_store_path();
+        let manager = AuthorizationManager::new(
+            AuthorizationPolicy::TrustOnFirstUse,
+            [],
+            path.clone(),
+        )
+        .unwrap();
+        assert_eq!(
+            manager.authorize_authenticated_peer(peer_id(7)).await.unwrap(),
+            AuthorizationDecision::TrustedOnFirstUse
+        );
+
+        let reloaded = AuthorizationManager::new(
+            AuthorizationPolicy::TrustOnFirstUse,
+            [],
+            path.clone(),
+        )
+        .unwrap();
+        assert_eq!(
+            reloaded.authorize_authenticated_peer(peer_id(7)).await.unwrap(),
+            AuthorizationDecision::Allowed
+        );
+        std::fs::remove_file(path).ok();
+    }
+
+    #[test]
+    fn discovery_shared_key_requires_32_bytes_of_hex() {
+        assert!(parse_discovery_shared_key("abcd").is_err());
+        assert!(parse_discovery_shared_key(&"zz".repeat(32)).is_err());
+        assert!(parse_discovery_shared_key(&"11".repeat(32)).is_ok());
     }
 
     #[tokio::test]
