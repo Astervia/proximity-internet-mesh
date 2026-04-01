@@ -1,0 +1,21 @@
+[node]
+name = "client"
+data_dir = "/var/lib/pim"
+
+[interface]
+mesh_ip = "10.77.0.100/24"
+mtu = 1400
+
+[discovery]
+enabled = true
+shared_key = "1111111111111111111111111111111111111111111111111111111111111111"
+
+[transport]
+listen_port = 9100
+
+[security]
+key_file = "/var/lib/pim/node.key"
+require_encryption = true
+authorization_policy = "allow_list"
+authorized_peers = ["34750f98bd59fcfc946da45aaabe933b"]
+trust_store_file = "/var/lib/pim/trusted-peers.toml"
