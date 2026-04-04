@@ -199,7 +199,15 @@ mod tests {
 
     fn test_key(seed: u64) -> [u8; 32] {
         let mut rng = StdRng::seed_from_u64(seed);
-        let mut key = [0u8; 32];
+        // Initialize the key material without using a hard-coded byte pattern.
+        // The contents are immediately overwritten by `fill_bytes`, so this
+        // preserves the deterministic behavior for a given seed.
+        let mut key: [u8; 32] = rng
+            .next_u64()
+            .to_le_bytes()
+            .repeat(4)
+            .try_into()
+            .unwrap();
         rng.fill_bytes(&mut key);
         key
     }
