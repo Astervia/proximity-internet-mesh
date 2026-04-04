@@ -202,12 +202,7 @@ mod tests {
         // Initialize the key material without using a hard-coded byte pattern.
         // The contents are immediately overwritten by `fill_bytes`, so this
         // preserves the deterministic behavior for a given seed.
-        let mut key: [u8; 32] = rng
-            .next_u64()
-            .to_le_bytes()
-            .repeat(4)
-            .try_into()
-            .unwrap();
+        let mut key: [u8; 32] = rng.next_u64().to_le_bytes().repeat(4).try_into().unwrap();
         rng.fill_bytes(&mut key);
         key
     }
