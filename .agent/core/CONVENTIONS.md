@@ -11,6 +11,8 @@ These conventions are specific to this repository and should guide agent work.
 5. Put runtime orchestration in `pim-daemon`, not in leaf crates.
 6. Keep operator-facing behavior explicit in config and docs.
 7. Default new features to opt-in when they change runtime behavior or dependencies.
+8. Prefer asynchronous file I/O via `tokio::fs` over synchronous `std::fs` in async contexts.
+9. Use top-level `#[cfg]` attributes for cross-platform logic instead of internal `#[cfg]` blocks.
 
 ## Repo Design Bias
 
