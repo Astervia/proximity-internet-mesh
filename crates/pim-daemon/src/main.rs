@@ -825,16 +825,16 @@ async fn run_stats_writer(state: Arc<DaemonState>) {
         interval.tick().await;
         let stats = collect_stats(&state).await;
         let content = format_stats(&stats);
-        if let Err(e) = atomic_write(STATS_PATH, content.as_bytes()) {
+        if let Err(e) = atomic_write(STATS_PATH, content.as_bytes()).await {
             debug!("stats write failed: {e}");
         }
     }
 }
 
-fn atomic_write(path: &str, content: &[u8]) -> io::Result<()> {
+async fn atomic_write(path: &str, content: &[u8]) -> io::Result<()> {
     let tmp = format!("{path}.tmp");
-    std::fs::write(&tmp, content)?;
-    std::fs::rename(&tmp, path)?;
+    tokio::fs::write(&tmp, content).await?;
+    tokio::fs::rename(&tmp, path).await?;
     Ok(())
 }
 
@@ -985,7 +985,7 @@ async fn run_debug_snapshot_writer(state: Arc<DaemonState>) {
         interval.tick().await;
         match serde_json::to_vec_pretty(&build_debug_snapshot(&state).await) {
             Ok(content) => {
-                if let Err(e) = atomic_write(DEBUG_SNAPSHOT_PATH, &content) {
+                if let Err(e) = atomic_write(DEBUG_SNAPSHOT_PATH, &content).await {
                     debug!("debug snapshot write failed: {e}");
                 }
             }
@@ -2218,7 +2218,7 @@ impl AuthorizationManager {
                     return Ok(AuthorizationDecision::Allowed);
                 }
                 trusted.insert(peer_id);
-                if let Err(err) = persist_trusted_peers(&self.trust_store_file, &trusted) {
+                if let Err(err) = persist_trusted_peers(&self.trust_store_file, &trusted).await {
                     trusted.remove(&peer_id);
                     return Err(err).context("persist TOFU trust store");
                 }
@@ -2239,9 +2239,10 @@ fn load_trusted_peers(path: &PathBuf) -> Result<HashSet<NodeId>> {
     Ok(file.peers.into_iter().collect())
 }
 
-fn persist_trusted_peers(path: &Path, peers: &HashSet<NodeId>) -> Result<()> {
+async fn persist_trusted_peers(path: &Path, peers: &HashSet<NodeId>) -> Result<()> {
     if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)
+        tokio::fs::create_dir_all(parent)
+            .await
             .with_context(|| format!("create trust store dir {}", parent.display()))?;
     }
     let mut ordered: Vec<NodeId> = peers.iter().copied().collect();
@@ -2253,6 +2254,7 @@ fn persist_trusted_peers(path: &Path, peers: &HashSet<NodeId>) -> Result<()> {
             .with_context(|| format!("non-utf8 trust store path {}", path.display()))?,
         content.as_bytes(),
     )
+    .await
     .with_context(|| format!("write trust store {}", path.display()))
 }
 
