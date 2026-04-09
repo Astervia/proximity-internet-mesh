@@ -844,7 +844,14 @@ fn replace_split_default_route(cidr: &str, route_info: &RouteInfo) -> Result<()>
 #[cfg(target_os = "macos")]
 fn replace_split_default_route(cidr: &str, route_info: &RouteInfo) -> Result<()> {
     let _ = process::Command::new("route")
-        .args(["-n", "delete", "-net", cidr, "-interface", &route_info.iface])
+        .args([
+            "-n",
+            "delete",
+            "-net",
+            cidr,
+            "-interface",
+            &route_info.iface,
+        ])
         .status();
     let status = process::Command::new("route")
         .args(["-n", "add", "-net", cidr, "-interface", &route_info.iface])
@@ -884,7 +891,14 @@ fn remove_split_default_route(cidr: &str, route_info: &RouteInfo) -> Result<bool
 #[cfg(target_os = "macos")]
 fn remove_split_default_route(cidr: &str, route_info: &RouteInfo) -> Result<bool> {
     let status = process::Command::new("route")
-        .args(["-n", "delete", "-net", cidr, "-interface", &route_info.iface])
+        .args([
+            "-n",
+            "delete",
+            "-net",
+            cidr,
+            "-interface",
+            &route_info.iface,
+        ])
         .status()
         .with_context(|| format!("failed to run route delete for {cidr}"))?;
     Ok(status.success())
