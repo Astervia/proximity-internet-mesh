@@ -102,14 +102,9 @@ impl Session {
         transport_frame_from_encrypted(ef)
     }
 
-    fn decrypt_frame(&self, frame: &TransportFrame) -> Result<Vec<u8>> {
-        let mut ct = frame.payload.clone();
-        ct.extend_from_slice(&frame.tag);
-        let ef = EncryptedFrame {
-            nonce: frame.nonce,
-            ciphertext: ct,
-        };
-        Ok(self.recv.decrypt(&ef)?)
+    fn decrypt_frame(&self, mut frame: TransportFrame) -> Result<TransportFrame> {
+        self.recv.decrypt_in_place_detached(&frame.nonce, &mut frame.payload, &frame.tag)?;
+        Ok(frame)
     }
 }
 
@@ -1668,11 +1663,11 @@ async fn run_event_loop(state: Arc<DaemonState>) -> Result<()> {
                             warn!(%from_peer, "data frame before session; dropping");
                             continue;
                         };
-                        let plaintext = match session.decrypt_frame(&frame) {
-                            Ok(p) => p,
+                        let frame = match session.decrypt_frame(frame) {
+                            Ok(f) => f,
                             Err(e) => { warn!(%from_peer, "decrypt: {e}"); continue; }
                         };
-                        let mut buf = BytesMut::from(plaintext.as_slice());
+                        let mut buf = BytesMut::from(frame.payload.as_slice());
                         let mesh = match MeshDataFrame::decode(&mut buf) {
                             Ok(m) => m,
                             Err(e) => { warn!(%from_peer, "mesh decode: {e}"); continue; }
