@@ -691,7 +691,7 @@ dependencies = [
 
 [[package]]
 name = "pim-cli"
-version = "0.1.6"
+version = "0.1.7"
 dependencies = [
  "anyhow",
  "clap",
@@ -737,7 +737,7 @@ dependencies = [
 
 [[package]]
 name = "pim-daemon"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "bytes",
