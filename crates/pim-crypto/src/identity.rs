@@ -38,7 +38,19 @@ impl Identity {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
-        std::fs::write(path, self.signing_key.to_bytes())
+
+        let mut options = std::fs::OpenOptions::new();
+        options.write(true).create(true).truncate(true);
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+
+        use std::io::Write;
+        let mut file = options.open(path)?;
+        file.write_all(&self.signing_key.to_bytes())
     }
 
     /// Load an identity from a private key file.
