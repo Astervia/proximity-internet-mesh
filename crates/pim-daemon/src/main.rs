@@ -2861,6 +2861,52 @@ mod tests {
     }
 
     #[test]
+    fn test_format_stats_output_format() {
+        let stats = StatsSnapshot {
+            peers: 1,
+            routes: 2,
+            packets_forwarded: 3,
+            bytes_forwarded: 4,
+            packets_dropped: 5,
+            congestion_drops: 6,
+            conntrack_size: 7,
+            uptime_secs: 8,
+        };
+        let expected = "peers=1\n\
+                        routes=2\n\
+                        packets_forwarded=3\n\
+                        bytes_forwarded=4\n\
+                        packets_dropped=5\n\
+                        congestion_drops=6\n\
+                        conntrack_size=7\n\
+                        uptime_secs=8\n";
+        assert_eq!(format_stats(&stats), expected);
+    }
+
+    #[test]
+    fn test_format_stats_zero_values() {
+        let stats = StatsSnapshot {
+            peers: 0,
+            routes: 0,
+            packets_forwarded: 0,
+            bytes_forwarded: 0,
+            packets_dropped: 0,
+            congestion_drops: 0,
+            conntrack_size: 0,
+            uptime_secs: 0,
+        };
+        let expected = "peers=0\n\
+                        routes=0\n\
+                        packets_forwarded=0\n\
+                        bytes_forwarded=0\n\
+                        packets_dropped=0\n\
+                        congestion_drops=0\n\
+                        conntrack_size=0\n\
+                        uptime_secs=0\n";
+        assert_eq!(format_stats(&stats), expected);
+    }
+
+    #[test]
     fn backoff_base_capped_at_30s() {
         // 2^4 * 1000 = 16000 > 10000 → capped
         assert_eq!(backoff_base_ms(4), 10_000);
