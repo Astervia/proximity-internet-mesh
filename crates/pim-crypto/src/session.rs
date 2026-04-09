@@ -86,6 +86,25 @@ impl SessionCipher {
         Ok(plaintext)
     }
 
+    /// Decrypts a frame in-place, avoiding an allocation.
+    /// Returns an error if the nonce is replayed, or if decryption fails.
+    pub fn decrypt_in_place_detached(&self, nonce_bytes: &[u8; 12], payload: &mut [u8], tag_bytes: &[u8; 16]) -> Result<(), SessionError> {
+        let counter = u32::from_be_bytes(nonce_bytes[8..12].try_into().unwrap()) as u64;
+        let last = self.last_recv_counter.load(Ordering::SeqCst);
+        if last != u64::MAX && counter <= last {
+            return Err(SessionError::ReplayedNonce);
+        }
+
+        let nonce = Nonce::from_slice(nonce_bytes);
+        let tag = aes_gcm::aead::Tag::<aes_gcm::Aes256Gcm>::from_slice(tag_bytes);
+        aes_gcm::aead::AeadInPlace::decrypt_in_place_detached(&self.cipher, nonce, b"", payload, tag)
+            .map_err(|_| SessionError::DecryptionFailed)?;
+
+        self.last_recv_counter.store(counter, Ordering::SeqCst);
+        Ok(())
+    }
+
+
     /// Build a 12-byte nonce from the prefix and counter.
     fn build_nonce(&self, counter: u32) -> [u8; 12] {
         let mut nonce = [0u8; 12];
