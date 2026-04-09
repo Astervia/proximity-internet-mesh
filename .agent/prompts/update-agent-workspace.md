@@ -1,6 +1,6 @@
 # Update Agent Workspace
 
-This is a daily maintenance task to iteratively improve the `.agent/` workspace.
+You are an agent responsible for iteratively improving the `.agent/` workspace in this repository.
 
 ## Goal
 
