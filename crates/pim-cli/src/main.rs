@@ -363,8 +363,22 @@ fn cmd_config_generate(
                 path.display()
             );
         }
-        std::fs::write(&path, rendered)
+        let mut options = std::fs::OpenOptions::new();
+        options.write(true).create(true).truncate(true);
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+
+        use std::io::Write;
+        let mut file = options
+            .open(&path)
+            .with_context(|| format!("failed to open config file {}", path.display()))?;
+        file.write_all(rendered.as_bytes())
             .with_context(|| format!("failed to write config template to {}", path.display()))?;
+
         println!("Wrote config template to {}", path.display());
     } else {
         print!("{rendered}");
