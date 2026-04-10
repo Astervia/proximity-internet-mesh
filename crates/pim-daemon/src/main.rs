@@ -64,7 +64,7 @@ use pim_core::{
     DiscoveryConfig, FrameCodec, NodeId, PeerEndpointConfig,
 };
 use pim_crypto::{
-    e2e_decrypt, e2e_encrypt, x25519_public_from_seed, EncryptedFrame, HandshakeConfirm,
+    e2e_decrypt_in_place, e2e_encrypt, x25519_public_from_seed, EncryptedFrame, HandshakeConfirm,
     HandshakeInit, HandshakeResponse, Handshaker, Identity, SessionCipher,
 };
 use pim_discovery::{DiscoveryService, NodeCapabilities, PeerRecord, PeerTable};
