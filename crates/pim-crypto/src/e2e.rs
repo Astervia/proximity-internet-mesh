@@ -152,6 +152,55 @@ pub fn e2e_decrypt<'a>(
     Ok(&ciphertext[HEADER_SIZE..tag_start])
 }
 
+/// Decrypt an E2E-encrypted frame in-place, modifying the provided buffer.
+///
+/// Upon success, the plaintext will be shifted to the start of `buffer`
+/// and the buffer will be truncated to the plaintext length.
+pub fn e2e_decrypt_in_place(
+    buffer: &mut Vec<u8>,
+    gateway_ed25519_seed: &[u8; 32],
+) -> Result<(), E2eError> {
+    if buffer.len() < HEADER_SIZE + TAG_SIZE {
+        return Err(E2eError::TooShort);
+    }
+
+    // Parse header
+    let mut ephemeral_pub_bytes = [0u8; 32];
+    ephemeral_pub_bytes.copy_from_slice(&buffer[..32]);
+    let ephemeral_pub = X25519PublicKey::from(ephemeral_pub_bytes);
+
+    let nonce = *Nonce::from_slice(&buffer[32..44]);
+
+    // Derive gateway's static X25519 secret from Ed25519 seed
+    let gw_secret = x25519_from_seed(gateway_ed25519_seed);
+
+    // ECDH
+    let shared_secret = gw_secret.diffie_hellman(&ephemeral_pub);
+
+    // HKDF → AES-256 key (same derivation as encrypt)
+    let hk = Hkdf::<Sha256>::new(None, shared_secret.as_bytes());
+    let mut aes_key = [0u8; 32];
+    hk.expand(b"pim-e2e-v1", &mut aes_key)
+        .expect("32 bytes is valid");
+
+    let cipher = Aes256Gcm::new_from_slice(&aes_key).expect("32 bytes is valid");
+
+    // Decrypt in place. AeadInPlace requires the tag to be provided and removed from the ciphertext.
+    let ct_len = buffer.len() - HEADER_SIZE - TAG_SIZE;
+    let mut tag_bytes = [0u8; TAG_SIZE];
+    tag_bytes.copy_from_slice(&buffer[buffer.len() - TAG_SIZE..]);
+    let tag = aes_gcm::aead::Tag::<Aes256Gcm>::from_slice(&tag_bytes);
+
+    // Shift ciphertext to the start of the buffer so AeadInPlace can work on it
+    buffer.copy_within(HEADER_SIZE..HEADER_SIZE + ct_len, 0);
+    buffer.truncate(ct_len);
+
+    aes_gcm::aead::AeadInPlace::decrypt_in_place_detached(&cipher, &nonce, b"", buffer, tag)
+        .map_err(|_| E2eError::DecryptionFailed)?;
+
+    Ok(())
+}
+
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -218,6 +267,43 @@ mod tests {
             matches!(result, Err(E2eError::DecryptionFailed)),
             "relay must not be able to decrypt gateway's E2E payload"
         );
+    }
+
+    #[test]
+    fn e2e_decrypt_in_place_round_trip() {
+        let seed = gw_seed();
+        let gw_pub = x25519_public_from_seed(&seed);
+
+        let plaintext = b"hello gateway, this is an in-place secret IP packet";
+        let mut encrypted = e2e_encrypt(plaintext, &gw_pub).unwrap();
+
+        e2e_decrypt_in_place(&mut encrypted, &seed).unwrap();
+
+        assert_eq!(encrypted, plaintext);
+    }
+
+    #[test]
+    fn e2e_decrypt_in_place_too_short() {
+        let seed = gw_seed();
+        let mut buffer = vec![0u8; 10];
+        let result = e2e_decrypt_in_place(&mut buffer, &seed);
+        assert!(matches!(result, Err(E2eError::TooShort)));
+    }
+
+    #[test]
+    fn e2e_decrypt_in_place_tampered_payload_rejected() {
+        let seed = gw_seed();
+        let gw_pub = x25519_public_from_seed(&seed);
+
+        let plain = b"important packet";
+        let mut enc = e2e_encrypt(plain, &gw_pub).unwrap();
+
+        // Flip a bit in the ciphertext portion
+        let last = enc.len() - 1;
+        enc[last] ^= 0xFF;
+
+        let result = e2e_decrypt_in_place(&mut enc, &seed);
+        assert!(matches!(result, Err(E2eError::DecryptionFailed)));
     }
 
     #[test]
