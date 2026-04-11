@@ -102,10 +102,10 @@ pub fn e2e_encrypt(plaintext: &[u8], gateway_x25519_pub: &[u8; 32]) -> Result<Ve
 /// Decrypt an E2E-encrypted frame using the gateway's Ed25519 seed.
 ///
 /// `ciphertext` is the output of [`e2e_encrypt`].
-pub fn e2e_decrypt(
-    ciphertext: &[u8],
+pub fn e2e_decrypt<'a>(
+    ciphertext: &'a mut [u8],
     gateway_ed25519_seed: &[u8; 32],
-) -> Result<Vec<u8>, E2eError> {
+) -> Result<&'a [u8], E2eError> {
     if ciphertext.len() < HEADER_SIZE + TAG_SIZE {
         return Err(E2eError::TooShort);
     }
@@ -116,7 +116,6 @@ pub fn e2e_decrypt(
     let ephemeral_pub = X25519PublicKey::from(ephemeral_pub_bytes);
 
     let nonce_bytes = &ciphertext[32..44];
-    let ct = &ciphertext[44..];
 
     // Derive gateway's static X25519 secret from Ed25519 seed
     let gw_secret = x25519_from_seed(gateway_ed25519_seed);
@@ -131,11 +130,26 @@ pub fn e2e_decrypt(
         .expect("32 bytes is valid");
 
     // Decrypt
+    use aes_gcm::aead::AeadInPlace;
     let cipher = Aes256Gcm::new_from_slice(&aes_key).expect("32 bytes is valid");
-    let nonce = Nonce::from_slice(nonce_bytes);
+
+    let mut nonce_array = [0u8; 12];
+    nonce_array.copy_from_slice(nonce_bytes);
+    let nonce = Nonce::from_slice(&nonce_array);
+
+    let tag_start = ciphertext.len() - TAG_SIZE;
+    let mut tag_array = [0u8; 16];
+    tag_array.copy_from_slice(&ciphertext[tag_start..]);
+    let tag = aes_gcm::aead::Tag::<Aes256Gcm>::from_slice(&tag_array);
+
+    let (body, _) = ciphertext.split_at_mut(tag_start);
+    let (_, payload) = body.split_at_mut(HEADER_SIZE);
+
     cipher
-        .decrypt(nonce, ct)
-        .map_err(|_| E2eError::DecryptionFailed)
+        .decrypt_in_place_detached(nonce, b"", payload, tag)
+        .map_err(|_| E2eError::DecryptionFailed)?;
+
+    Ok(&ciphertext[HEADER_SIZE..tag_start])
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -158,8 +172,8 @@ mod tests {
         let gw_pub = x25519_public_from_seed(&seed);
 
         let plaintext = b"hello gateway, this is a secret IP packet";
-        let encrypted = e2e_encrypt(plaintext, &gw_pub).unwrap();
-        let decrypted = e2e_decrypt(&encrypted, &seed).unwrap();
+        let mut encrypted = e2e_encrypt(plaintext, &gw_pub).unwrap();
+        let decrypted = e2e_decrypt(&mut encrypted, &seed).unwrap();
 
         assert_eq!(decrypted, plaintext);
     }
@@ -196,10 +210,10 @@ mod tests {
         let relay_seed = relay_seed();
 
         let plain = b"confidential";
-        let enc = e2e_encrypt(plain, &gw_pub).unwrap();
+        let mut enc = e2e_encrypt(plain, &gw_pub).unwrap();
 
         // Relay tries to decrypt with its own seed — must fail
-        let result = e2e_decrypt(&enc, &relay_seed);
+        let result = e2e_decrypt(&mut enc, &relay_seed);
         assert!(
             matches!(result, Err(E2eError::DecryptionFailed)),
             "relay must not be able to decrypt gateway's E2E payload"
@@ -218,14 +232,15 @@ mod tests {
         let last = enc.len() - 1;
         enc[last] ^= 0xFF;
 
-        let result = e2e_decrypt(&enc, &seed);
+        let result = e2e_decrypt(&mut enc, &seed);
         assert!(matches!(result, Err(E2eError::DecryptionFailed)));
     }
 
     #[test]
     fn too_short_ciphertext_rejected() {
         let seed = gw_seed();
-        let result = e2e_decrypt(&[0u8; 10], &seed);
+        let mut too_short = [0u8; 10];
+        let result = e2e_decrypt(&mut too_short, &seed);
         assert!(matches!(result, Err(E2eError::TooShort)));
     }
 

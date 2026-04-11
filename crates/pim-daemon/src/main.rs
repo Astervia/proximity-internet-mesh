@@ -1685,17 +1685,22 @@ async fn run_event_loop(state: Arc<DaemonState>) -> Result<()> {
                             };
 
                             let mut ip_packet = ip_payload;
+                            let ip_packet_slice: &[u8];
 
                             // E2E decrypt if gateway and flag is set
                             if state.is_gateway && mesh.flags.contains(DataFlags::IS_E2E) {
                                 let seed = state.identity.signing_key().to_bytes();
-                                match e2e_decrypt(&ip_packet, &seed) {
-                                    Ok(dec) => ip_packet = dec,
+                                match e2e_decrypt(&mut ip_packet, &seed) {
+                                    Ok(dec) => {
+                                        ip_packet_slice = dec;
+                                    }
                                     Err(e) => {
                                         warn!(%from_peer, "E2E decrypt: {e}");
                                         continue;
                                     }
                                 }
+                            } else {
+                                ip_packet_slice = &ip_packet;
                             }
 
                             // Check if the packet is destined for the gateway's
@@ -1703,14 +1708,14 @@ async fn run_event_loop(state: Arc<DaemonState>) -> Result<()> {
                             // writing to TUN (where the reply would race with
                             // run_gateway_return / run_event_loop readers).
                             let dst_local = state.gw_engine.is_some()
-                                && ip_packet.len() >= 20
+                                && ip_packet_slice.len() >= 20
                                 && Ipv4Addr::new(
-                                    ip_packet[16], ip_packet[17],
-                                    ip_packet[18], ip_packet[19],
+                                    ip_packet_slice[16], ip_packet_slice[17],
+                                    ip_packet_slice[18], ip_packet_slice[19],
                                 ) == Ipv4Addr::from(state.mesh_ip.load(Ordering::Relaxed));
 
                             if dst_local {
-                                if let Some(reply) = icmp_echo_reply(&ip_packet) {
+                                if let Some(reply) = icmp_echo_reply(ip_packet_slice) {
                                     let next_hop = state.routing.lock().await.lookup(mesh.src_id);
                                     let session = match next_hop {
                                         Some(next_hop) => state.sessions.read().await.get(&next_hop).cloned(),
