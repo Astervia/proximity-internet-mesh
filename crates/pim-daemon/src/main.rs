@@ -103,7 +103,8 @@ impl Session {
     }
 
     fn decrypt_frame(&self, mut frame: TransportFrame) -> Result<TransportFrame> {
-        self.recv.decrypt_in_place_detached(&frame.nonce, &mut frame.payload, &frame.tag)?;
+        self.recv
+            .decrypt_in_place_detached(&frame.nonce, &mut frame.payload, &frame.tag)?;
         Ok(frame)
     }
 }
@@ -1698,23 +1699,16 @@ async fn run_event_loop(state: Arc<DaemonState>) -> Result<()> {
                             };
 
                             let mut ip_packet = ip_payload;
-                            let ip_packet_slice: &[u8];
 
                             // E2E decrypt if gateway and flag is set
                             if state.is_gateway && mesh.flags.contains(DataFlags::IS_E2E) {
                                 let seed = state.identity.signing_key().to_bytes();
-                                match e2e_decrypt(&mut ip_packet, &seed) {
-                                    Ok(dec) => {
-                                        ip_packet_slice = dec;
-                                    }
-                                    Err(e) => {
+                                if let Err(e) = e2e_decrypt_in_place(&mut ip_packet, &seed) {
                                         warn!(%from_peer, "E2E decrypt: {e}");
                                         continue;
-                                    }
                                 }
-                            } else {
-                                ip_packet_slice = &ip_packet;
                             }
+                            let ip_packet_slice = ip_packet.as_slice();
 
                             // Check if the packet is destined for the gateway's
                             // own mesh IP.  We handle it in userspace instead of
