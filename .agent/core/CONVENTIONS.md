@@ -13,6 +13,7 @@ These conventions are specific to this repository and should guide agent work.
 7. Default new features to opt-in when they change runtime behavior or dependencies.
 8. Prefer asynchronous file I/O via `tokio::fs` over synchronous `std::fs` in async contexts.
 9. Use top-level `#[cfg]` attributes for cross-platform logic instead of internal `#[cfg]` blocks.
+10. Explicitly use `OpenOptions` with strict permissions (e.g., `mode(0o600)` on Unix) when writing sensitive data, rather than relying on default system umasks.
 
 ## Repo Design Bias
 
