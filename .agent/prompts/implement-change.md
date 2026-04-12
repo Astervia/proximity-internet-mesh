@@ -6,6 +6,7 @@ Requirements:
 
 - Trace the current behavior before editing.
 - Pull broader repository context from `README.md` and `./docs` before inventing new assumptions.
+- Review `.jules/sentinel.md` and `.jules/bolt.md` to ensure the change avoids regressions against known security and performance project learnings.
 - Change the smallest reasonable surface that solves the task.
 - Preserve crate boundaries unless the task clearly requires otherwise.
 - Keep config and operator-facing behavior backward compatible where practical.
