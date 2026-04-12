@@ -11,7 +11,7 @@
 //! The gateway's static X25519 key is derived from its Ed25519 seed via HKDF
 //! so that no separate key file is needed.
 
-use aes_gcm::aead::{Aead, KeyInit};
+use aes_gcm::aead::KeyInit;
 use aes_gcm::{Aes256Gcm, Nonce};
 use hkdf::Hkdf;
 use rand::rngs::OsRng;
@@ -86,17 +86,21 @@ pub fn e2e_encrypt(plaintext: &[u8], gateway_x25519_pub: &[u8; 32]) -> Result<Ve
     rand::RngCore::fill_bytes(&mut OsRng, &mut nonce_bytes);
     let nonce = Nonce::from_slice(&nonce_bytes);
 
-    // AES-256-GCM encrypt
+    // AES-256-GCM encrypt in-place
     let cipher = derive_e2e_cipher(&shared_secret);
-    let ciphertext_with_tag = cipher
-        .encrypt(nonce, plaintext)
-        .map_err(|_| E2eError::EncryptionFailed)?;
 
-    // Assemble: ephemeral_pub || nonce || ciphertext_with_tag
-    let mut out = Vec::with_capacity(HEADER_SIZE + ciphertext_with_tag.len());
+    // Assemble directly into the output buffer to avoid intermediate allocations
+    let mut out = Vec::with_capacity(HEADER_SIZE + plaintext.len() + TAG_SIZE);
     out.extend_from_slice(&ephemeral_pub.to_bytes());
     out.extend_from_slice(&nonce_bytes);
-    out.extend_from_slice(&ciphertext_with_tag);
+    out.extend_from_slice(plaintext);
+
+    use aes_gcm::aead::AeadInPlace;
+    let tag = cipher
+        .encrypt_in_place_detached(nonce, b"", &mut out[HEADER_SIZE..])
+        .map_err(|_| E2eError::EncryptionFailed)?;
+
+    out.extend_from_slice(&tag);
 
     Ok(out)
 }
