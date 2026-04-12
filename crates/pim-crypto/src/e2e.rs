@@ -16,7 +16,7 @@ use aes_gcm::{Aes256Gcm, Nonce};
 use hkdf::Hkdf;
 use rand::rngs::OsRng;
 use sha2::Sha256;
-use x25519_dalek::{PublicKey as X25519PublicKey, StaticSecret};
+use x25519_dalek::{PublicKey as X25519PublicKey, SharedSecret, StaticSecret};
 
 // ── Error ─────────────────────────────────────────────────────────────────────
 
@@ -40,6 +40,14 @@ const EPHEMERAL_PUB_SIZE: usize = 32;
 const NONCE_SIZE: usize = 12;
 const TAG_SIZE: usize = 16;
 const HEADER_SIZE: usize = EPHEMERAL_PUB_SIZE + NONCE_SIZE; // 44
+
+fn derive_e2e_cipher(shared_secret: &SharedSecret) -> Aes256Gcm {
+    let hk = Hkdf::<Sha256>::new(None, shared_secret.as_bytes());
+    let mut okm = [0u8; 32];
+    hk.expand(b"pim-e2e-v1", &mut okm)
+        .expect("32 bytes is valid");
+    Aes256Gcm::new_from_slice(&okm).expect("32 bytes is valid")
+}
 
 // ── Public API ────────────────────────────────────────────────────────────────
 
@@ -73,19 +81,13 @@ pub fn e2e_encrypt(plaintext: &[u8], gateway_x25519_pub: &[u8; 32]) -> Result<Ve
     let gateway_pub = X25519PublicKey::from(*gateway_x25519_pub);
     let shared_secret = ephemeral_secret.diffie_hellman(&gateway_pub);
 
-    // HKDF → AES-256 key
-    let hk = Hkdf::<Sha256>::new(None, shared_secret.as_bytes());
-    let mut aes_key = [0u8; 32];
-    hk.expand(b"pim-e2e-v1", &mut aes_key)
-        .expect("32 bytes is valid");
-
     // Random nonce
     let mut nonce_bytes = [0u8; NONCE_SIZE];
     rand::RngCore::fill_bytes(&mut OsRng, &mut nonce_bytes);
     let nonce = Nonce::from_slice(&nonce_bytes);
 
     // AES-256-GCM encrypt
-    let cipher = Aes256Gcm::new_from_slice(&aes_key).expect("32 bytes is valid");
+    let cipher = derive_e2e_cipher(&shared_secret);
     let ciphertext_with_tag = cipher
         .encrypt(nonce, plaintext)
         .map_err(|_| E2eError::EncryptionFailed)?;
@@ -123,15 +125,9 @@ pub fn e2e_decrypt<'a>(
     // ECDH
     let shared_secret = gw_secret.diffie_hellman(&ephemeral_pub);
 
-    // HKDF → AES-256 key (same derivation as encrypt)
-    let hk = Hkdf::<Sha256>::new(None, shared_secret.as_bytes());
-    let mut aes_key = [0u8; 32];
-    hk.expand(b"pim-e2e-v1", &mut aes_key)
-        .expect("32 bytes is valid");
-
     // Decrypt
     use aes_gcm::aead::AeadInPlace;
-    let cipher = Aes256Gcm::new_from_slice(&aes_key).expect("32 bytes is valid");
+    let cipher = derive_e2e_cipher(&shared_secret);
 
     let mut nonce_array = [0u8; 12];
     nonce_array.copy_from_slice(nonce_bytes);
@@ -177,13 +173,7 @@ pub fn e2e_decrypt_in_place(
     // ECDH
     let shared_secret = gw_secret.diffie_hellman(&ephemeral_pub);
 
-    // HKDF → AES-256 key (same derivation as encrypt)
-    let hk = Hkdf::<Sha256>::new(None, shared_secret.as_bytes());
-    let mut aes_key = [0u8; 32];
-    hk.expand(b"pim-e2e-v1", &mut aes_key)
-        .expect("32 bytes is valid");
-
-    let cipher = Aes256Gcm::new_from_slice(&aes_key).expect("32 bytes is valid");
+    let cipher = derive_e2e_cipher(&shared_secret);
 
     // Decrypt in place. AeadInPlace requires the tag to be provided and removed from the ciphertext.
     let ct_len = buffer.len() - HEADER_SIZE - TAG_SIZE;
