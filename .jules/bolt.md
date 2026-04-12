@@ -5,3 +5,6 @@
 ## 2024-05-14 - E2E payload decryption zero-copy allocation optimization
 **Learning:** Similar to TransportFrames, decrypting received E2E payloads created unnecessary memory pressure due to buffer allocation of `Vec<u8>`. In an async daemon doing heavy network I/O, allocating strings or slices in a hot path causes bottlenecks.
 **Action:** Decrypt E2E payload within its original slice over allocating copies of the slice for the cipher output using `AeadInPlace` in `aes-gcm`.
+## 2024-05-15 - E2E payload encryption zero-copy allocation optimization
+**Learning:** E2E payload encryption created unnecessary memory pressure due to buffer allocation. In an async daemon doing heavy network I/O, allocating intermediate strings or slices in a hot path causes bottlenecks. We refactored `e2e_encrypt` to use `encrypt_in_place_detached` directly on the pre-allocated output buffer instead of allocating an intermediate vector for the ciphertext.
+**Action:** Favor using `AeadInPlace` for encryption when appending to an existing or pre-allocated buffer to avoid unnecessary memory allocations.
