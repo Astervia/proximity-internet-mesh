@@ -2558,7 +2558,19 @@ async fn main() -> Result<()> {
         Config::load(std::path::Path::new(&config_path)).context("failed to load config")?;
     info!(config = %config_path, node = %config.node.name, "daemon starting");
 
-    std::fs::write(&pid_file, std::process::id().to_string())
+    let mut pid_options = std::fs::OpenOptions::new();
+    pid_options.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        pid_options.mode(0o644);
+    }
+    let mut pid_f = pid_options
+        .open(&pid_file)
+        .context("failed to open PID file")?;
+    use std::io::Write;
+    pid_f
+        .write_all(std::process::id().to_string().as_bytes())
         .context("failed to write PID file")?;
 
     let key_path = expand_tilde(&config.security.key_file);
