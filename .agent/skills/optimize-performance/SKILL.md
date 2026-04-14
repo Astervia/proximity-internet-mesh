@@ -1,0 +1,40 @@
+# Skill: Optimize Performance
+
+Use this skill when identifying and implementing performance optimizations in the repository.
+
+## Purpose
+
+Standardize the workflow for making performance improvements (e.g., zero-copy parsing, replacing blocking I/O with async I/O, optimizing cryptographic operations) while ensuring code readability, safety, and proper documentation.
+
+## Workflow
+
+1. **Identify the Bottleneck**
+    - Ensure the optimization targets a hot path or a known bottleneck.
+    - Review `.jules/bolt.md` to avoid duplicating previous learnings or reverting to sub-optimal patterns.
+
+2. **Implement the Optimization**
+    - Prefer zero-copy allocations and in-place operations where possible (e.g., `AeadInPlace` for network frame decryption).
+    - Ensure asynchronous operations do not block the executor thread (e.g., use `tokio::fs` instead of `std::fs` inside async contexts).
+    - Never sacrifice code readability and maintainability for micro-optimizations. Code should remain idiomatic and clear.
+
+3. **Measure and Verify**
+    - Measure the impact of the change (e.g., through benchmarks, profiling, or clear theoretical complexity reduction).
+    - Run all relevant tests using `cargo test --workspace` to verify functional correctness.
+    - Ensure that the optimization does not introduce any security regressions by checking `.jules/sentinel.md`.
+
+4. **Document the Impact**
+    - Always add clear inline code comments explaining the *why* and *how* of the optimization.
+    - Document the expected performance improvement in the commit message or PR description.
+    - If a critical codebase-specific performance learning was discovered, append it to `.jules/bolt.md`.
+
+## Expected Output
+
+- Clean, optimized code with explanatory inline comments.
+- A descriptive commit message detailing the benchmark or expected impact.
+- An updated `.jules/bolt.md` if a new learning was established.
+
+## Done Criteria
+
+- Tests pass successfully without regressions.
+- The change provides a clear, documented performance benefit.
+- The codebase remains readable and maintainable.
