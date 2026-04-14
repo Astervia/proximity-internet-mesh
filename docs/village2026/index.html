@@ -1,0 +1,1705 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="UTF-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+        <title>Proximity Internet Mesh — IPE Village 2026</title>
+        <link rel="preconnect" href="https://fonts.googleapis.com" />
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+        <link
+            href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:ital,wght@0,300;0,400;0,500;0,700;1,400&display=swap"
+            rel="stylesheet"
+        />
+        <style>
+            :root {
+                --bg: #080d08;
+                --bg2: #0d160d;
+                --bg3: #121d12;
+                --border: #1a2e1a;
+                --dim: #243824;
+                --text: #b4cbb4;
+                --text-dim: #4e6e4e;
+                --green: #3dd66e;
+                --green-b: #52ff88;
+                --green-glow: rgba(61, 214, 110, 0.12);
+                --amber: #e8a830;
+                --amber-glow: rgba(232, 168, 48, 0.12);
+                --red: #d95050;
+                --blue: #4a9eff;
+            }
+
+            *,
+            *::before,
+            *::after {
+                box-sizing: border-box;
+                margin: 0;
+                padding: 0;
+            }
+
+            html,
+            body {
+                width: 100%;
+                height: 100%;
+                overflow: hidden;
+                background: var(--bg);
+                color: var(--text);
+                font-family: "JetBrains Mono", "Courier New", monospace;
+                font-size: 16px;
+                line-height: 1.6;
+            }
+
+            /* scanline overlay */
+            body::after {
+                content: "";
+                position: fixed;
+                inset: 0;
+                pointer-events: none;
+                background: repeating-linear-gradient(
+                    0deg,
+                    transparent 0px,
+                    transparent 3px,
+                    rgba(0, 0, 0, 0.06) 3px,
+                    rgba(0, 0, 0, 0.06) 4px
+                );
+                z-index: 9999;
+            }
+
+            /* ─── Deck ─── */
+            #deck {
+                position: relative;
+                width: 100vw;
+                height: 100vh;
+            }
+
+            .slide {
+                position: absolute;
+                inset: 0;
+                display: none;
+                flex-direction: column;
+                padding: 52px 80px 72px;
+            }
+            .slide.active {
+                display: flex;
+            }
+
+            /* ─── Navigation ─── */
+            #progress {
+                position: fixed;
+                bottom: 52px;
+                left: 0;
+                right: 0;
+                height: 2px;
+                background: var(--border);
+                z-index: 100;
+            }
+            #progress-fill {
+                height: 100%;
+                background: var(--green);
+                box-shadow: 0 0 8px var(--green);
+                transition: width 0.25s ease;
+            }
+
+            #nav {
+                position: fixed;
+                bottom: 0;
+                left: 0;
+                right: 0;
+                height: 52px;
+                display: flex;
+                align-items: center;
+                justify-content: space-between;
+                padding: 0 80px;
+                border-top: 1px solid var(--border);
+                background: rgba(8, 13, 8, 0.97);
+                z-index: 100;
+            }
+
+            .nav-btn {
+                background: transparent;
+                border: 1px solid var(--border);
+                color: var(--text-dim);
+                font-family: inherit;
+                font-size: 11px;
+                letter-spacing: 0.12em;
+                padding: 7px 20px;
+                cursor: pointer;
+                text-transform: uppercase;
+                transition:
+                    border-color 0.15s,
+                    color 0.15s,
+                    box-shadow 0.15s;
+            }
+            .nav-btn:hover:not(:disabled) {
+                border-color: var(--green);
+                color: var(--green);
+                box-shadow: 0 0 10px var(--green-glow);
+            }
+            .nav-btn:disabled {
+                opacity: 0.18;
+                cursor: not-allowed;
+            }
+
+            #counter {
+                font-size: 11px;
+                color: var(--text-dim);
+                letter-spacing: 0.12em;
+            }
+            #counter .cur {
+                color: var(--green);
+            }
+
+            /* ─── Slide prompt ─── */
+            .prompt {
+                font-size: 11px;
+                color: var(--text-dim);
+                margin-bottom: 44px;
+                letter-spacing: 0.04em;
+            }
+            .prompt-char {
+                color: var(--green);
+            }
+
+            /* ─── Type scale ─── */
+            .label {
+                font-size: 11px;
+                letter-spacing: 0.2em;
+                text-transform: uppercase;
+                color: var(--text-dim);
+                margin-bottom: 14px;
+            }
+
+            h1 {
+                font-size: clamp(34px, 4.4vw, 58px);
+                font-weight: 700;
+                line-height: 1.05;
+                letter-spacing: -0.02em;
+                color: var(--green-b);
+                text-shadow: 0 0 50px var(--green-glow);
+                margin-bottom: 14px;
+            }
+
+            h2 {
+                font-size: clamp(22px, 2.8vw, 38px);
+                font-weight: 700;
+                line-height: 1.15;
+                color: var(--green-b);
+                margin-bottom: 30px;
+            }
+
+            h3 {
+                font-size: clamp(14px, 1.5vw, 18px);
+                color: var(--amber);
+                font-weight: 500;
+                margin-bottom: 10px;
+            }
+
+            p {
+                font-size: clamp(13px, 1.2vw, 15px);
+                line-height: 1.75;
+            }
+
+            .big {
+                font-size: clamp(16px, 1.8vw, 22px);
+                line-height: 1.55;
+            }
+
+            /* ─── Layout ─── */
+            .spacer {
+                flex: 1;
+            }
+            .center {
+                display: flex;
+                flex-direction: column;
+                align-items: center;
+                justify-content: center;
+                text-align: center;
+                flex: 1;
+            }
+
+            .cols {
+                display: grid;
+                gap: 32px;
+            }
+            .cols-2 {
+                grid-template-columns: 1fr 1fr;
+            }
+            .cols-3 {
+                grid-template-columns: 1fr 1fr 1fr;
+            }
+            .cols-21 {
+                grid-template-columns: 2fr 1fr;
+            }
+
+            .divider {
+                border: none;
+                border-top: 1px solid var(--border);
+                margin: 28px 0;
+            }
+
+            /* ─── Card ─── */
+            .card {
+                border: 1px solid var(--border);
+                background: var(--bg2);
+                padding: 22px 26px;
+                position: relative;
+            }
+            .card::before {
+                content: "";
+                position: absolute;
+                top: 0;
+                left: 0;
+                right: 0;
+                height: 2px;
+                background: var(--green);
+                opacity: 0.35;
+            }
+            .card.amber::before {
+                background: var(--amber);
+                opacity: 0.5;
+            }
+            .card.red::before {
+                background: var(--red);
+                opacity: 0.5;
+            }
+            .card.blue::before {
+                background: var(--blue);
+                opacity: 0.4;
+            }
+
+            /* ─── Bullet list ─── */
+            .bullets {
+                list-style: none;
+                display: flex;
+                flex-direction: column;
+                gap: 13px;
+            }
+            .bullets li {
+                font-size: clamp(12px, 1.15vw, 14px);
+                padding-left: 22px;
+                position: relative;
+                color: var(--text);
+            }
+            .bullets li::before {
+                content: "▸";
+                position: absolute;
+                left: 0;
+                color: var(--green);
+            }
+            .bullets li.a::before {
+                color: var(--amber);
+            }
+            .bullets li.r::before {
+                color: var(--red);
+            }
+
+            /* ─── Code block ─── */
+            .code {
+                background: var(--bg3);
+                border: 1px solid var(--border);
+                border-left: 3px solid var(--green);
+                padding: 18px 22px;
+                font-size: clamp(11px, 1vw, 13px);
+                line-height: 1.9;
+            }
+            .cc {
+                color: var(--text-dim);
+            } /* comment */
+            .ck {
+                color: var(--amber);
+            } /* key */
+            .cv {
+                color: var(--green);
+            } /* value */
+            .cp {
+                color: var(--green-b);
+            } /* prompt $ */
+            .cm {
+                color: var(--text);
+            } /* command */
+            .cg {
+                color: var(--text-dim);
+            } /* dim output */
+
+            /* ─── Table ─── */
+            .tbl {
+                width: 100%;
+                border-collapse: collapse;
+                font-size: clamp(11px, 1.05vw, 13px);
+            }
+            .tbl th {
+                padding: 9px 14px;
+                text-align: left;
+                border-bottom: 1px solid var(--border);
+                color: var(--text-dim);
+                font-weight: 400;
+                letter-spacing: 0.06em;
+                text-transform: uppercase;
+                font-size: 10px;
+            }
+            .tbl th.pim {
+                color: var(--green);
+            }
+            .tbl td {
+                padding: 9px 14px;
+                border-bottom: 1px solid var(--border);
+            }
+            .tbl td.pim {
+                color: var(--green);
+                font-weight: 500;
+            }
+            .tbl tr:hover td {
+                background: var(--bg2);
+            }
+            .yes {
+                color: var(--green);
+            }
+            .no {
+                color: var(--red);
+            }
+            .par {
+                color: var(--amber);
+            }
+
+            /* ─── Badge ─── */
+            .badge {
+                display: inline-block;
+                padding: 2px 9px;
+                border: 1px solid var(--green);
+                color: var(--green);
+                font-size: 10px;
+                letter-spacing: 0.1em;
+                text-transform: uppercase;
+            }
+            .badge.a {
+                border-color: var(--amber);
+                color: var(--amber);
+            }
+
+            /* ─── Stat number ─── */
+            .stat-n {
+                font-size: clamp(32px, 4.5vw, 56px);
+                font-weight: 700;
+                color: var(--green-b);
+                line-height: 1;
+                text-shadow: 0 0 30px var(--green-glow);
+            }
+            .stat-l {
+                font-size: 12px;
+                color: var(--text-dim);
+                margin-top: 4px;
+            }
+
+            /* ─── Inline highlight ─── */
+            .hl {
+                color: var(--green-b);
+                font-weight: 500;
+            }
+            .hla {
+                color: var(--amber);
+                font-weight: 500;
+            }
+            code {
+                color: var(--green);
+                font-family: inherit;
+            }
+
+            /* ─── Blinking cursor ─── */
+            .cursor {
+                display: inline-block;
+                width: 10px;
+                height: 1.1em;
+                background: var(--green-b);
+                vertical-align: middle;
+                margin-left: 2px;
+                animation: blink 1.1s step-end infinite;
+            }
+            @keyframes blink {
+                0%,
+                100% {
+                    opacity: 1;
+                }
+                50% {
+                    opacity: 0;
+                }
+            }
+
+            /* ─── Frame annotation (protocol slide) ─── */
+            .frame-table {
+                width: 100%;
+                border-collapse: collapse;
+                font-size: 12px;
+            }
+            .frame-table td {
+                padding: 5px 10px;
+                border: 1px solid var(--border);
+            }
+            .frame-table td:first-child {
+                color: var(--amber);
+                font-weight: 500;
+                white-space: nowrap;
+            }
+            .frame-table td:nth-child(2) {
+                color: var(--text-dim);
+                width: 70px;
+                text-align: right;
+                white-space: nowrap;
+            }
+            .frame-table td:last-child {
+                color: var(--text-dim);
+                font-size: 11px;
+            }
+            .frame-table tr.enc td {
+                background: var(--bg3);
+            }
+
+            /* ─── SVG shared marker colors ─── */
+            /* (each SVG defines its own defs) */
+        </style>
+    </head>
+    <body>
+        <div id="deck">
+            <!-- ══════════════════════════════════════════════════════════
+     SLIDE 1  —  TITLE
+══════════════════════════════════════════════════════════ -->
+            <div class="slide active" id="s1">
+                <div class="prompt"><span class="prompt-char">$</span> ./pim-presentation --event ipe-village-2026</div>
+                <div class="spacer"></div>
+                <div>
+                    <div class="label">astervia.tech presents</div>
+                    <h1>Proximity<br />Internet Mesh</h1>
+                    <p class="big" style="color: var(--text-dim); margin-bottom: 36px">
+                        Internet that survives the internet.<span class="cursor"></span>
+                    </p>
+                    <hr class="divider" style="margin-bottom: 24px" />
+                    <div style="display: flex; gap: 48px; font-size: 12px; color: var(--text-dim)">
+                        <span><span class="hl">Event</span> — IPE Village 2026</span>
+                        <span><span class="hl">Contact</span> — pim@astervia.tech</span>
+                    </div>
+                </div>
+                <div class="spacer"></div>
+            </div>
+
+            <!-- ══════════════════════════════════════════════════════════
+     SLIDE 2  —  PROBLEM: FRAGILE INFRASTRUCTURE
+══════════════════════════════════════════════════════════ -->
+            <div class="slide" id="s2">
+                <div class="prompt"><span class="prompt-char">$</span> pim diagnose --network global</div>
+                <h2>The internet is more fragile<br />than we think.</h2>
+                <div class="cols cols-3" style="margin-bottom: 30px">
+                    <div class="card red">
+                        <div style="font-size: 26px; margin-bottom: 10px">⚡</div>
+                        <h3>Governments</h3>
+                        <p>
+                            Internet shutdowns are on the rise. States treat connectivity as a lever of control — Iran,
+                            Russia, Myanmar, Ethiopia. One order and your network is gone.
+                        </p>
+                    </div>
+                    <div class="card red">
+                        <div style="font-size: 26px; margin-bottom: 10px">🌊</div>
+                        <h3>Disasters</h3>
+                        <p>
+                            Earthquakes, floods, and hurricanes sever undersea cables and destroy base stations — often
+                            at exactly the moment when connectivity matters most.
+                        </p>
+                    </div>
+                    <div class="card red">
+                        <div style="font-size: 26px; margin-bottom: 10px">🏔</div>
+                        <h3>No Infrastructure</h3>
+                        <p>
+                            Billions live without reliable last-mile connectivity. Remote offices, field operations, and
+                            emerging markets pay the price every day.
+                        </p>
+                    </div>
+                </div>
+                <hr class="divider" />
+                <p class="big" style="color: var(--text-dim)">
+                    Every one of these scenarios breaks one assumption:
+                    <span class="hl">the cloud is reachable.</span>
+                </p>
+            </div>
+
+            <!-- ══════════════════════════════════════════════════════════
+     SLIDE 3  —  PROBLEM: COMPANIES FEEL IT
+══════════════════════════════════════════════════════════ -->
+            <div class="slide" id="s3">
+                <div class="prompt"><span class="prompt-char">$</span> pim diagnose --scope business-impact</div>
+                <h2>Companies pay the cost.</h2>
+                <div class="cols cols-2" style="align-items: start">
+                    <ul class="bullets">
+                        <li>Remote offices in regions with unreliable ISPs go dark without notice</li>
+                        <li>Field teams — logistics, energy, agriculture — lose coordination mid-operation</li>
+                        <li>Cloud-dependent SaaS stacks become useless the moment the uplink dies</li>
+                        <li>Emergency response systems fail exactly when failure is least affordable</li>
+                        <li>Internet regulation creates compliance risk in any market that can flip a switch</li>
+                    </ul>
+                    <div class="card" style="align-self: center">
+                        <div class="label" style="margin-bottom: 18px">The compounding problem</div>
+                        <p style="line-height: 2.1">
+                            Your VPN needs the cloud.<br />
+                            Your auth needs the cloud.<br />
+                            Your SaaS needs the cloud.<br />
+                            Your monitoring needs the cloud.
+                        </p>
+                        <hr class="divider" />
+                        <p class="big" style="color: var(--red)">No cloud = no business.</p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- ══════════════════════════════════════════════════════════
+     SLIDE 4  —  PROBLEM: EXISTING SOLUTIONS FALL SHORT
+══════════════════════════════════════════════════════════ -->
+            <div class="slide" id="s4">
+                <div class="prompt"><span class="prompt-char">$</span> pim compare --alternatives</div>
+                <h2>Existing solutions fall short.</h2>
+                <table class="tbl">
+                    <thead>
+                        <tr>
+                            <th>Capability</th>
+                            <th>Traditional VPN</th>
+                            <th>Satellite</th>
+                            <th>Mesh Apps</th>
+                            <th class="pim">▸ PIM</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td>Full IP routing</td>
+                            <td class="yes">✓ yes</td>
+                            <td class="yes">✓ yes</td>
+                            <td class="no">✗ text only</td>
+                            <td class="pim yes">✓ yes</td>
+                        </tr>
+                        <tr>
+                            <td>No central server required</td>
+                            <td class="no">✗ needs cloud</td>
+                            <td class="no">✗ needs satellite</td>
+                            <td class="par">~ partial</td>
+                            <td class="pim yes">✓ fully serverless</td>
+                        </tr>
+                        <tr>
+                            <td>Works without infrastructure</td>
+                            <td class="no">✗</td>
+                            <td class="yes">✓ expensive</td>
+                            <td class="par">~ limited range</td>
+                            <td class="pim yes">✓</td>
+                        </tr>
+                        <tr>
+                            <td>Proximity-native peer discovery</td>
+                            <td class="no">✗</td>
+                            <td class="no">✗</td>
+                            <td class="par">~ some</td>
+                            <td class="pim yes">✓ LAN · Wi-Fi Direct · BT</td>
+                        </tr>
+                        <tr>
+                            <td>Low regulatory footprint</td>
+                            <td class="par">~ medium</td>
+                            <td class="no">✗ high</td>
+                            <td class="yes">✓ low</td>
+                            <td class="pim yes">✓ low</td>
+                        </tr>
+                        <tr>
+                            <td>Production-ready daemon</td>
+                            <td class="yes">✓</td>
+                            <td class="yes">✓</td>
+                            <td class="par">~ partial</td>
+                            <td class="pim yes">✓ Rust, memory-safe</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+
+            <!-- ══════════════════════════════════════════════════════════
+     SLIDE 5  —  SOLUTION: WHAT IS PIM
+══════════════════════════════════════════════════════════ -->
+            <div class="slide" id="s5">
+                <div class="prompt"><span class="prompt-char">$</span> pim --version && pim describe</div>
+                <h2>Introducing PIM.</h2>
+                <div class="cols cols-2" style="align-items: start">
+                    <div>
+                        <p class="big" style="margin-bottom: 26px">
+                            A <span class="hl">proximity-first mesh network daemon</span> that routes IP traffic
+                            hop-by-hop through nearby peers until it reaches a node with internet access.
+                        </p>
+                        <ul class="bullets">
+                            <li>
+                                Any device runs as a <span class="hl">client</span>, <span class="hl">relay</span>, or
+                                <span class="hl">gateway</span>
+                            </li>
+                            <li>Peers discover each other automatically — no manual config</li>
+                            <li>Any node with internet shares it with the whole mesh via NAT</li>
+                            <li>No cloud, no central server, no single point of failure</li>
+                            <li>Built in Rust — memory-safe, high-performance, production-grade</li>
+                            <li>Runs on Linux and macOS today</li>
+                        </ul>
+                    </div>
+                    <div style="display: flex; flex-direction: column; gap: 14px">
+                        <div class="card">
+                            <div class="stat-n">3</div>
+                            <div class="stat-l">Node roles — client · relay · gateway</div>
+                        </div>
+                        <div class="card">
+                            <div class="stat-n">3</div>
+                            <div class="stat-l">Proximity transports — LAN · Wi-Fi Direct · Bluetooth</div>
+                        </div>
+                        <div class="card">
+                            <div class="stat-n">1</div>
+                            <div class="stat-l">Core assumption — at least one peer has internet</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- ══════════════════════════════════════════════════════════
+     SLIDE 6  —  HOW: TOPOLOGY DIAGRAM
+══════════════════════════════════════════════════════════ -->
+            <div class="slide" id="s6">
+                <div class="prompt"><span class="prompt-char">$</span> pim route status --topology</div>
+                <h2>Mesh topology.</h2>
+                <div
+                    style="flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center"
+                >
+                    <svg viewBox="0 0 820 310" width="100%" style="max-width: 860px; max-height: 300px">
+                        <defs>
+                            <marker id="arr6g" markerWidth="7" markerHeight="7" refX="5" refY="3" orient="auto">
+                                <path d="M0,0 L0,6 L7,3z" fill="#3dd66e" opacity="0.7" />
+                            </marker>
+                            <marker id="arr6b" markerWidth="7" markerHeight="7" refX="5" refY="3" orient="auto">
+                                <path d="M0,0 L0,6 L7,3z" fill="#4a9eff" opacity="0.7" />
+                            </marker>
+                            <marker id="arr6w" markerWidth="7" markerHeight="7" refX="5" refY="3" orient="auto">
+                                <path d="M0,0 L0,6 L7,3z" fill="#7fff7f" opacity="0.5" />
+                            </marker>
+                            <filter id="glow6">
+                                <feGaussianBlur stdDeviation="2.5" result="b" />
+                                <feMerge>
+                                    <feMergeNode in="b" />
+                                    <feMergeNode in="SourceGraphic" />
+                                </feMerge>
+                            </filter>
+                        </defs>
+
+                        <!-- INTERNET -->
+                        <ellipse
+                            cx="750"
+                            cy="155"
+                            rx="60"
+                            ry="34"
+                            fill="#0d160d"
+                            stroke="#4a9eff"
+                            stroke-width="1.5"
+                            stroke-dasharray="5,3"
+                        />
+                        <text
+                            x="750"
+                            y="159"
+                            text-anchor="middle"
+                            fill="#4a9eff"
+                            font-family="monospace"
+                            font-size="12"
+                            font-weight="600"
+                        >
+                            INTERNET
+                        </text>
+
+                        <!-- GATEWAY -->
+                        <rect
+                            x="574"
+                            y="128"
+                            width="118"
+                            height="54"
+                            rx="3"
+                            fill="#131d13"
+                            stroke="#e8a830"
+                            stroke-width="1.8"
+                            filter="url(#glow6)"
+                        />
+                        <text
+                            x="633"
+                            y="152"
+                            text-anchor="middle"
+                            fill="#e8a830"
+                            font-family="monospace"
+                            font-size="12"
+                            font-weight="700"
+                        >
+                            GATEWAY
+                        </text>
+                        <text
+                            x="633"
+                            y="170"
+                            text-anchor="middle"
+                            fill="#4e6e4e"
+                            font-family="monospace"
+                            font-size="10"
+                        >
+                            NAT + internet
+                        </text>
+
+                        <!-- Gateway → Internet -->
+                        <line
+                            x1="692"
+                            y1="155"
+                            x2="688"
+                            y2="155"
+                            stroke="#4a9eff"
+                            stroke-width="1.5"
+                            marker-end="url(#arr6b)"
+                            opacity="0.7"
+                        />
+
+                        <!-- RELAY A -->
+                        <rect
+                            x="350"
+                            y="58"
+                            width="106"
+                            height="50"
+                            rx="3"
+                            fill="#131d13"
+                            stroke="#3dd66e"
+                            stroke-width="1.3"
+                        />
+                        <text
+                            x="403"
+                            y="79"
+                            text-anchor="middle"
+                            fill="#3dd66e"
+                            font-family="monospace"
+                            font-size="12"
+                            font-weight="700"
+                        >
+                            RELAY A
+                        </text>
+                        <text x="403" y="97" text-anchor="middle" fill="#4e6e4e" font-family="monospace" font-size="10">
+                            hop · forward
+                        </text>
+
+                        <!-- RELAY B -->
+                        <rect
+                            x="350"
+                            y="202"
+                            width="106"
+                            height="50"
+                            rx="3"
+                            fill="#131d13"
+                            stroke="#3dd66e"
+                            stroke-width="1.3"
+                        />
+                        <text
+                            x="403"
+                            y="223"
+                            text-anchor="middle"
+                            fill="#3dd66e"
+                            font-family="monospace"
+                            font-size="12"
+                            font-weight="700"
+                        >
+                            RELAY B
+                        </text>
+                        <text
+                            x="403"
+                            y="241"
+                            text-anchor="middle"
+                            fill="#4e6e4e"
+                            font-family="monospace"
+                            font-size="10"
+                        >
+                            hop · forward
+                        </text>
+
+                        <!-- Relay A → Gateway -->
+                        <line
+                            x1="456"
+                            y1="88"
+                            x2="571"
+                            y2="146"
+                            stroke="#3dd66e"
+                            stroke-width="1"
+                            stroke-dasharray="5,3"
+                            marker-end="url(#arr6g)"
+                            opacity="0.55"
+                        />
+                        <!-- Relay B → Gateway -->
+                        <line
+                            x1="456"
+                            y1="227"
+                            x2="571"
+                            y2="164"
+                            stroke="#3dd66e"
+                            stroke-width="1"
+                            stroke-dasharray="5,3"
+                            marker-end="url(#arr6g)"
+                            opacity="0.55"
+                        />
+
+                        <!-- TCP session labels -->
+                        <text
+                            x="490"
+                            y="110"
+                            text-anchor="middle"
+                            fill="#243824"
+                            font-family="monospace"
+                            font-size="10"
+                        >
+                            TCP session
+                        </text>
+                        <text
+                            x="490"
+                            y="218"
+                            text-anchor="middle"
+                            fill="#243824"
+                            font-family="monospace"
+                            font-size="10"
+                        >
+                            TCP session
+                        </text>
+
+                        <!-- CLIENT nodes -->
+                        <rect
+                            x="60"
+                            y="22"
+                            width="102"
+                            height="46"
+                            rx="3"
+                            fill="#131d13"
+                            stroke="#7fff7f"
+                            stroke-width="1"
+                            opacity="0.85"
+                        />
+                        <text x="111" y="42" text-anchor="middle" fill="#7fff7f" font-family="monospace" font-size="11">
+                            CLIENT
+                        </text>
+                        <text x="111" y="58" text-anchor="middle" fill="#4e6e4e" font-family="monospace" font-size="9">
+                            laptop
+                        </text>
+
+                        <rect
+                            x="60"
+                            y="100"
+                            width="102"
+                            height="46"
+                            rx="3"
+                            fill="#131d13"
+                            stroke="#7fff7f"
+                            stroke-width="1"
+                            opacity="0.85"
+                        />
+                        <text
+                            x="111"
+                            y="120"
+                            text-anchor="middle"
+                            fill="#7fff7f"
+                            font-family="monospace"
+                            font-size="11"
+                        >
+                            CLIENT
+                        </text>
+                        <text x="111" y="136" text-anchor="middle" fill="#4e6e4e" font-family="monospace" font-size="9">
+                            mobile
+                        </text>
+
+                        <rect
+                            x="60"
+                            y="178"
+                            width="102"
+                            height="46"
+                            rx="3"
+                            fill="#131d13"
+                            stroke="#7fff7f"
+                            stroke-width="1"
+                            opacity="0.85"
+                        />
+                        <text
+                            x="111"
+                            y="198"
+                            text-anchor="middle"
+                            fill="#7fff7f"
+                            font-family="monospace"
+                            font-size="11"
+                        >
+                            CLIENT
+                        </text>
+                        <text x="111" y="214" text-anchor="middle" fill="#4e6e4e" font-family="monospace" font-size="9">
+                            IoT / edge
+                        </text>
+
+                        <rect
+                            x="60"
+                            y="256"
+                            width="102"
+                            height="46"
+                            rx="3"
+                            fill="#131d13"
+                            stroke="#7fff7f"
+                            stroke-width="1"
+                            opacity="0.85"
+                        />
+                        <text
+                            x="111"
+                            y="276"
+                            text-anchor="middle"
+                            fill="#7fff7f"
+                            font-family="monospace"
+                            font-size="11"
+                        >
+                            CLIENT
+                        </text>
+                        <text x="111" y="292" text-anchor="middle" fill="#4e6e4e" font-family="monospace" font-size="9">
+                            field device
+                        </text>
+
+                        <!-- Clients → Relay A -->
+                        <line
+                            x1="162"
+                            y1="45"
+                            x2="347"
+                            y2="78"
+                            stroke="#7fff7f"
+                            stroke-width="1"
+                            stroke-dasharray="4,3"
+                            marker-end="url(#arr6w)"
+                            opacity="0.45"
+                        />
+                        <line
+                            x1="162"
+                            y1="123"
+                            x2="347"
+                            y2="86"
+                            stroke="#7fff7f"
+                            stroke-width="1"
+                            stroke-dasharray="4,3"
+                            marker-end="url(#arr6w)"
+                            opacity="0.45"
+                        />
+
+                        <!-- Clients → Relay B -->
+                        <line
+                            x1="162"
+                            y1="201"
+                            x2="347"
+                            y2="222"
+                            stroke="#7fff7f"
+                            stroke-width="1"
+                            stroke-dasharray="4,3"
+                            marker-end="url(#arr6w)"
+                            opacity="0.45"
+                        />
+                        <line
+                            x1="162"
+                            y1="279"
+                            x2="347"
+                            y2="235"
+                            stroke="#7fff7f"
+                            stroke-width="1"
+                            stroke-dasharray="4,3"
+                            marker-end="url(#arr6w)"
+                            opacity="0.45"
+                        />
+
+                        <!-- Transport label -->
+                        <text x="220" y="38" fill="#243824" font-family="monospace" font-size="9">
+                            Wi-Fi Direct / BT / LAN
+                        </text>
+                    </svg>
+                    <p style="color: var(--text-dim); font-size: 12px; margin-top: 10px; text-align: center">
+                        Clients reach relays via proximity transports. Relays forward over TCP. Gateways NAT to the
+                        internet.
+                    </p>
+                </div>
+            </div>
+
+            <!-- ══════════════════════════════════════════════════════════
+     SLIDE 7  —  HOW: DISCOVERY MECHANISMS
+══════════════════════════════════════════════════════════ -->
+            <div class="slide" id="s7">
+                <div class="prompt"><span class="prompt-char">$</span> pim discover --mechanisms all</div>
+                <h2>Proximity discovery.</h2>
+                <p style="color: var(--text-dim); margin-bottom: 28px; max-width: 720px">
+                    Nodes find each other automatically. All three mechanisms run in parallel and are fully additive —
+                    once a peer is found, the same TCP session and handshake path takes over.
+                </p>
+                <div class="cols cols-3" style="margin-bottom: 24px">
+                    <div class="card blue">
+                        <div style="font-size: 24px; margin-bottom: 10px">📡</div>
+                        <h3 style="color: var(--blue)">LAN / UDP Broadcast</h3>
+                        <p style="margin-bottom: 14px">
+                            Nodes send compact UDP advertisement packets on the local network. Any node that hears one
+                            initiates a TCP session automatically.
+                        </p>
+                        <div class="badge a">infrastructure required</div>
+                    </div>
+                    <div class="card">
+                        <div style="font-size: 24px; margin-bottom: 10px">🔗</div>
+                        <h3>Wi-Fi Direct (P2P)</h3>
+                        <p style="margin-bottom: 14px">
+                            Drives <code>wpa_supplicant</code>'s P2P subsystem. Discovers nearby devices, negotiates
+                            GO/GC group formation and DHCP — no access point needed.
+                        </p>
+                        <div class="badge">no infrastructure</div>
+                    </div>
+                    <div class="card">
+                        <div style="font-size: 24px; margin-bottom: 10px">🦷</div>
+                        <h3>Bluetooth PAN</h3>
+                        <p style="margin-bottom: 14px">
+                            Uses <code>bluetoothctl</code> and BlueZ to scan, pair, and establish PAN/NAP links. Learns
+                            peer IPs from the PAN neighbor table.
+                        </p>
+                        <div class="badge">no infrastructure</div>
+                    </div>
+                </div>
+                <hr class="divider" style="margin: 0 0 16px" />
+                <p style="color: var(--text-dim); font-size: 12px">
+                    ▸ If the same peer is reachable via multiple mechanisms, duplicate session attempts collapse onto
+                    the existing connection — discovery is additive, never duplicated.
+                </p>
+            </div>
+
+            <!-- ══════════════════════════════════════════════════════════
+     SLIDE 8  —  HOW: GATEWAY & ROUTING
+══════════════════════════════════════════════════════════ -->
+            <div class="slide" id="s8">
+                <div class="prompt"><span class="prompt-char">$</span> pim route on && pim route status</div>
+                <h2>Gateway & routing.</h2>
+                <div class="cols cols-2" style="align-items: start">
+                    <ul class="bullets">
+                        <li>
+                            <span class="hl">Any node can be a gateway.</span> If a node has internet, it can share it
+                            with the entire mesh via NAT — no special hardware.
+                        </li>
+                        <li>
+                            <span class="hl">Route on / off.</span> Clients opt in with <code>pim route on</code>. The
+                            daemon injects a default route through the TUN interface on the host.
+                        </li>
+                        <li>
+                            <span class="hl">Automatic selection.</span> The routing layer picks the best available
+                            gateway. If it disappears, traffic re-routes through the next one.
+                        </li>
+                        <li>
+                            <span class="hl">Multi-gateway meshes.</span> Multiple gateways coexist. Tested in Docker
+                            with up to four simultaneous gateways.
+                        </li>
+                        <li>
+                            <span class="hl">TTL-bounded forwarding.</span> Each MeshDataFrame carries a TTL field that
+                            decrements at every hop — loops are impossible by design.
+                        </li>
+                    </ul>
+                    <div class="code">
+                        <div><span class="cc"># Start the daemon</span></div>
+                        <div><span class="cp">$</span> <span class="cm">pim up</span></div>
+                        <br />
+                        <div><span class="cc"># Enable gateway routing</span></div>
+                        <div><span class="cp">$</span> <span class="cm">pim route on</span></div>
+                        <br />
+                        <div><span class="cc"># Inspect current routing</span></div>
+                        <div><span class="cp">$</span> <span class="cm">pim route status</span></div>
+                        <div><span class="cg">gateway 10.0.0.1 via relay-a active</span></div>
+                        <div><span class="cg">gateway 10.0.0.2 via relay-b standby</span></div>
+                        <br />
+                        <div><span class="cc"># Tear down</span></div>
+                        <div><span class="cp">$</span> <span class="cm">pim route off</span></div>
+                        <div><span class="cp">$</span> <span class="cm">pim down</span></div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- ══════════════════════════════════════════════════════════
+     SLIDE 9  —  TECHNICAL: PROTOCOL & WIRE FORMAT
+══════════════════════════════════════════════════════════ -->
+            <div class="slide" id="s9">
+                <div class="prompt"><span class="prompt-char">$</span> pim inspect --layer wire-protocol</div>
+                <h2>Wire protocol.</h2>
+                <div class="cols cols-2" style="align-items: start; gap: 36px">
+                    <div>
+                        <div class="label" style="margin-bottom: 12px">TransportFrame — every peer message</div>
+                        <table class="frame-table" style="margin-bottom: 24px">
+                            <tr>
+                                <td>magic: u16</td>
+                                <td>2 B</td>
+                                <td>0x504D — "PM" sentinel</td>
+                            </tr>
+                            <tr>
+                                <td>version: u8</td>
+                                <td>1 B</td>
+                                <td>protocol version</td>
+                            </tr>
+                            <tr>
+                                <td>frame_type: u8</td>
+                                <td>1 B</td>
+                                <td>Handshake · Data · RouteUpdate · Fragment…</td>
+                            </tr>
+                            <tr>
+                                <td>length: u32</td>
+                                <td>4 B</td>
+                                <td>payload length in bytes</td>
+                            </tr>
+                            <tr class="enc">
+                                <td>nonce: [u8;12]</td>
+                                <td>12 B</td>
+                                <td>AES-GCM nonce</td>
+                            </tr>
+                            <tr class="enc">
+                                <td>payload: [u8]</td>
+                                <td>N B</td>
+                                <td>encrypted, variable length</td>
+                            </tr>
+                            <tr class="enc">
+                                <td>tag: [u8;16]</td>
+                                <td>16 B</td>
+                                <td>AES-GCM authentication tag</td>
+                            </tr>
+                        </table>
+                        <div class="label" style="margin-bottom: 12px">MeshDataFrame payload — IP packet carrier</div>
+                        <table class="frame-table">
+                            <tr>
+                                <td>src_id: [u8;16]</td>
+                                <td>16 B</td>
+                                <td>originating node identity</td>
+                            </tr>
+                            <tr>
+                                <td>dst_id: [u8;16]</td>
+                                <td>16 B</td>
+                                <td>destination node or gateway ID</td>
+                            </tr>
+                            <tr>
+                                <td>session_id: u32</td>
+                                <td>4 B</td>
+                                <td>request / response tracking</td>
+                            </tr>
+                            <tr>
+                                <td>ttl: u8</td>
+                                <td>1 B</td>
+                                <td>decremented at each hop</td>
+                            </tr>
+                            <tr>
+                                <td>flags: u8</td>
+                                <td>1 B</td>
+                                <td>fragment, more-fragments, etc.</td>
+                            </tr>
+                            <tr class="enc">
+                                <td>payload: [u8]</td>
+                                <td>N B</td>
+                                <td>E2E encrypted IP packet</td>
+                            </tr>
+                        </table>
+                    </div>
+                    <div style="display: flex; flex-direction: column; gap: 18px">
+                        <div class="card amber">
+                            <h3>AES-GCM — authenticated encryption</h3>
+                            <ul class="bullets">
+                                <li>Every frame authenticated: no unauthenticated bytes reach the application</li>
+                                <li>12-byte random nonce per frame prevents replay attacks</li>
+                                <li>16-byte auth tag — forgery detected before decryption</li>
+                            </ul>
+                        </div>
+                        <div class="card">
+                            <h3>Zero-allocation hot path</h3>
+                            <p>
+                                Payload encryption happens in-place. No buffer copies on the frame encode / decode path
+                                — optimised for high-throughput relay nodes.
+                            </p>
+                        </div>
+                        <div class="card">
+                            <h3>Fragmentation</h3>
+                            <p>
+                                Frames that exceed transport MTU are split via the <code>0x06 Fragment</code> frame type
+                                and reassembled at the destination — transparent to the IP layer.
+                            </p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- ══════════════════════════════════════════════════════════
+     SLIDE 10  —  TECHNICAL: ARCHITECTURE STACK
+══════════════════════════════════════════════════════════ -->
+            <div class="slide" id="s10">
+                <div class="prompt"><span class="prompt-char">$</span> pim inspect --layer stack</div>
+                <h2>Architecture stack.</h2>
+                <div class="cols cols-2" style="align-items: center">
+                    <!-- Stack SVG -->
+                    <div style="display: flex; justify-content: center">
+                        <svg viewBox="0 0 400 390" width="100%" style="max-width: 400px; max-height: 380px">
+                            <defs>
+                                <marker id="arr10" markerWidth="7" markerHeight="7" refX="5" refY="3" orient="auto">
+                                    <path d="M0,0 L0,6 L7,3z" fill="#4e6e4e" opacity="0.6" />
+                                </marker>
+                            </defs>
+
+                            <!-- Host kernel -->
+                            <rect x="20" y="340" width="360" height="40" rx="3" fill="#0d160d" stroke="#1a2e1a" />
+                            <text
+                                x="200"
+                                y="364"
+                                text-anchor="middle"
+                                fill="#4e6e4e"
+                                font-family="monospace"
+                                font-size="11"
+                            >
+                                Host network stack (kernel)
+                            </text>
+
+                            <!-- TUN -->
+                            <rect
+                                x="20"
+                                y="292"
+                                width="360"
+                                height="40"
+                                rx="3"
+                                fill="#131d13"
+                                stroke="#3dd66e"
+                                stroke-width="1"
+                                opacity="0.75"
+                            />
+                            <text
+                                x="200"
+                                y="317"
+                                text-anchor="middle"
+                                fill="#3dd66e"
+                                font-family="monospace"
+                                font-size="11"
+                            >
+                                pim-tun — TUN virtual interface
+                            </text>
+
+                            <!-- Routing -->
+                            <rect
+                                x="20"
+                                y="244"
+                                width="360"
+                                height="40"
+                                rx="3"
+                                fill="#131d13"
+                                stroke="#3dd66e"
+                                stroke-width="1.2"
+                            />
+                            <text
+                                x="200"
+                                y="269"
+                                text-anchor="middle"
+                                fill="#3dd66e"
+                                font-family="monospace"
+                                font-size="11"
+                            >
+                                pim-routing — mesh routing table
+                            </text>
+
+                            <!-- Crypto + Protocol -->
+                            <rect
+                                x="20"
+                                y="196"
+                                width="360"
+                                height="40"
+                                rx="3"
+                                fill="#131d13"
+                                stroke="#e8a830"
+                                stroke-width="1.2"
+                            />
+                            <text
+                                x="200"
+                                y="221"
+                                text-anchor="middle"
+                                fill="#e8a830"
+                                font-family="monospace"
+                                font-size="11"
+                            >
+                                pim-crypto + pim-protocol
+                            </text>
+
+                            <!-- Transport -->
+                            <rect
+                                x="20"
+                                y="148"
+                                width="360"
+                                height="40"
+                                rx="3"
+                                fill="#131d13"
+                                stroke="#e8a830"
+                                stroke-width="1.6"
+                            />
+                            <text
+                                x="200"
+                                y="173"
+                                text-anchor="middle"
+                                fill="#e8a830"
+                                font-family="monospace"
+                                font-size="11"
+                            >
+                                pim-transport — TCP sessions
+                            </text>
+
+                            <!-- Discovery: 3 cells -->
+                            <rect
+                                x="20"
+                                y="96"
+                                width="110"
+                                height="44"
+                                rx="3"
+                                fill="#131d13"
+                                stroke="#4a9eff"
+                                stroke-width="1"
+                            />
+                            <text
+                                x="75"
+                                y="121"
+                                text-anchor="middle"
+                                fill="#4a9eff"
+                                font-family="monospace"
+                                font-size="10"
+                            >
+                                LAN / UDP
+                            </text>
+
+                            <rect
+                                x="145"
+                                y="96"
+                                width="110"
+                                height="44"
+                                rx="3"
+                                fill="#131d13"
+                                stroke="#4a9eff"
+                                stroke-width="1"
+                            />
+                            <text
+                                x="200"
+                                y="121"
+                                text-anchor="middle"
+                                fill="#4a9eff"
+                                font-family="monospace"
+                                font-size="10"
+                            >
+                                Wi-Fi Direct
+                            </text>
+
+                            <rect
+                                x="270"
+                                y="96"
+                                width="110"
+                                height="44"
+                                rx="3"
+                                fill="#131d13"
+                                stroke="#4a9eff"
+                                stroke-width="1"
+                            />
+                            <text
+                                x="325"
+                                y="121"
+                                text-anchor="middle"
+                                fill="#4a9eff"
+                                font-family="monospace"
+                                font-size="10"
+                            >
+                                Bluetooth PAN
+                            </text>
+
+                            <text x="20" y="84" fill="#4a9eff" font-family="monospace" font-size="9" opacity="0.5">
+                                discovery layer
+                            </text>
+
+                            <!-- Arrows between layers -->
+                            <line
+                                x1="200"
+                                y1="140"
+                                x2="200"
+                                y2="148"
+                                stroke="#4e6e4e"
+                                stroke-width="1"
+                                marker-end="url(#arr10)"
+                                opacity="0.5"
+                            />
+                            <line
+                                x1="200"
+                                y1="188"
+                                x2="200"
+                                y2="196"
+                                stroke="#4e6e4e"
+                                stroke-width="1"
+                                marker-end="url(#arr10)"
+                                opacity="0.5"
+                            />
+                            <line
+                                x1="200"
+                                y1="236"
+                                x2="200"
+                                y2="244"
+                                stroke="#4e6e4e"
+                                stroke-width="1"
+                                marker-end="url(#arr10)"
+                                opacity="0.5"
+                            />
+                            <line
+                                x1="200"
+                                y1="284"
+                                x2="200"
+                                y2="292"
+                                stroke="#4e6e4e"
+                                stroke-width="1"
+                                marker-end="url(#arr10)"
+                                opacity="0.5"
+                            />
+                            <line
+                                x1="200"
+                                y1="332"
+                                x2="200"
+                                y2="340"
+                                stroke="#4e6e4e"
+                                stroke-width="1"
+                                marker-end="url(#arr10)"
+                                opacity="0.5"
+                            />
+                        </svg>
+                    </div>
+                    <ul class="bullets" style="gap: 18px">
+                        <li>
+                            <span class="hl" style="color: var(--blue)">Discovery layer</span> — finds peers via LAN
+                            UDP, Wi-Fi Direct, or Bluetooth. Emits a <code>SocketAddr</code> to the transport layer.
+                        </li>
+                        <li>
+                            <span class="hla">Transport layer</span> — authenticates via NodeId handshake and
+                            establishes persistent TCP sessions with discovered peers.
+                        </li>
+                        <li>
+                            <span class="hla">Crypto + Protocol</span> — AES-GCM encrypts each frame in-place. Frames
+                            are length-delimited, versioned, and typed.
+                        </li>
+                        <li>
+                            <span class="hl">Routing</span> — maintains the mesh routing table; selects next-hop per
+                            destination; TTL guards against loops.
+                        </li>
+                        <li>
+                            <span class="hl">TUN interface</span> — presents the mesh as a virtual NIC to the host OS.
+                            The host routes traffic to it transparently — no app changes needed.
+                        </li>
+                    </ul>
+                </div>
+            </div>
+
+            <!-- ══════════════════════════════════════════════════════════
+     SLIDE 11  —  TECHNICAL: SIMPLE TO DEPLOY
+══════════════════════════════════════════════════════════ -->
+            <div class="slide" id="s11">
+                <div class="prompt"><span class="prompt-char">$</span> pim config generate relay --output pim.toml</div>
+                <h2>Simple to deploy.</h2>
+                <div class="cols cols-2" style="align-items: start">
+                    <div>
+                        <div class="label" style="margin-bottom: 10px">Node config — TOML</div>
+                        <div class="code">
+                            <div><span class="cc"># pim.toml</span></div>
+                            <br />
+                            <div><span class="ck">[node]</span></div>
+                            <div><span class="ck">name</span> = <span class="cv">"relay-a"</span></div>
+                            <div><span class="ck">role</span> = <span class="cv">"relay"</span></div>
+                            <br />
+                            <div><span class="ck">[transport]</span></div>
+                            <div><span class="ck">listen_port</span> = <span class="cv">9100</span></div>
+                            <br />
+                            <div><span class="ck">[discovery]</span></div>
+                            <div><span class="ck">enabled</span> = <span class="cv">true</span></div>
+                            <br />
+                            <div><span class="ck">[wifi_direct]</span></div>
+                            <div><span class="ck">enabled</span> = <span class="cv">true</span></div>
+                            <br />
+                            <div><span class="ck">[bluetooth]</span></div>
+                            <div><span class="ck">enabled</span> = <span class="cv">true</span></div>
+                            <div><span class="ck">radio_discovery_enabled</span> = <span class="cv">true</span></div>
+                            <div><span class="ck">device_name_prefix</span> = <span class="cv">"PIM-"</span></div>
+                        </div>
+                    </div>
+                    <div style="display: flex; flex-direction: column; gap: 16px">
+                        <div class="label" style="margin-bottom: 2px">CLI workflow</div>
+                        <div class="code">
+                            <div><span class="cc"># Generate config for any role</span></div>
+                            <div>
+                                <span class="cp">$</span>
+                                <span class="cm">pim config generate <span class="cv">gateway</span></span>
+                            </div>
+                            <div>
+                                <span class="cp">$</span>
+                                <span class="cm">pim config generate <span class="cv">relay gateway</span></span>
+                            </div>
+                            <br />
+                            <div><span class="cc"># Lifecycle</span></div>
+                            <div><span class="cp">$</span> <span class="cm">pim up</span></div>
+                            <div><span class="cp">$</span> <span class="cm">pim status</span></div>
+                            <div><span class="cp">$</span> <span class="cm">pim down</span></div>
+                            <br />
+                            <div><span class="cc"># Routing</span></div>
+                            <div><span class="cp">$</span> <span class="cm">pim route on</span></div>
+                            <div><span class="cp">$</span> <span class="cm">pim route status</span></div>
+                            <div><span class="cp">$</span> <span class="cm">pim route off</span></div>
+                        </div>
+                        <div class="card amber">
+                            <h3>Docker test labs included</h3>
+                            <p>
+                                Single-hop, relay chain, multi-gateway, resilience, and discovery scenarios — all
+                                runnable with <code>make test-*</code>. No hardware needed.
+                            </p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- ══════════════════════════════════════════════════════════
+     SLIDE 12  —  WHAT WE NEED
+══════════════════════════════════════════════════════════ -->
+            <div class="slide" id="s12">
+                <div class="prompt"><span class="prompt-char">$</span> pim status --project</div>
+                <h2>What we need to advance.</h2>
+                <div class="cols cols-3" style="margin-bottom: 28px">
+                    <div class="card amber">
+                        <div style="font-size: 24px; margin-bottom: 10px">🏢</div>
+                        <h3>Scale Test Partner</h3>
+                        <p style="margin-bottom: 14px">
+                            A company willing to pilot PIM in a real environment — remote offices, field operations, or
+                            logistics networks. PIM is production-ready; it needs real traffic to prove it.
+                        </p>
+                        <ul class="bullets" style="font-size: 12px">
+                            <li>Real conditions, real volume</li>
+                            <li>We handle deployment & support</li>
+                            <li>You shape the roadmap</li>
+                        </ul>
+                    </div>
+                    <div class="card amber">
+                        <div style="font-size: 24px; margin-bottom: 10px">💰</div>
+                        <h3>Sponsors</h3>
+                        <p style="margin-bottom: 14px">
+                            Finance the next phase: proximity transport hardening, mobile clients, a management UI, and
+                            compliance tooling for regulated industries.
+                        </p>
+                        <ul class="bullets" style="font-size: 12px">
+                            <li>Open source with sponsor benefits</li>
+                            <li>Named in releases and docs</li>
+                            <li>Influence on priority features</li>
+                        </ul>
+                    </div>
+                    <div class="card">
+                        <div style="font-size: 24px; margin-bottom: 10px">🛠</div>
+                        <h3>Build on PIM</h3>
+                        <p style="margin-bottom: 14px">
+                            Build products over PIM — a resilient VPN, emergency comms, IoT gateway, or field
+                            coordination tool. The daemon interface is stable; the Docker labs make it easy to start.
+                        </p>
+                        <ul class="bullets" style="font-size: 12px">
+                            <li class="a">Open contributor program</li>
+                            <li class="a">Stable daemon interface</li>
+                            <li class="a">Full Docker test infra included</li>
+                        </ul>
+                    </div>
+                </div>
+                <div style="text-align: center; color: var(--text-dim); font-size: 12px">
+                    PIM is production-ready today. It needs real-world deployment to reach its potential.
+                </div>
+            </div>
+
+            <!-- ══════════════════════════════════════════════════════════
+     SLIDE 13  —  CALL TO ACTION
+══════════════════════════════════════════════════════════ -->
+            <div class="slide" id="s13">
+                <div class="prompt"><span class="prompt-char">$</span> pim connect --future</div>
+                <div class="center">
+                    <div class="label" style="margin-bottom: 22px">Let's build together</div>
+                    <h1 style="margin-bottom: 18px">Internet that<br />doesn't break.</h1>
+                    <p
+                        class="big"
+                        style="color: var(--text-dim); max-width: 560px; text-align: center; margin-bottom: 44px"
+                    >
+                        PIM is open, production-ready, and looking for partners willing to push it into the real world.
+                    </p>
+                    <div
+                        style="
+                            border: 1px solid var(--green);
+                            padding: 22px 56px;
+                            text-align: center;
+                            box-shadow: 0 0 48px var(--green-glow);
+                        "
+                    >
+                        <div class="label" style="margin-bottom: 6px">reach out</div>
+                        <div
+                            style="
+                                font-size: clamp(18px, 2.4vw, 30px);
+                                color: var(--green-b);
+                                font-weight: 700;
+                                letter-spacing: 0.02em;
+                            "
+                        >
+                            pim@astervia.tech
+                        </div>
+                    </div>
+                    <div
+                        style="
+                            margin-top: 36px;
+                            display: flex;
+                            gap: 36px;
+                            color: var(--text-dim);
+                            font-size: 11px;
+                            letter-spacing: 0.08em;
+                        "
+                    >
+                        <span>Scale test partner?</span>
+                        <span style="color: var(--border)">·</span>
+                        <span>Sponsor?</span>
+                        <span style="color: var(--border)">·</span>
+                        <span>Build on PIM?</span>
+                        <span style="color: var(--border)">·</span>
+                        <span>Just curious?</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <!-- #deck -->
+
+        <!-- Progress bar -->
+        <div id="progress"><div id="progress-fill" style="width: 7.69%"></div></div>
+
+        <!-- Navigation -->
+        <div id="nav">
+            <button class="nav-btn" id="btn-prev" onclick="go(-1)" disabled>← prev</button>
+            <div id="counter"><span class="cur" id="cur">1</span> / <span id="tot">13</span></div>
+            <button class="nav-btn" id="btn-next" onclick="go(1)">next →</button>
+        </div>
+
+        <script>
+            const slides = Array.from(document.querySelectorAll(".slide"));
+            const total = slides.length;
+            let idx = 0;
+
+            document.getElementById("tot").textContent = total;
+
+            function goTo(n) {
+                slides[idx].classList.remove("active");
+                idx = Math.max(0, Math.min(n, total - 1));
+                slides[idx].classList.add("active");
+                document.getElementById("cur").textContent = idx + 1;
+                document.getElementById("btn-prev").disabled = idx === 0;
+                document.getElementById("btn-next").disabled = idx === total - 1;
+                document.getElementById("progress-fill").style.width = (((idx + 1) / total) * 100).toFixed(2) + "%";
+            }
+
+            function go(dir) {
+                goTo(idx + dir);
+            }
+
+            document.addEventListener("keydown", (e) => {
+                switch (e.key) {
+                    case "ArrowRight":
+                    case "ArrowDown":
+                    case " ":
+                    case "Enter":
+                        e.preventDefault();
+                        go(1);
+                        break;
+                    case "ArrowLeft":
+                    case "ArrowUp":
+                        e.preventDefault();
+                        go(-1);
+                        break;
+                    case "Home":
+                        goTo(0);
+                        break;
+                    case "End":
+                        goTo(total - 1);
+                        break;
+                }
+            });
+        </script>
+    </body>
+</html>
