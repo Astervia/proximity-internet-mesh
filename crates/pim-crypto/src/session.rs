@@ -286,7 +286,9 @@ mod tests {
 
         assert_ne!(buffer, plaintext);
 
-        cipher.decrypt_in_place_detached(&nonce_bytes, &mut buffer, &tag_bytes).unwrap();
+        cipher
+            .decrypt_in_place_detached(&nonce_bytes, &mut buffer, &tag_bytes)
+            .unwrap();
 
         assert_eq!(buffer, plaintext);
     }
