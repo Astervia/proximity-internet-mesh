@@ -86,6 +86,34 @@ impl SessionCipher {
         Ok(plaintext)
     }
 
+    /// Encrypts plaintext in-place, returning the generated nonce and tag.
+    /// Returns an error if the nonce counter is exhausted or encryption fails.
+    pub fn encrypt_in_place_detached(
+        &self,
+        payload: &mut [u8],
+    ) -> Result<([u8; 12], [u8; 16]), SessionError> {
+        let count = self.counter.fetch_add(1, Ordering::SeqCst);
+        if count >= MAX_NONCE_COUNTER {
+            return Err(SessionError::NonceExhausted);
+        }
+
+        let nonce_bytes = self.build_nonce(count);
+        let nonce = Nonce::from_slice(&nonce_bytes);
+
+        let tag = aes_gcm::aead::AeadInPlace::encrypt_in_place_detached(
+            &self.cipher,
+            nonce,
+            b"",
+            payload,
+        )
+        .map_err(|_| SessionError::EncryptionFailed)?;
+
+        let mut tag_bytes = [0u8; 16];
+        tag_bytes.copy_from_slice(&tag);
+
+        Ok((nonce_bytes, tag_bytes))
+    }
+
     /// Decrypts a frame in-place, avoiding an allocation.
     /// Returns an error if the nonce is replayed, or if decryption fails.
     pub fn decrypt_in_place_detached(
@@ -246,5 +274,20 @@ mod tests {
         let encrypted = cipher.encrypt(&plaintext).unwrap();
         let decrypted = cipher.decrypt(&encrypted).unwrap();
         assert_eq!(decrypted, plaintext);
+    }
+
+    #[test]
+    fn encrypt_in_place_detached_round_trip() {
+        let cipher = SessionCipher::new(&test_key(), test_prefix());
+        let plaintext = b"hello proximity mesh";
+
+        let mut buffer = plaintext.to_vec();
+        let (nonce_bytes, tag_bytes) = cipher.encrypt_in_place_detached(&mut buffer).unwrap();
+
+        assert_ne!(buffer, plaintext);
+
+        cipher.decrypt_in_place_detached(&nonce_bytes, &mut buffer, &tag_bytes).unwrap();
+
+        assert_eq!(buffer, plaintext);
     }
 }
