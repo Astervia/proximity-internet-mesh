@@ -64,7 +64,7 @@ use pim_core::{
     DiscoveryConfig, FrameCodec, NodeId, PeerEndpointConfig,
 };
 use pim_crypto::{
-    e2e_decrypt_in_place, e2e_encrypt, x25519_public_from_seed, EncryptedFrame, HandshakeConfirm,
+    e2e_decrypt_in_place, e2e_encrypt, x25519_public_from_seed, HandshakeConfirm,
     HandshakeInit, HandshakeResponse, Handshaker, Identity, SessionCipher,
 };
 use pim_discovery::{DiscoveryService, NodeCapabilities, PeerRecord, PeerTable};
@@ -98,8 +98,15 @@ struct Session {
 
 impl Session {
     fn encrypt_frame(&self, plaintext: &[u8]) -> Result<TransportFrame> {
-        let ef = self.send.encrypt(plaintext)?;
-        transport_frame_from_encrypted(ef)
+        let mut payload = plaintext.to_vec();
+        let (nonce, tag) = self.send.encrypt_in_place_detached(&mut payload)?;
+
+        Ok(TransportFrame {
+            frame_type: FrameType::Data,
+            nonce,
+            payload,
+            tag,
+        })
     }
 
     fn decrypt_frame(&self, mut frame: TransportFrame) -> Result<TransportFrame> {
@@ -107,22 +114,6 @@ impl Session {
             .decrypt_in_place_detached(&frame.nonce, &mut frame.payload, &frame.tag)?;
         Ok(frame)
     }
-}
-
-fn transport_frame_from_encrypted(ef: EncryptedFrame) -> Result<TransportFrame> {
-    let ct_len = ef.ciphertext.len();
-    if ct_len < 16 {
-        bail!("encrypted frame too short to contain GCM tag");
-    }
-    let tag_offset = ct_len - 16;
-    let mut tag = [0u8; 16];
-    tag.copy_from_slice(&ef.ciphertext[tag_offset..]);
-    Ok(TransportFrame {
-        frame_type: FrameType::Data,
-        nonce: ef.nonce,
-        payload: ef.ciphertext[..tag_offset].to_vec(),
-        tag,
-    })
 }
 
 // ── Nonce prefix ──────────────────────────────────────────────────────────────
