@@ -719,6 +719,7 @@ address: aa-bb-cc-dd-ee-03, not connected, not favourite, not paired, name: \"PI
         assert_eq!(path, PathBuf::from("/tmp/fake-sysfs/bnep0/operstate"));
     }
 
+    #[cfg(target_os = "linux")]
     #[tokio::test]
     async fn run_discovers_radio_peer_and_emits_neighbor_target() {
         let fake_root = unique_test_dir("pim-bt-fake-root");
