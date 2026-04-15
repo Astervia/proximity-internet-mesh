@@ -27,7 +27,14 @@ Published releases include tarballs containing `pim` and `pim-daemon` for:
 Pick the archive that matches your host:
 
 ```bash
-VERSION="v0.1.8"
+VERSION="$(curl -fsSLI -o /dev/null -w '%{url_effective}' \
+  https://github.com/Astervia/proximity-internet-mesh/releases/latest \
+  | sed 's:.*/::')"
+
+if [ -z "${VERSION}" ]; then
+  echo "Failed to determine the latest GitHub release version" >&2
+  exit 1
+fi
 
 case "$(uname -s)-$(uname -m)" in
   Linux-x86_64) ASSET="pim-${VERSION}-x86_64-unknown-linux-musl" ;;
