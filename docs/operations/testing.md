@@ -106,8 +106,8 @@ make down-p1
 
 The supported macOS scope is narrower than Linux:
 
-- supported: client and relay roles, native `utunN` interface naming, config generation, workspace build, and unit tests
-- not supported: gateway NAT, Wi-Fi Direct, Bluetooth PAN, and Docker lab workflows
+- supported: client, relay, and gateway roles, native `utunN` interface naming, config generation, workspace build, and unit tests
+- not supported: Wi-Fi Direct, Bluetooth PAN, and Docker lab workflows
 
 CI covers the supported macOS build and config-generation path, but host-level runtime validation still needs a real macOS machine with the privileges required to create a TUN interface and update routes.
 
@@ -119,19 +119,19 @@ cargo test --workspace
 scripts/test-config-generators.sh
 sudo target/release/pim config generate client --output /tmp/pim-client.toml --force
 sudo target/release/pim config generate relay --output /tmp/pim-relay.toml --force
+sudo target/release/pim config generate gateway --output /tmp/pim-gateway.toml --force
 sudo target/release/pim up --config /tmp/pim-client.toml
 sudo target/release/pim status --verbose
 sudo target/release/pim down
 ```
 
-Unsupported-path check on macOS:
+Gateway smoke check on macOS:
 
 ```bash
-cp docker/configs/gateway.toml /tmp/pim-gateway.toml
-target/release/pim-daemon --config /tmp/pim-gateway.toml
+sudo target/release/pim-daemon --config /tmp/pim-gateway.toml
 ```
 
-That command should fail clearly when `[gateway].enabled = true`, confirming the non-Linux gateway restriction remains explicit.
+That command should bring up the TUN plus gateway dataplane on macOS when the host has a usable uplink interface and the privileges needed for `pfctl` and `sysctl`.
 
 ## Notes
 

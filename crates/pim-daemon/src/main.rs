@@ -392,21 +392,103 @@ impl InternetGatewayLink {
     }
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(target_os = "macos")]
+struct InternetGatewayLink {
+    send_fd: tokio::io::unix::AsyncFd<OwnedFd>,
+    recv_icmp_fd: tokio::io::unix::AsyncFd<OwnedFd>,
+    recv_tcp_fd: tokio::io::unix::AsyncFd<OwnedFd>,
+    recv_udp_fd: tokio::io::unix::AsyncFd<OwnedFd>,
+}
+
+#[cfg(target_os = "macos")]
+impl InternetGatewayLink {
+    fn new(interface: &str) -> Result<Self> {
+        let send_fd = create_raw_send_socket(interface)?;
+        let recv_icmp_fd = create_raw_recv_socket(interface, libc::IPPROTO_ICMP)?;
+        let recv_tcp_fd = create_raw_recv_socket(interface, libc::IPPROTO_TCP)?;
+        let recv_udp_fd = create_raw_recv_socket(interface, libc::IPPROTO_UDP)?;
+        Ok(Self {
+            send_fd: tokio::io::unix::AsyncFd::new(send_fd).context("raw send AsyncFd")?,
+            recv_icmp_fd: tokio::io::unix::AsyncFd::new(recv_icmp_fd)
+                .context("icmp recv AsyncFd")?,
+            recv_tcp_fd: tokio::io::unix::AsyncFd::new(recv_tcp_fd).context("tcp recv AsyncFd")?,
+            recv_udp_fd: tokio::io::unix::AsyncFd::new(recv_udp_fd).context("udp recv AsyncFd")?,
+        })
+    }
+
+    async fn send_packet(&self, packet: &[u8]) -> Result<()> {
+        let dest_ip = ipv4_destination(packet).context("raw send requires IPv4 packet")?;
+        let mut addr: libc::sockaddr_in = unsafe { std::mem::zeroed() };
+        addr.sin_family = libc::AF_INET as u16;
+        addr.sin_addr = libc::in_addr {
+            s_addr: u32::from(dest_ip).to_be(),
+        };
+
+        loop {
+            let mut guard = self
+                .send_fd
+                .writable()
+                .await
+                .context("raw send socket writable")?;
+            match guard.try_io(|inner| {
+                let rc = unsafe {
+                    libc::sendto(
+                        inner.as_raw_fd(),
+                        packet.as_ptr() as *const libc::c_void,
+                        packet.len(),
+                        0,
+                        &addr as *const _ as *const libc::sockaddr,
+                        std::mem::size_of::<libc::sockaddr_in>() as libc::socklen_t,
+                    )
+                };
+                if rc < 0 {
+                    Err(io::Error::last_os_error())
+                } else {
+                    Ok(())
+                }
+            }) {
+                Ok(result) => return result.context("raw sendto failed"),
+                Err(_would_block) => continue,
+            }
+        }
+    }
+
+    async fn recv_packet(&self, buf: &mut [u8]) -> Result<usize> {
+        tokio::select! {
+            result = recv_raw_protocol_packet(&self.recv_icmp_fd, buf.len(), "icmp recv") => {
+                let (packet, size) = result?;
+                buf[..size].copy_from_slice(&packet[..size]);
+                Ok(size)
+            }
+            result = recv_raw_protocol_packet(&self.recv_tcp_fd, buf.len(), "tcp recv") => {
+                let (packet, size) = result?;
+                buf[..size].copy_from_slice(&packet[..size]);
+                Ok(size)
+            }
+            result = recv_raw_protocol_packet(&self.recv_udp_fd, buf.len(), "udp recv") => {
+                let (packet, size) = result?;
+                buf[..size].copy_from_slice(&packet[..size]);
+                Ok(size)
+            }
+        }
+    }
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
 struct InternetGatewayLink;
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
 impl InternetGatewayLink {
     fn new(_interface: &str) -> Result<Self> {
-        bail!("gateway internet link is only supported on Linux")
+        bail!("gateway internet link is only supported on Linux and macOS")
     }
 
     async fn send_packet(&self, _packet: &[u8]) -> Result<()> {
-        bail!("gateway internet link is only supported on Linux")
+        bail!("gateway internet link is only supported on Linux and macOS")
     }
 
     async fn recv_packet(&self, _buf: &mut [u8]) -> Result<usize> {
-        bail!("gateway internet link is only supported on Linux")
+        bail!("gateway internet link is only supported on Linux and macOS")
     }
 }
 
@@ -420,15 +502,32 @@ fn ipv4_destination(packet: &[u8]) -> Option<Ipv4Addr> {
 }
 
 fn lookup_interface_ipv4(interface: &str) -> Result<Ipv4Addr> {
+    #[cfg(target_os = "linux")]
     let output = Command::new("ip")
         .args(["-4", "-o", "addr", "show", "dev", interface])
         .output()
         .with_context(|| format!("failed to inspect IPv4 address for {interface}"))?;
+    #[cfg(target_os = "macos")]
+    let output = Command::new("ifconfig")
+        .arg(interface)
+        .output()
+        .with_context(|| format!("failed to inspect IPv4 address for {interface}"))?;
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    bail!("interface IPv4 lookup is not supported on this platform");
+
     if !output.status.success() {
+        #[cfg(target_os = "linux")]
         bail!(
             "ip -4 -o addr show dev {interface} exited with {:?}",
             output.status.code()
         );
+        #[cfg(target_os = "macos")]
+        bail!(
+            "ifconfig {interface} exited with {:?}",
+            output.status.code()
+        );
+        #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+        unreachable!();
     }
 
     let stdout = String::from_utf8(output.stdout).context("invalid UTF-8 from ip addr output")?;
@@ -442,7 +541,7 @@ fn parse_interface_ipv4_output(output: &str) -> Option<Ipv4Addr> {
         .collect::<Vec<_>>()
         .windows(2)
         .find_map(|w| (w[0] == "inet").then_some(w[1]))
-        .and_then(|cidr| cidr.split('/').next())
+        .and_then(|token| token.split('/').next())
         .and_then(|ip| ip.parse().ok())
 }
 
@@ -468,6 +567,27 @@ fn create_raw_send_socket(interface: &str) -> Result<OwnedFd> {
     )
     .context("set IP_HDRINCL")?;
     bind_socket_to_device(fd.as_raw_fd(), interface).context("bind raw send socket to device")?;
+    Ok(fd)
+}
+
+#[cfg(target_os = "macos")]
+fn create_raw_send_socket(interface: &str) -> Result<OwnedFd> {
+    let fd = unsafe { libc::socket(libc::AF_INET, libc::SOCK_RAW, libc::IPPROTO_RAW) };
+    if fd < 0 {
+        return Err(io::Error::last_os_error()).context("create raw send socket");
+    }
+    let fd = unsafe { OwnedFd::from_raw_fd(fd) };
+    set_nonblocking(fd.as_raw_fd()).context("set raw send socket nonblocking")?;
+    let one: libc::c_int = 1;
+    setsockopt_bytes(
+        fd.as_raw_fd(),
+        libc::IPPROTO_IP,
+        libc::IP_HDRINCL,
+        &one.to_ne_bytes(),
+    )
+    .context("set IP_HDRINCL")?;
+    bind_socket_to_interface(fd.as_raw_fd(), interface)
+        .context("bind raw send socket to device")?;
     Ok(fd)
 }
 
@@ -518,7 +638,84 @@ fn bind_socket_to_device(fd: i32, interface: &str) -> Result<()> {
         .with_context(|| format!("SO_BINDTODEVICE failed for {interface}"))
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(target_os = "macos")]
+fn create_raw_recv_socket(interface: &str, protocol: i32) -> Result<OwnedFd> {
+    let fd = unsafe { libc::socket(libc::AF_INET, libc::SOCK_RAW, protocol) };
+    if fd < 0 {
+        return Err(io::Error::last_os_error())
+            .with_context(|| format!("create raw recv socket for protocol {protocol}"));
+    }
+    let fd = unsafe { OwnedFd::from_raw_fd(fd) };
+    set_nonblocking(fd.as_raw_fd()).context("set raw recv socket nonblocking")?;
+    bind_socket_to_interface(fd.as_raw_fd(), interface)
+        .context("bind raw recv socket to device")?;
+    Ok(fd)
+}
+
+#[cfg(target_os = "macos")]
+const IP_BOUND_IF: libc::c_int = 25;
+
+#[cfg(target_os = "macos")]
+fn bind_socket_to_interface(fd: i32, interface: &str) -> Result<()> {
+    let if_name = std::ffi::CString::new(interface).context("interface contains interior NUL")?;
+    let ifindex = unsafe { libc::if_nametoindex(if_name.as_ptr()) };
+    if ifindex == 0 {
+        return Err(io::Error::last_os_error()).context("if_nametoindex failed");
+    }
+
+    let ifindex = (ifindex as libc::c_uint).to_ne_bytes();
+    setsockopt_bytes(fd, libc::IPPROTO_IP, IP_BOUND_IF, &ifindex)
+        .with_context(|| format!("IP_BOUND_IF failed for {interface}"))
+}
+
+#[cfg(target_os = "macos")]
+async fn recv_raw_protocol_packet(
+    fd: &tokio::io::unix::AsyncFd<OwnedFd>,
+    buf_len: usize,
+    context: &'static str,
+) -> Result<(Vec<u8>, usize)> {
+    let mut packet = vec![0u8; buf_len];
+    loop {
+        let mut guard = fd
+            .readable()
+            .await
+            .with_context(|| format!("{context} readable"))?;
+        match guard.try_io(|inner| {
+            let rc = unsafe {
+                libc::recv(
+                    inner.as_raw_fd(),
+                    packet.as_mut_ptr() as *mut libc::c_void,
+                    packet.len(),
+                    0,
+                )
+            };
+            if rc < 0 {
+                Err(io::Error::last_os_error())
+            } else {
+                Ok(rc as usize)
+            }
+        }) {
+            Ok(result) => return result.map(|size| (packet, size)).context(context),
+            Err(_would_block) => continue,
+        }
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn set_nonblocking(fd: i32) -> Result<()> {
+    unsafe {
+        let flags = libc::fcntl(fd, libc::F_GETFL);
+        if flags < 0 {
+            return Err(io::Error::last_os_error()).context("fcntl(F_GETFL) failed");
+        }
+        if libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK) < 0 {
+            return Err(io::Error::last_os_error()).context("fcntl(F_SETFL) failed");
+        }
+    }
+    Ok(())
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 fn setsockopt_bytes(fd: i32, level: i32, optname: i32, value: &[u8]) -> Result<()> {
     let rc = unsafe {
         libc::setsockopt(
@@ -2573,8 +2770,8 @@ async fn main() -> Result<()> {
     info!(%self_id, "identity loaded");
 
     let is_gateway = config.gateway.enabled;
-    if is_gateway && !cfg!(target_os = "linux") {
-        bail!("gateway mode is currently Linux-only; disable [gateway] on macOS");
+    if is_gateway && !cfg!(any(target_os = "linux", target_os = "macos")) {
+        bail!("gateway mode is only supported on Linux and macOS");
     }
     let own_x25519_pub = x25519_public_from_seed(&identity.signing_key().to_bytes());
 
@@ -3466,6 +3663,18 @@ mod tests {
         assert_eq!(
             parse_interface_ipv4_output(output),
             Some(Ipv4Addr::new(192, 168, 0, 137))
+        );
+    }
+
+    #[test]
+    fn parse_interface_ipv4_output_extracts_macos_ifconfig_inet() {
+        let output = "\
+en0: flags=8863<UP,BROADCAST,RUNNING,SIMPLEX,MULTICAST> mtu 1500\n\
+\tinet 192.168.1.44 netmask 0xffffff00 broadcast 192.168.1.255\n\
+\tinet6 fe80::1234%en0 prefixlen 64 secured scopeid 0x4\n";
+        assert_eq!(
+            parse_interface_ipv4_output(output),
+            Some(Ipv4Addr::new(192, 168, 1, 44))
         );
     }
 
