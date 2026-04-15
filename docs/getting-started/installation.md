@@ -2,6 +2,19 @@
 
 This project supports client and relay nodes on Linux and macOS. Gateway mode remains Linux-only because the daemon still depends on Linux NAT and raw-socket behavior for internet egress.
 
+## Supported Scope By Platform
+
+| Capability | Linux | macOS |
+| --- | --- | --- |
+| Client node | Supported | Supported |
+| Relay node | Supported | Supported |
+| Gateway node | Supported | Not supported |
+| Wi-Fi Direct | Supported | Not supported |
+| Bluetooth PAN | Supported | Not supported |
+| Docker lab flows | Supported | Not supported |
+
+On macOS, use PIM as a client or relay only. Plan on a `utunN` interface name, and do not expect gateway, Wi-Fi Direct, Bluetooth PAN, or Docker lab workflows to work there.
+
 ## Requirements
 
 Host requirements:
@@ -98,7 +111,7 @@ If you prefer not to install globally, you can run the binaries directly from `t
 
 ## Prepare A Config File
 
-Create `/etc/pim/pim.toml`. On macOS, use a `utunN` interface name such as `utun0`. Start from the examples in [configuration.md](configuration.md).
+Create `/etc/pim/pim.toml`. On macOS, use a `utunN` interface name such as `utun0`, keep `[gateway].enabled = false`, and leave Wi-Fi Direct and Bluetooth sections disabled. Start from the examples in [configuration.md](configuration.md).
 
 ## Verify The CLI
 
@@ -109,6 +122,8 @@ pim status --help
 ```
 
 ## Verify A Full Development Environment
+
+These checks are Linux-oriented. The Docker-based development environment is not part of the supported macOS path.
 
 Unit tests:
 
