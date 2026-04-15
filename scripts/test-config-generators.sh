@@ -1,0 +1,59 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$REPO_ROOT"
+
+tmpdir="$(mktemp -d)"
+trap 'rm -rf "$tmpdir"' EXIT
+
+assert_contains() {
+    local file="$1"
+    local expected="$2"
+    if ! grep -Fq "$expected" "$file"; then
+        echo "expected to find: $expected" >&2
+        echo "--- file: $file ---" >&2
+        cat "$file" >&2
+        exit 1
+    fi
+}
+
+assert_not_contains() {
+    local file="$1"
+    local unexpected="$2"
+    if grep -Fq "$unexpected" "$file"; then
+        echo "did not expect to find: $unexpected" >&2
+        echo "--- file: $file ---" >&2
+        cat "$file" >&2
+        exit 1
+    fi
+}
+
+linux_client="$tmpdir/linux-client.toml"
+PIM_HOST_OS=Linux scripts/generate_client_full_config.sh > "$linux_client"
+assert_contains "$linux_client" 'name = "pim0"'
+assert_contains "$linux_client" '[wifi_direct]'
+assert_contains "$linux_client" 'enabled = true'
+assert_contains "$linux_client" 'interface = "wlan0"'
+assert_contains "$linux_client" 'interface = "bnep0"'
+
+mac_client="$tmpdir/macos-client.toml"
+PIM_HOST_OS=Darwin scripts/generate_client_full_config.sh > "$mac_client"
+assert_contains "$mac_client" 'name = "utun0"'
+assert_contains "$mac_client" '# Wi-Fi Direct is currently Linux-only; leave this disabled on macOS.'
+assert_contains "$mac_client" '# Bluetooth PAN auto-discovery is currently Linux-only; leave this disabled on macOS.'
+assert_contains "$mac_client" 'enabled = false'
+assert_contains "$mac_client" 'interface = "en0"'
+assert_contains "$mac_client" 'interface = "bridge0"'
+assert_not_contains "$mac_client" '#   ip -br link'
+assert_not_contains "$mac_client" '#   iw dev'
+assert_not_contains "$mac_client" '#   bluetoothctl show'
+
+gateway_stderr="$tmpdir/macos-gateway.stderr"
+if PIM_HOST_OS=Darwin scripts/generate_gateway_full_config.sh > /dev/null 2>"$gateway_stderr"; then
+    echo "expected macOS gateway generator to fail" >&2
+    exit 1
+fi
+assert_contains "$gateway_stderr" 'generate_gateway_full_config.sh does not support macOS because gateway mode is currently Linux-only.'
+
+echo "config generator checks passed"
