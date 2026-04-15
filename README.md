@@ -12,6 +12,22 @@ The codebase is currently centered on a Linux daemon, a small CLI, and Docker-ba
 - `pim-daemon` runtime that handles peer sessions, routing, fragmentation, metrics, and gateway NAT
 - Docker Compose labs for single-hop, relay, discovery, resilience, and multi-gateway scenarios
 
+## Platform Support Matrix
+
+| Capability | Linux | macOS |
+| --- | --- | --- |
+| Client runtime | Supported | Supported |
+| Relay runtime | Supported | Supported |
+| Gateway runtime and NAT | Supported | Not supported |
+| Wi-Fi Direct backend | Supported | Not supported |
+| Bluetooth PAN backend | Supported | Not supported |
+| `pim config generate client` | Supported | Supported |
+| `pim config generate relay` | Supported | Supported |
+| `pim config generate gateway` | Supported | Not supported |
+| Docker integration labs | Supported | Not supported |
+
+On macOS, stay within the client or relay roles, use a `utunN` interface such as `utun0`, and leave Wi-Fi Direct, Bluetooth PAN, and gateway mode disabled.
+
 ## Repository Layout
 
 ```text
@@ -68,6 +84,8 @@ pim config generate relay
 pim config generate gateway
 pim config generate relay gateway
 ```
+
+On macOS, use only the `client` and `relay` variants. Gateway config generation is Linux-only because gateway runtime support is Linux-only.
 
 Write directly to a file:
 
@@ -150,6 +168,8 @@ Then create `/etc/pim/pim.toml`. The easiest starting point is:
 sudo pim config generate client --output /etc/pim/pim.toml
 ```
 
+On macOS, keep the generated `utunN` interface name, leave gateway mode disabled, and do not enable Wi-Fi Direct or Bluetooth PAN.
+
 You can also start from a minimal static client example:
 
 ```toml
@@ -186,7 +206,7 @@ address = "gateway.example.internal:9100"
 label = "gateway"
 ```
 
-For a gateway node, set `gateway.enabled = true`, choose the gateway mesh IP, and point `nat_interface` at the internet-facing interface.
+For a Linux gateway node, set `gateway.enabled = true`, choose the gateway mesh IP, and point `nat_interface` at the internet-facing interface.
 
 ## Uninstall
 
