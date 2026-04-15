@@ -314,19 +314,6 @@ impl GatewayEngine {
     /// Example `mesh_cidr`: `"10.77.0.0/24"`.
     /// This is idempotent.
     pub fn setup_masquerade(&self, mesh_cidr: &str) -> Result<(), GatewayError> {
-        #[cfg(target_os = "macos")]
-        {
-            return self.setup_pf_anchor(mesh_cidr);
-        }
-
-        #[cfg(not(target_os = "linux"))]
-        {
-            let _ = mesh_cidr;
-            return Err(GatewayError::CommandFailed(
-                "gateway setup is not supported on this platform".into(),
-            ));
-        }
-
         #[cfg(target_os = "linux")]
         {
             // Enable IP forwarding (may fail with permission denied in Docker, but often already set)
@@ -386,6 +373,19 @@ impl GatewayEngine {
             debug!(mesh_cidr = mesh_cidr, iface = %self.internet_iface, "iptables MASQUERADE configured");
             Ok(())
         }
+
+        #[cfg(target_os = "macos")]
+        {
+            self.setup_pf_anchor(mesh_cidr)
+        }
+
+        #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+        {
+            let _ = mesh_cidr;
+            Err(GatewayError::CommandFailed(
+                "gateway setup is not supported on this platform".into(),
+            ))
+        }
     }
 
     #[cfg(target_os = "macos")]
@@ -413,6 +413,7 @@ impl GatewayEngine {
     }
 }
 
+#[cfg(target_os = "linux")]
 fn input_drop_args<'a>(proto: &'a str, iface: &'a str) -> [&'a str; 10] {
     [
         "-A",
@@ -731,6 +732,7 @@ fn run_cmd_with_stdin(program: &str, args: &[&str], stdin: &str) -> Result<(), G
     }
 }
 
+#[cfg(target_os = "linux")]
 fn check_cmd_quiet(program: &str, args: &[&str]) -> Result<bool, GatewayError> {
     let status = std::process::Command::new(program)
         .args(args)
