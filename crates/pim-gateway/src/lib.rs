@@ -1115,6 +1115,7 @@ mod tests {
         assert!(result.is_ok());
     }
 
+    #[cfg(target_os = "linux")]
     #[test]
     fn input_drop_args_for_tcp_cover_reserved_nat_range() {
         assert_eq!(
@@ -1134,6 +1135,7 @@ mod tests {
         );
     }
 
+    #[cfg(target_os = "linux")]
     #[test]
     fn input_drop_args_for_udp_cover_reserved_nat_range() {
         assert_eq!(
