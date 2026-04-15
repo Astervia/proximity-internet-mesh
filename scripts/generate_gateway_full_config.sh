@@ -5,9 +5,9 @@ usage() {
     cat <<'EOF'
 Usage: generate_gateway_full_config.sh [options]
 
-Generate a full PIM gateway config with discovery, Wi-Fi Direct, and Bluetooth
-PAN enabled. Interface values are auto-detected when possible and can be
-overridden explicitly.
+Generate a full PIM gateway config with discovery plus the host's supported
+peer-link backends enabled. Interface values are auto-detected when possible
+and can be overridden explicitly.
 
 Options:
   -o, --output PATH            Write config to PATH instead of stdout
@@ -222,11 +222,11 @@ if is_macos; then
     interface_name="utun0"
     review_cmd_1="#   route -n get default"
     review_cmd_2="#   ifconfig -l"
-    review_cmd_3="#   ifconfig ${nat_interface}"
+    review_cmd_3="#   blueutil --power"
     wifi_enabled="false"
     wifi_comment="# Wi-Fi Direct is currently Linux-only; leave this disabled on macOS."
-    bt_enabled="false"
-    bt_comment="# Bluetooth PAN auto-discovery is currently Linux-only; leave this disabled on macOS."
+    bt_enabled="true"
+    bt_comment="# macOS Bluetooth PAN uses the host Bluetooth stack. Install blueutil for radio discovery/pair/connect."
 else
     interface_name="pim0"
     review_cmd_1="#   ip route get 1.1.1.1"

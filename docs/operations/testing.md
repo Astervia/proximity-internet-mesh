@@ -107,9 +107,9 @@ make down-p1
 The supported macOS scope is narrower than Linux:
 
 - supported: client, relay, and gateway roles, native `utunN` interface naming, config generation, workspace build, and unit tests
-- not supported: Wi-Fi Direct, Bluetooth PAN, and Docker lab workflows
+- not supported: Wi-Fi Direct and Docker lab workflows
 
-CI covers the supported macOS build and config-generation path, but host-level runtime validation still needs a real macOS machine with the privileges required to create a TUN interface and update routes.
+CI covers the supported macOS build and config-generation path, but host-level runtime validation still needs a real macOS machine with the privileges required to create a TUN interface and update routes. Bluetooth PAN on macOS also needs the host Bluetooth stack plus `blueutil` for radio discovery and pairing automation.
 
 Recommended manual smoke checks on macOS:
 

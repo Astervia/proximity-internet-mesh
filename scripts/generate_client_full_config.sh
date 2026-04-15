@@ -5,9 +5,9 @@ usage() {
     cat <<'EOF'
 Usage: generate_client_full_config.sh [options]
 
-Generate a full PIM client config with discovery, Wi-Fi Direct, and Bluetooth
-PAN enabled. Interface values are auto-detected when possible and can be
-overridden explicitly.
+Generate a full PIM client config with discovery plus the host's supported
+peer-link backends enabled. Interface values are auto-detected when possible
+and can be overridden explicitly.
 
 Options:
   -o, --output PATH            Write config to PATH instead of stdout
@@ -176,7 +176,7 @@ bt_mac_comment=""
 
 if is_macos; then
     interface_name="utun0"
-    review_commands=$'#   ifconfig -l\n#   networksetup -listallhardwareports'
+    review_commands=$'#   ifconfig -l\n#   blueutil --power\n#   arp -an -i bridge0'
     if [[ -z "${wifi_interface}" ]]; then
         wifi_interface="en0"
     fi
@@ -186,9 +186,9 @@ if is_macos; then
     detect_note_wifi="$(shell_quote_comment "${wifi_interface}")"
     detect_note_bt="$(shell_quote_comment "${bt_interface}")"
     wifi_enabled="false"
-    bt_enabled="false"
+    bt_enabled="true"
     wifi_mac_comment="# Wi-Fi Direct is currently Linux-only; leave this disabled on macOS."
-    bt_mac_comment="# Bluetooth PAN auto-discovery is currently Linux-only; leave this disabled on macOS."
+    bt_mac_comment="# macOS Bluetooth PAN uses the host Bluetooth stack. Install blueutil for radio discovery/pair/connect."
 fi
 
 config="$(cat <<EOF

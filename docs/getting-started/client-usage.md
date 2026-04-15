@@ -6,8 +6,8 @@ interfaces for different peer connectivity mechanisms.
 Platform scope:
 
 - Linux supports TCP, LAN discovery, Wi-Fi Direct, and Bluetooth PAN client paths.
-- macOS supports the client dataplane and routing via `utunN`, plus TCP and LAN discovery.
-- macOS does not currently support Wi-Fi Direct or Bluetooth PAN in PIM.
+- macOS supports the client dataplane and routing via `utunN`, plus TCP, LAN discovery, and Bluetooth PAN.
+- macOS does not currently support Wi-Fi Direct in PIM.
 
 The key distinction is:
 
@@ -25,7 +25,7 @@ The client host should have:
 - a writable config file such as `/etc/pim/pim.toml`
 - at least one intended peer-connectivity path, such as LAN discovery, Wi-Fi Direct, Bluetooth PAN, or static peers
 
-On macOS, narrow that last item to LAN discovery and static TCP peers. Keep Wi-Fi Direct and Bluetooth disabled in the generated config.
+On macOS, narrow that last item to LAN discovery, static TCP peers, and Bluetooth PAN. Keep Wi-Fi Direct disabled in the generated config.
 
 Generate a starter client config:
 
@@ -191,8 +191,6 @@ wpa_cli -i wlan0 p2p_find
 
 ## Bluetooth PAN Client
 
-Linux only. This backend is not currently supported on macOS.
-
 Use Bluetooth when the client should discover peers over a Bluetooth PAN link
 and then hand off to the normal TCP transport.
 
@@ -204,19 +202,19 @@ List controllers:
 bluetoothctl list
 ```
 
-Show controller state:
+Show controller state on Linux:
 
 ```bash
 bluetoothctl show
 ```
 
-List current network interfaces and look for `bnep*`:
+List current network interfaces and look for the PAN interface:
 
 ```bash
 ip -br link
 ```
 
-If a PAN interface already exists, inspect it:
+If a PAN interface already exists, inspect it. On macOS, use `bridge0` or the host's Bluetooth PAN bridge if it differs:
 
 ```bash
 ip -4 -o addr show dev bnep0
@@ -228,7 +226,7 @@ Example client config:
 ```toml
 [bluetooth]
 enabled = true
-interface = "bnep0"
+interface = "bnep0" # use "bridge0" on macOS unless the host exposes a different PAN bridge
 radio_discovery_enabled = true
 device_name_prefix = "PIM-"
 local_alias = "PIM-client-a"
@@ -243,10 +241,10 @@ startup_timeout_ms = 15000
 
 Operational notes:
 
-- `[bluetooth].interface` should be the PAN interface, usually `bnep0`
+- `[bluetooth].interface` should be the PAN interface, usually `bnep0` on Linux or `bridge0` on macOS
 - PIM waits for that interface to become ready
-- PIM can use `bluetoothctl` to scan for nearby devices whose names match `device_name_prefix`
-- once the PAN link exists, PIM reads neighbor entries from `ip neigh show dev <interface>`
+- Linux uses `bluetoothctl`; macOS uses the host Bluetooth stack and expects `blueutil` for radio discovery and pairing automation
+- once the PAN link exists, PIM reads neighbor entries from `ip neigh show dev <interface>` on Linux or `arp -an -i <interface>` on macOS
 - discovered neighbor IPs are then used as normal TCP peer targets on `transport.listen_port`
 
 For environments where radio discovery is not enough, you can also declare
@@ -276,7 +274,7 @@ A client can combine mechanisms. For example:
 - Bluetooth PAN for short-range fallback
 - static TCP peers for known relays or gateways
 
-On macOS, limit this to LAN discovery plus static TCP peers.
+On macOS, limit this to LAN discovery, Bluetooth PAN, and static TCP peers.
 
 Example:
 

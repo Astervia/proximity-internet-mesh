@@ -20,13 +20,13 @@ The codebase is currently centered on a Linux daemon, a small CLI, and Docker-ba
 | Relay runtime | Supported | Supported |
 | Gateway runtime and NAT | Supported | Supported |
 | Wi-Fi Direct backend | Supported | Not supported |
-| Bluetooth PAN backend | Supported | Not supported |
+| Bluetooth PAN backend | Supported | Supported |
 | `pim config generate client` | Supported | Supported |
 | `pim config generate relay` | Supported | Supported |
 | `pim config generate gateway` | Supported | Supported |
 | Docker integration labs | Supported | Not supported |
 
-On macOS, use a `utunN` interface such as `utun0` for the mesh TUN, set `gateway.nat_interface` to the internet-facing host interface such as `en0`, and keep Wi-Fi Direct and Bluetooth PAN disabled.
+On macOS, use a `utunN` interface such as `utun0` for the mesh TUN, set `gateway.nat_interface` to the internet-facing host interface such as `en0`, and keep Wi-Fi Direct disabled. The Bluetooth PAN path uses the host Bluetooth stack and currently expects `blueutil` for radio discovery and pairing automation.
 
 ## Repository Layout
 
@@ -86,7 +86,7 @@ pim config generate gateway
 pim config generate relay gateway
 ```
 
-On macOS, the generated gateway template uses `utun0` for the mesh TUN, `en0` as the default NAT uplink, and leaves Wi-Fi Direct and Bluetooth PAN disabled because those backends are still Linux-only.
+On macOS, the generated gateway template uses `utun0` for the mesh TUN, `en0` as the default NAT uplink, leaves Wi-Fi Direct disabled, and enables Bluetooth PAN with the macOS host-stack flow.
 
 Write directly to a file:
 
@@ -169,7 +169,7 @@ Then create `/etc/pim/pim.toml`. The easiest starting point is:
 sudo pim config generate client --output /etc/pim/pim.toml
 ```
 
-On macOS, keep the generated `utunN` interface name, set `gateway.nat_interface` to the real uplink if this node should be a gateway, and do not enable Wi-Fi Direct or Bluetooth PAN.
+On macOS, keep the generated `utunN` interface name, set `gateway.nat_interface` to the real uplink if this node should be a gateway, leave Wi-Fi Direct disabled, and install `blueutil` if this node should use Bluetooth PAN radio discovery.
 
 You can also start from a minimal static client example:
 

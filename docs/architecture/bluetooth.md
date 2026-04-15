@@ -1,8 +1,9 @@
 # Bluetooth PAN Connectivity
 
 PIM treats Bluetooth as an optional **peer discovery and link-establishment**
-mechanism, not a new wire transport. The current implementation targets Linux
-Bluetooth PAN links and uses BlueZ helper commands to:
+mechanism, not a new wire transport. The implementation supports Linux
+Bluetooth PAN links through BlueZ helper commands and macOS Bluetooth PAN
+through the host Bluetooth stack. At a high level it can:
 
 - advertise a PIM-specific Bluetooth alias
 - scan for nearby Bluetooth devices
@@ -17,8 +18,8 @@ remain unchanged. Static peer IPs remain available as a fallback.
 ## Scope
 
 - Bluetooth is opt-in via `[bluetooth] enabled = true`
-- The daemon can perform radio-level device discovery via `bluetoothctl`
-- The daemon can request PAN/NAP setup via `bt-network`
+- The daemon can perform radio-level device discovery via `bluetoothctl` on Linux or `blueutil` on macOS
+- Linux requests PAN/NAP setup via `bt-network`; macOS uses the host stack's connection flow
 - The daemon waits for the PAN interface to become ready
 - When ready, it discovers peer IPs and emits `SocketAddr`s using `[transport] listen_port`
 
@@ -46,14 +47,16 @@ discoverable_timeout_s = 180
 startup_timeout_ms = 15000
 ```
 
-When `radio_discovery_enabled = true`, the daemon uses `bluetoothctl` to scan
-for nearby devices whose names match `device_name_prefix`. For each match it
-attempts `pair`, `trust`, `connect`, and then `bt-network -c <mac> nap`.
+When `radio_discovery_enabled = true`, the daemon scans for nearby devices
+whose names match `device_name_prefix`. Linux uses `bluetoothctl` followed by
+`bt-network -c <mac> nap`. macOS uses `blueutil` for inquiry, pairing, and
+connection against the host Bluetooth stack.
 
-When `auto_discover_peers = true`, the daemon also polls
-`ip neigh show dev <interface>` and converts discovered PAN neighbor IPs into
-`SocketAddr`s using `[transport] listen_port`. Static Bluetooth peers can also
-be declared under `[[peers]]` with `mechanism = "bluetooth"` for environments
+When `auto_discover_peers = true`, the daemon also polls the host neighbor
+table and converts discovered PAN neighbor IPs into `SocketAddr`s using
+`[transport] listen_port`. Linux uses `ip neigh show dev <interface>`, while
+macOS uses `arp -an -i <interface>`. Static Bluetooth peers can also be
+declared under `[[peers]]` with `mechanism = "bluetooth"` for environments
 where neighbor discovery is incomplete.
 
 ## Daemon Flow
@@ -64,13 +67,15 @@ Bluetooth PAN interface up
         ▼
 BluetoothDiscovery::run
         │
-        ├─ bluetoothctl power/pairable/discoverable/system-alias
-        ├─ bluetoothctl scan on
-        ├─ bluetoothctl devices → filter names by prefix
-        ├─ bluetoothctl pair/trust/connect <mac>
-        ├─ bt-network -c <mac> nap
-        ├─ waits for /sys/class/net/<interface>/operstate
-        ├─ runs ip neigh show dev <interface>
+        ├─ Linux: bluetoothctl power/pairable/discoverable/system-alias
+        ├─ Linux: bluetoothctl scan on
+        ├─ Linux/macOS: device discovery → filter names by prefix
+        ├─ Linux/macOS: pair/connect <mac>
+        ├─ Linux: bt-network -c <mac> nap
+        ├─ Linux: waits for /sys/class/net/<interface>/operstate
+        ├─ macOS: waits for ifconfig <interface> to become active
+        ├─ Linux: runs ip neigh show dev <interface>
+        ├─ macOS: runs arp -an -i <interface>
         ├─ parses discovered neighbor IPs
         └─ emits SocketAddr(peer_ip, transport.listen_port)
                 │
@@ -118,9 +123,9 @@ connection attempts still collapse onto the existing session and reconnect logic
 
 - The implementation shells out to `bluetoothctl` and `bt-network` rather than using D-Bus directly.
 - Real-world success still depends on the host BlueZ stack and a PAN/NAP-capable peer.
-- Automatic discovery depends on the Linux neighbor table for the PAN interface.
+- Automatic discovery depends on the platform neighbor table for the PAN interface.
 - Docker can test the orchestration seams, but not real RF discovery or PAN behavior.
-- The readiness check is Linux-specific and depends on `/sys/class/net/<interface>/operstate`.
+- The readiness check is platform-specific: Linux uses `/sys/class/net/<interface>/operstate`, while macOS uses `ifconfig <interface>`.
 
 ## Related Documents
 
