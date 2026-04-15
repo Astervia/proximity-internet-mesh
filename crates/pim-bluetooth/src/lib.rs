@@ -74,9 +74,11 @@ pub struct BluetoothDiscovery {
     config: BluetoothConfig,
     listen_port: u16,
     static_targets: Vec<SocketAddr>,
+    #[cfg(target_os = "linux")]
     sysfs_root: PathBuf,
     ip_command: PathBuf,
     bluetoothctl_command: PathBuf,
+    #[cfg(target_os = "linux")]
     bt_network_command: PathBuf,
     peer_tx: mpsc::Sender<SocketAddr>,
 }
@@ -116,9 +118,11 @@ impl BluetoothDiscovery {
                 config,
                 listen_port,
                 static_targets,
+                #[cfg(target_os = "linux")]
                 sysfs_root: sysfs_root.into(),
                 ip_command: ip_command.into(),
                 bluetoothctl_command: bluetoothctl_command.into(),
+                #[cfg(target_os = "linux")]
                 bt_network_command: bt_network_command.into(),
                 peer_tx,
             },
@@ -298,6 +302,7 @@ impl BluetoothDiscovery {
         Ok(String::from_utf8_lossy(&output.stdout).to_string())
     }
 
+    #[cfg(target_os = "linux")]
     async fn run_bt_network(&self, mac: &str) -> Result<(), BluetoothError> {
         let output = Command::new(&self.bt_network_command)
             .args(["-c", mac, "nap"])
@@ -455,10 +460,12 @@ impl BluetoothDiscovery {
     }
 }
 
+#[cfg(any(test, target_os = "linux"))]
 fn interface_operstate_path(sysfs_root: &Path, interface: &str) -> PathBuf {
     sysfs_root.join(interface).join("operstate")
 }
 
+#[cfg(any(test, target_os = "linux"))]
 async fn read_operstate_if_present(path: &Path) -> Result<Option<String>, std::io::Error> {
     match tokio::fs::read_to_string(path).await {
         Ok(state) => Ok(Some(state)),
@@ -467,6 +474,7 @@ async fn read_operstate_if_present(path: &Path) -> Result<Option<String>, std::i
     }
 }
 
+#[cfg(any(test, target_os = "linux"))]
 fn is_ready_operstate(state: &str) -> bool {
     matches!(state.trim(), "up" | "unknown")
 }
@@ -477,6 +485,7 @@ fn is_ready_ifconfig_output(output: &str) -> bool {
     !output.is_empty() && !output.contains("status: inactive")
 }
 
+#[cfg(any(test, target_os = "linux"))]
 fn parse_neighbor_output(output: &str, listen_port: u16) -> Vec<SocketAddr> {
     let mut addrs = Vec::new();
     let mut seen = HashSet::new();
@@ -502,6 +511,7 @@ fn parse_neighbor_output(output: &str, listen_port: u16) -> Vec<SocketAddr> {
     addrs
 }
 
+#[cfg(any(test, target_os = "linux"))]
 fn parse_devices_output(output: &str, prefix: &str, local_alias: &str) -> Vec<DiscoveredDevice> {
     let mut devices = Vec::new();
     for line in output.lines() {
