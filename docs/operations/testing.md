@@ -2,6 +2,8 @@
 
 PIM uses two practical test layers in this repository: Rust tests for crate-level behavior and Docker-based end-to-end scenarios for multi-node networking.
 
+GitHub Actions also validates the supported macOS path separately from the Linux Docker labs. The CI matrix builds and tests the workspace on both Linux and macOS, then runs `scripts/test-config-generators.sh` to confirm the generated config guidance matches the host platform.
+
 ## Test Layers
 
 ### Unit and crate-level tests
@@ -99,6 +101,37 @@ make sh-p1-client
 pim status --verbose
 make down-p1
 ```
+
+## macOS Validation
+
+The supported macOS scope is narrower than Linux:
+
+- supported: client and relay roles, native `utunN` interface naming, config generation, workspace build, and unit tests
+- not supported: gateway NAT, Wi-Fi Direct, Bluetooth PAN, and Docker lab workflows
+
+CI covers the supported macOS build and config-generation path, but host-level runtime validation still needs a real macOS machine with the privileges required to create a TUN interface and update routes.
+
+Recommended manual smoke checks on macOS:
+
+```bash
+cargo build --workspace --release
+cargo test --workspace
+scripts/test-config-generators.sh
+sudo target/release/pim config generate client --output /tmp/pim-client.toml --force
+sudo target/release/pim config generate relay --output /tmp/pim-relay.toml --force
+sudo target/release/pim up --config /tmp/pim-client.toml
+sudo target/release/pim status --verbose
+sudo target/release/pim down
+```
+
+Unsupported-path check on macOS:
+
+```bash
+cp docker/configs/gateway.toml /tmp/pim-gateway.toml
+target/release/pim-daemon --config /tmp/pim-gateway.toml
+```
+
+That command should fail clearly when `[gateway].enabled = true`, confirming the non-Linux gateway restriction remains explicit.
 
 ## Notes
 
