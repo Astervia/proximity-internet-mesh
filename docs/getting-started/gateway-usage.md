@@ -1,5 +1,7 @@
 # Gateway Usage
 
+Gateway mode is Linux-only. This guide does not apply to macOS hosts because PIM does not currently support macOS internet egress/NAT.
+
 This guide shows how to run a PIM node as a gateway and how to choose the right
 interfaces for different peer connectivity mechanisms.
 
@@ -23,6 +25,8 @@ Generate a starter gateway config:
 ```bash
 pim config generate gateway --output /etc/pim/pim.toml
 ```
+
+If you are on macOS, stop here and use a client or relay configuration instead.
 
 ## Discover the Internet-Facing Interface
 
@@ -148,6 +152,8 @@ Notes:
 
 ## Wi-Fi Direct Gateway
 
+Linux only.
+
 Use Wi-Fi Direct when the gateway should form P2P Wi-Fi groups and let peers
 connect through the resulting link.
 
@@ -203,6 +209,8 @@ formation; you configure the parent Wi-Fi interface, not the transient `p2p-*`
 name.
 
 ## Bluetooth PAN Gateway
+
+Linux only.
 
 Use Bluetooth when peers are expected to connect over a Bluetooth PAN link and
 then hand off to the normal TCP transport.
