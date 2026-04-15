@@ -3,6 +3,12 @@
 This guide shows how to run a PIM node as a client and how to choose the right
 interfaces for different peer connectivity mechanisms.
 
+Platform scope:
+
+- Linux supports TCP, LAN discovery, Wi-Fi Direct, and Bluetooth PAN client paths.
+- macOS supports the client dataplane and routing via `utunN`, plus TCP and LAN discovery.
+- macOS does not currently support Wi-Fi Direct or Bluetooth PAN in PIM.
+
 The key distinction is:
 
 - `[interface].name`: the local TUN interface, usually `pim0`
@@ -19,6 +25,8 @@ The client host should have:
 - a writable config file such as `/etc/pim/pim.toml`
 - at least one intended peer-connectivity path, such as LAN discovery, Wi-Fi Direct, Bluetooth PAN, or static peers
 
+On macOS, narrow that last item to LAN discovery and static TCP peers. Keep Wi-Fi Direct and Bluetooth disabled in the generated config.
+
 Generate a starter client config:
 
 ```bash
@@ -27,17 +35,19 @@ pim config generate client --output /etc/pim/pim.toml
 
 ## List Candidate Network Interfaces
 
-List all network interfaces:
+List all network interfaces on Linux:
 
 ```bash
 ip -br link
 ```
 
-Show IPv4 addresses:
+Show IPv4 addresses on Linux:
 
 ```bash
 ip -br -4 addr
 ```
+
+On macOS, use `ifconfig -l` to list interfaces and `ifconfig <ifname>` to inspect a candidate interface.
 
 These commands help identify:
 
@@ -50,6 +60,12 @@ internet, check:
 
 ```bash
 ip route get 1.1.1.1
+```
+
+On macOS, the nearest equivalent is:
+
+```bash
+route -n get default
 ```
 
 That route is not configured into the PIM client TOML the way it is for a
@@ -86,6 +102,7 @@ Notes:
 - `mesh_ip = "auto"` lets the daemon request an address from a reachable gateway
 - a client does not need a `[gateway]` section enabled
 - a plain client usually does not set `relay.enabled = true`
+- on macOS, set `[interface].name` to a `utunN` name such as `utun0`
 
 ## UDP Discovery Plus Auto-Connect
 
@@ -125,6 +142,8 @@ label = "relay-a"
 This can be combined with discovery, Wi-Fi Direct, and Bluetooth PAN.
 
 ## Wi-Fi Direct Client
+
+Linux only. This backend is not currently supported on macOS.
 
 Use Wi-Fi Direct when the client should discover peers through a Wi-Fi P2P
 radio link.
@@ -171,6 +190,8 @@ wpa_cli -i wlan0 p2p_find
 ```
 
 ## Bluetooth PAN Client
+
+Linux only. This backend is not currently supported on macOS.
 
 Use Bluetooth when the client should discover peers over a Bluetooth PAN link
 and then hand off to the normal TCP transport.
@@ -254,6 +275,8 @@ A client can combine mechanisms. For example:
 - Wi-Fi Direct for nearby devices
 - Bluetooth PAN for short-range fallback
 - static TCP peers for known relays or gateways
+
+On macOS, limit this to LAN discovery plus static TCP peers.
 
 Example:
 
