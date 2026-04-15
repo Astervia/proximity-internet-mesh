@@ -1,2 +1,6 @@
 # Rust
 /target
+
+# Agents
+.codex
+.claude/

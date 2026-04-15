@@ -49,11 +49,16 @@ assert_not_contains "$mac_client" '#   ip -br link'
 assert_not_contains "$mac_client" '#   iw dev'
 assert_not_contains "$mac_client" '#   bluetoothctl show'
 
-gateway_stderr="$tmpdir/macos-gateway.stderr"
-if PIM_HOST_OS=Darwin scripts/generate_gateway_full_config.sh > /dev/null 2>"$gateway_stderr"; then
-    echo "expected macOS gateway generator to fail" >&2
-    exit 1
-fi
-assert_contains "$gateway_stderr" 'generate_gateway_full_config.sh does not support macOS because gateway mode is currently Linux-only.'
+mac_gateway="$tmpdir/macos-gateway.toml"
+PIM_HOST_OS=Darwin scripts/generate_gateway_full_config.sh > "$mac_gateway"
+assert_contains "$mac_gateway" 'name = "utun0"'
+assert_contains "$mac_gateway" 'nat_interface = "en0"'
+assert_contains "$mac_gateway" '# Wi-Fi Direct is currently Linux-only; leave this disabled on macOS.'
+assert_contains "$mac_gateway" '# Bluetooth PAN auto-discovery is currently Linux-only; leave this disabled on macOS.'
+assert_contains "$mac_gateway" '[gateway]'
+assert_contains "$mac_gateway" 'enabled = true'
+assert_not_contains "$mac_gateway" '#   ip route get 1.1.1.1'
+assert_not_contains "$mac_gateway" '#   iw dev'
+assert_not_contains "$mac_gateway" '#   ip -br link'
 
 echo "config generator checks passed"
