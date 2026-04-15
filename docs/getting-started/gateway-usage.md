@@ -24,7 +24,7 @@ Generate a starter gateway config:
 pim config generate gateway --output /etc/pim/pim.toml
 ```
 
-On macOS, use a `utunN` name such as `utun0` for `[interface].name`, choose a real uplink such as `en0` for `[gateway].nat_interface`, and leave Wi-Fi Direct plus Bluetooth disabled.
+On macOS, use a `utunN` name such as `utun0` for `[interface].name`, choose a real uplink such as `en0` for `[gateway].nat_interface`, leave Wi-Fi Direct disabled, and install `blueutil` if this gateway should use Bluetooth PAN radio discovery.
 
 ## Discover the Internet-Facing Interface
 
@@ -222,8 +222,6 @@ name.
 
 ## Bluetooth PAN Gateway
 
-Linux only.
-
 Use Bluetooth when peers are expected to connect over a Bluetooth PAN link and
 then hand off to the normal TCP transport.
 
@@ -235,19 +233,19 @@ List controllers:
 bluetoothctl list
 ```
 
-Show controller state:
+Show controller state on Linux:
 
 ```bash
 bluetoothctl show
 ```
 
-List current network interfaces and look for `bnep*`:
+List current network interfaces and look for the PAN interface:
 
 ```bash
 ip -br link
 ```
 
-If a PAN interface already exists, inspect it:
+If a PAN interface already exists, inspect it. On macOS, use `bridge0` or the host's Bluetooth PAN bridge if it differs:
 
 ```bash
 ip -4 -o addr show dev bnep0
@@ -263,7 +261,7 @@ nat_interface = "eth0"
 
 [bluetooth]
 enabled = true
-interface = "bnep0"
+interface = "bnep0" # use "bridge0" on macOS unless the host exposes a different PAN bridge
 radio_discovery_enabled = true
 device_name_prefix = "PIM-"
 local_alias = "PIM-gateway-a"
@@ -278,10 +276,10 @@ startup_timeout_ms = 15000
 
 Operational notes:
 
-- `[bluetooth].interface` should be the PAN interface, usually `bnep0`
+- `[bluetooth].interface` should be the PAN interface, usually `bnep0` on Linux or `bridge0` on macOS
 - PIM waits for that interface to become ready
-- PIM can use `bluetoothctl` to scan for nearby devices whose names match `device_name_prefix`
-- once the PAN link exists, PIM reads neighbor entries from `ip neigh show dev <interface>`
+- Linux uses `bluetoothctl`; macOS uses the host Bluetooth stack and expects `blueutil` for radio discovery and pairing automation
+- once the PAN link exists, PIM reads neighbor entries from `ip neigh show dev <interface>` on Linux or `arp -an -i <interface>` on macOS
 - discovered neighbor IPs are then used as normal TCP peer targets on `transport.listen_port`
 
 For environments where radio discovery is not enough, you can also declare

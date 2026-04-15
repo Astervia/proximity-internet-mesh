@@ -3808,10 +3808,10 @@ en0: flags=8863<UP,BROADCAST,RUNNING,SIMPLEX,MULTICAST> mtu 1500\n\
     }
 
     #[test]
-    fn bluetooth_sysfs_root_defaults_to_linux_sysfs() {
+    fn bluetooth_sysfs_root_defaults_to_platform_default() {
         assert_eq!(
             bluetooth_sysfs_root_from_env(None),
-            PathBuf::from("/sys/class/net")
+            PathBuf::from(pim_bluetooth::DEFAULT_SYSFS_ROOT)
         );
     }
 
@@ -3824,8 +3824,11 @@ en0: flags=8863<UP,BROADCAST,RUNNING,SIMPLEX,MULTICAST> mtu 1500\n\
     }
 
     #[test]
-    fn bluetooth_ip_command_defaults_to_ip() {
-        assert_eq!(bluetooth_ip_command_from_env(None), PathBuf::from("ip"));
+    fn bluetooth_ip_command_defaults_to_platform_default() {
+        assert_eq!(
+            bluetooth_ip_command_from_env(None),
+            PathBuf::from(pim_bluetooth::DEFAULT_IP_COMMAND)
+        );
     }
 
     #[test]
@@ -3837,10 +3840,10 @@ en0: flags=8863<UP,BROADCAST,RUNNING,SIMPLEX,MULTICAST> mtu 1500\n\
     }
 
     #[test]
-    fn bluetoothctl_command_defaults_to_bluetoothctl() {
+    fn bluetoothctl_command_defaults_to_platform_default() {
         assert_eq!(
             bluetoothctl_command_from_env(None),
-            PathBuf::from("bluetoothctl")
+            PathBuf::from(pim_bluetooth::DEFAULT_BLUETOOTHCTL_COMMAND)
         );
     }
 

@@ -2,14 +2,12 @@
 //!
 //! This crate keeps Bluetooth scoped to peer finding and link setup. It can:
 //!
-//! 1. Use `bluetoothctl` to advertise a PIM-specific alias, enable pairing,
-//!    and scan for nearby Bluetooth devices.
-//! 2. Pair/trust/connect to devices whose Bluetooth names match the configured
-//!    PIM prefix.
-//! 3. Use `bt-network` to request a PAN/NAP link.
-//! 4. Once the PAN interface exists, learn peer IPs from the neighbor table and
-//!    emit `SocketAddr`s so the daemon can reuse the normal TCP transport and
-//!    handshake path unchanged.
+//! 1. Discover nearby Bluetooth devices whose names match the configured PIM
+//!    prefix.
+//! 2. Pair/connect to matching devices.
+//! 3. Wait for a PAN interface to become active.
+//! 4. Learn peer IPs from the PAN neighbor table and emit `SocketAddr`s so the
+//!    daemon can reuse the normal TCP transport and handshake path unchanged.
 
 #![warn(missing_docs)]
 
@@ -25,11 +23,23 @@ use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
 
 /// Default Linux sysfs root used to inspect network interface state.
+#[cfg(target_os = "linux")]
 pub const DEFAULT_SYSFS_ROOT: &str = "/sys/class/net";
-/// Default `ip` command used to inspect the neighbor table.
+/// Default placeholder sysfs root for platforms that do not use sysfs.
+#[cfg(not(target_os = "linux"))]
+pub const DEFAULT_SYSFS_ROOT: &str = "";
+/// Default command used to inspect Bluetooth PAN neighbors.
+#[cfg(target_os = "linux")]
 pub const DEFAULT_IP_COMMAND: &str = "ip";
-/// Default `bluetoothctl` command used for radio discovery and pairing.
+/// Default command used to inspect Bluetooth PAN neighbors.
+#[cfg(target_os = "macos")]
+pub const DEFAULT_IP_COMMAND: &str = "arp";
+/// Default command used for radio discovery and pairing.
+#[cfg(target_os = "linux")]
 pub const DEFAULT_BLUETOOTHCTL_COMMAND: &str = "bluetoothctl";
+/// Default command used for radio discovery and pairing.
+#[cfg(target_os = "macos")]
+pub const DEFAULT_BLUETOOTHCTL_COMMAND: &str = "blueutil";
 /// Default `bt-network` command used to request a PAN/NAP connection.
 pub const DEFAULT_BT_NETWORK_COMMAND: &str = "bt-network";
 
@@ -233,6 +243,19 @@ impl BluetoothDiscovery {
     }
 
     async fn prepare_controller(&self) -> Result<(), BluetoothError> {
+        #[cfg(target_os = "macos")]
+        {
+            self.run_bluetoothctl(["--power", "1"]).await?;
+            self.run_bluetoothctl(["--discoverable", "1"]).await?;
+            if !self.config.local_alias.is_empty() {
+                warn!(
+                    local_alias = %self.config.local_alias,
+                    "macOS Bluetooth backend does not set the host controller alias automatically; set the Mac Bluetooth name manually if discovery by prefix is required"
+                );
+            }
+            return Ok(());
+        }
+
         self.run_bluetoothctl(["power", "on"]).await?;
         self.run_bluetoothctl(["pairable", "on"]).await?;
         self.run_bluetoothctl([
@@ -251,6 +274,21 @@ impl BluetoothDiscovery {
     }
 
     async fn discover_devices(&self) -> Result<Vec<DiscoveredDevice>, BluetoothError> {
+        #[cfg(target_os = "macos")]
+        {
+            let output = self
+                .run_bluetoothctl_capture([
+                    "--inquiry",
+                    &self.config.bluetoothctl_timeout_s.to_string(),
+                ])
+                .await?;
+            return Ok(parse_blueutil_inquiry_output(
+                &output,
+                &self.config.device_name_prefix,
+                &self.config.local_alias,
+            ));
+        }
+
         let output = self.run_bluetoothctl_capture(["devices"]).await?;
         Ok(parse_devices_output(
             &output,
@@ -260,6 +298,13 @@ impl BluetoothDiscovery {
     }
 
     async fn pair_and_request_pan(&self, device: &DiscoveredDevice) -> Result<(), BluetoothError> {
+        #[cfg(target_os = "macos")]
+        {
+            self.run_bluetoothctl(["--pair", &device.mac]).await?;
+            self.run_bluetoothctl(["--connect", &device.mac]).await?;
+            return Ok(());
+        }
+
         self.run_bluetoothctl(["pair", &device.mac]).await?;
         self.run_bluetoothctl(["trust", &device.mac]).await?;
         self.run_bluetoothctl(["connect", &device.mac]).await?;
@@ -268,6 +313,18 @@ impl BluetoothDiscovery {
     }
 
     async fn interface_is_ready(&self) -> Result<bool, BluetoothError> {
+        #[cfg(target_os = "macos")]
+        {
+            let output = Command::new("ifconfig")
+                .arg(&self.config.interface)
+                .output()
+                .await?;
+            if !output.status.success() {
+                return Ok(false);
+            }
+            return Ok(is_ready_ifconfig_output(&String::from_utf8_lossy(&output.stdout)));
+        }
+
         let operstate = interface_operstate_path(&self.sysfs_root, &self.config.interface);
         Ok(read_operstate_if_present(&operstate)
             .await?
@@ -275,6 +332,27 @@ impl BluetoothDiscovery {
     }
 
     async fn discover_neighbor_targets(&self) -> Result<Vec<SocketAddr>, BluetoothError> {
+        #[cfg(target_os = "macos")]
+        {
+            let output = Command::new(&self.ip_command)
+                .args(["-an", "-i", &self.config.interface])
+                .output()
+                .await?;
+
+            if !output.status.success() {
+                return Err(BluetoothError::CommandFailed {
+                    command: "arp",
+                    message: String::from_utf8_lossy(&output.stderr).trim().to_string(),
+                });
+            }
+
+            return Ok(parse_arp_output(
+                &String::from_utf8_lossy(&output.stdout),
+                &self.config.interface,
+                self.listen_port,
+            ));
+        }
+
         let output = Command::new(&self.ip_command)
             .args(["neigh", "show", "dev", &self.config.interface])
             .output()
@@ -304,9 +382,18 @@ impl BluetoothDiscovery {
         &self,
         args: [&str; N],
     ) -> Result<String, BluetoothError> {
-        let timeout = self.config.bluetoothctl_timeout_s.to_string();
         let mut cmd = Command::new(&self.bluetoothctl_command);
-        cmd.arg("--timeout").arg(&timeout);
+        #[cfg(target_os = "linux")]
+        {
+            let timeout = self.config.bluetoothctl_timeout_s.to_string();
+            cmd.arg("--timeout").arg(&timeout);
+        }
+        #[cfg(target_os = "macos")]
+        {
+            // The daemon typically runs with elevated privileges; blueutil refuses
+            // to operate as root unless this override is present.
+            cmd.env("BLUEUTIL_ALLOW_ROOT", "1");
+        }
         for arg in args {
             cmd.arg(arg);
         }
@@ -349,6 +436,12 @@ async fn read_operstate_if_present(path: &Path) -> Result<Option<String>, std::i
 
 fn is_ready_operstate(state: &str) -> bool {
     matches!(state.trim(), "up" | "unknown")
+}
+
+#[cfg(any(test, target_os = "macos"))]
+fn is_ready_ifconfig_output(output: &str) -> bool {
+    let output = output.trim();
+    !output.is_empty() && !output.contains("status: inactive")
 }
 
 fn parse_neighbor_output(output: &str, listen_port: u16) -> Vec<SocketAddr> {
@@ -398,6 +491,74 @@ fn parse_devices_output(output: &str, prefix: &str, local_alias: &str) -> Vec<Di
     devices
 }
 
+#[cfg(any(test, target_os = "macos"))]
+fn parse_blueutil_inquiry_output(
+    output: &str,
+    prefix: &str,
+    local_alias: &str,
+) -> Vec<DiscoveredDevice> {
+    let mut devices = Vec::new();
+
+    for line in output.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+
+        let Some(address_part) = line.strip_prefix("address: ") else {
+            continue;
+        };
+        let Some((mac, rest)) = address_part.split_once(',') else {
+            continue;
+        };
+        let Some(name_start) = rest.find("name: \"") else {
+            continue;
+        };
+        let name_value = &rest[name_start + 7..];
+        let Some(name_end) = name_value.find('"') else {
+            continue;
+        };
+        let name = &name_value[..name_end];
+        if !name.starts_with(prefix) || name == local_alias {
+            continue;
+        }
+
+        devices.push(DiscoveredDevice {
+            mac: mac.trim().replace('-', ":").to_uppercase(),
+            name: name.to_string(),
+        });
+    }
+
+    devices
+}
+
+#[cfg(any(test, target_os = "macos"))]
+fn parse_arp_output(output: &str, interface: &str, listen_port: u16) -> Vec<SocketAddr> {
+    let mut addrs = Vec::new();
+    let mut seen = HashSet::new();
+
+    for line in output.lines() {
+        let line = line.trim();
+        if line.is_empty() || !line.contains(&format!(" on {interface}")) {
+            continue;
+        }
+        let Some(start) = line.find('(') else { continue };
+        let Some(end) = line[start + 1..].find(')') else {
+            continue;
+        };
+        let ip_str = &line[start + 1..start + 1 + end];
+        let Ok(ip) = ip_str.parse::<IpAddr>() else {
+            continue;
+        };
+        let addr = SocketAddr::new(ip, listen_port);
+        if seen.insert(addr) {
+            addrs.push(addr);
+        }
+    }
+
+    addrs
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -440,6 +601,20 @@ mod tests {
     }
 
     #[test]
+    fn ifconfig_output_treats_non_inactive_interface_as_ready() {
+        let active = "\
+bridge0: flags=41<UP,RUNNING> mtu 1500\n\
+\tstatus: active\n";
+        let no_status = "bridge0: flags=41<UP,RUNNING> mtu 1500\n";
+        let inactive = "\
+bridge0: flags=41<UP,RUNNING> mtu 1500\n\
+\tstatus: inactive\n";
+        assert!(is_ready_ifconfig_output(active));
+        assert!(is_ready_ifconfig_output(no_status));
+        assert!(!is_ready_ifconfig_output(inactive));
+    }
+
+    #[test]
     fn neighbor_output_parses_ipv4_and_ipv6_and_skips_failed_entries() {
         let output = "\
 192.168.44.2 dev bnep0 lladdr 02:00:00:00:00:02 REACHABLE
@@ -463,6 +638,30 @@ Device AA:BB:CC:DD:EE:03 PIM-client
         assert_eq!(parsed.len(), 2);
         assert_eq!(parsed[0].mac, "AA:BB:CC:DD:EE:01");
         assert_eq!(parsed[1].name, "PIM-client");
+    }
+
+    #[test]
+    fn blueutil_inquiry_output_filters_to_matching_prefix() {
+        let output = "\
+address: aa-bb-cc-dd-ee-01, not connected, not favourite, not paired, name: \"PIM-gateway\", recent access date: -\n\
+address: aa-bb-cc-dd-ee-02, not connected, not favourite, not paired, name: \"Phone\", recent access date: -\n\
+address: aa-bb-cc-dd-ee-03, not connected, not favourite, not paired, name: \"PIM-self\", recent access date: -\n";
+        let parsed = parse_blueutil_inquiry_output(output, "PIM-", "PIM-self");
+        assert_eq!(parsed.len(), 1);
+        assert_eq!(parsed[0].mac, "AA:BB:CC:DD:EE:01");
+        assert_eq!(parsed[0].name, "PIM-gateway");
+    }
+
+    #[test]
+    fn arp_output_parses_interface_scoped_neighbors() {
+        let output = "\
+? (192.168.44.2) at aa:bb:cc:dd:ee:01 on bridge0 ifscope [ethernet]\n\
+? (192.168.44.3) at aa:bb:cc:dd:ee:02 on en0 ifscope [ethernet]\n\
+? (fe80::1) at aa:bb:cc:dd:ee:03 on bridge0 ifscope permanent [ethernet]\n";
+        let parsed = parse_arp_output(output, "bridge0", 9100);
+        assert_eq!(parsed.len(), 2);
+        assert_eq!(parsed[0], "192.168.44.2:9100".parse().unwrap());
+        assert_eq!(parsed[1], "[fe80::1]:9100".parse().unwrap());
     }
 
     #[test]
