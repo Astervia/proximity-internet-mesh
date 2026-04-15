@@ -32,6 +32,18 @@ have_cmd() {
     command -v "$1" >/dev/null 2>&1
 }
 
+host_os() {
+    if [[ -n "${PIM_HOST_OS:-}" ]]; then
+        printf '%s\n' "${PIM_HOST_OS}"
+    else
+        uname -s
+    fi
+}
+
+is_macos() {
+    [[ "$(host_os)" == "Darwin" ]]
+}
+
 first_line() {
     awk 'NF { print; exit }'
 }
@@ -166,6 +178,14 @@ while [[ $# -gt 0 ]]; do
             ;;
     esac
 done
+
+if is_macos; then
+    cat >&2 <<'EOF'
+generate_gateway_full_config.sh does not support macOS because gateway mode is currently Linux-only.
+Use `pim config generate client` or `pim config generate relay` on macOS, or run this script on Linux for gateway configs.
+EOF
+    exit 1
+fi
 
 if [[ -z "${nat_interface}" ]]; then
     nat_interface="$(detect_nat_interface)"

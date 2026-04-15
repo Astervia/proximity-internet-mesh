@@ -4,8 +4,8 @@
 # CodeQL (GitHub-only) and SBOM (artifact-only) are intentionally skipped.
 #
 # Dependency graph (matches CI jobs):
-#   Wave 1 (parallel): rustfmt | clippy | test | gitleaks
-#   Wave 2:            cargo_audit   <- needs rustfmt + clippy + test
+#   Wave 1 (parallel): rustfmt | clippy | test | config_generators | gitleaks
+#   Wave 2:            cargo_audit   <- needs rustfmt + clippy + test + config_generators
 #   Wave 3:            build_release <- needs cargo_audit
 #   gitleaks runs freely and never blocks other waves.
 set -uo pipefail
@@ -29,6 +29,7 @@ declare -A HINTS
 HINTS[rustfmt]="run: cargo fmt --all --check"
 HINTS[clippy]="fix the reported lint failures; run: cargo clippy --workspace --all-targets --locked -- -D warnings"
 HINTS[test]="fix the failing tests; run: cargo test --workspace --locked"
+HINTS[config_generators]="fix the shell generator regression; run: scripts/test-config-generators.sh"
 HINTS[cargo_audit]="upgrade the vulnerable dependency or ignore an accepted advisory explicitly"
 HINTS[gitleaks]="remove the secret from history; see: git-filter-repo or BFG"
 HINTS[build_release]="fix compilation errors above; run: cargo build --workspace --release --locked"
@@ -111,11 +112,12 @@ gate_ok() {
     done
 }
 
-banner "Wave 1 — parallel: rustfmt | clippy | test | gitleaks"
+banner "Wave 1 — parallel: rustfmt | clippy | test | config_generators | gitleaks"
 
 launch rustfmt cargo fmt --all --check
 launch clippy cargo clippy --workspace --all-targets --locked -- -D warnings
 launch test cargo test --workspace --locked
+launch config_generators scripts/test-config-generators.sh
 
 if has_tool gitleaks; then
     launch gitleaks gitleaks detect --source . -v
@@ -123,10 +125,10 @@ else
     mark_skip gitleaks "not installed — https://github.com/gitleaks/gitleaks#installing"
 fi
 
-banner "Gate — rustfmt | clippy | test"
-wait_for rustfmt clippy test
+banner "Gate — rustfmt | clippy | test | config_generators"
+wait_for rustfmt clippy test config_generators
 
-if gate_ok rustfmt clippy test; then
+if gate_ok rustfmt clippy test config_generators; then
     banner "Wave 2 — cargo_audit"
     if cargo audit --version >/dev/null 2>&1; then
         launch cargo_audit cargo audit

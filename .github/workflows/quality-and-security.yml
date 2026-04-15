@@ -39,6 +39,9 @@ jobs:
             - name: Run tests
               run: cargo test --workspace --locked
 
+            - name: Check config generators
+              run: scripts/test-config-generators.sh
+
     security:
         name: Dependency Security Scan (cargo-audit)
         runs-on: ubuntu-latest
