@@ -1,6 +1,6 @@
 # Installation
 
-This project supports client and relay nodes on Linux and macOS. Gateway mode remains Linux-only because the daemon still depends on Linux NAT and raw-socket behavior for internet egress.
+This project supports client, relay, and gateway nodes on Linux and macOS. The gateway dataplane uses platform-specific host integration on each OS: `iptables` on Linux and `pfctl` on macOS.
 
 ## Supported Scope By Platform
 
@@ -8,12 +8,12 @@ This project supports client and relay nodes on Linux and macOS. Gateway mode re
 | --- | --- | --- |
 | Client node | Supported | Supported |
 | Relay node | Supported | Supported |
-| Gateway node | Supported | Not supported |
+| Gateway node | Supported | Supported |
 | Wi-Fi Direct | Supported | Not supported |
 | Bluetooth PAN | Supported | Not supported |
 | Docker lab flows | Supported | Not supported |
 
-On macOS, use PIM as a client or relay only. Plan on a `utunN` interface name, and do not expect gateway, Wi-Fi Direct, Bluetooth PAN, or Docker lab workflows to work there.
+On macOS, plan on a `utunN` interface name for the mesh TUN, use a real uplink such as `en0` for `gateway.nat_interface`, and do not expect Wi-Fi Direct, Bluetooth PAN, or Docker lab workflows to work there.
 
 ## Requirements
 
@@ -23,6 +23,7 @@ Host requirements:
 - Rust toolchain when installing from source
 - privileges to create the TUN interface and update routing, usually `root` or `CAP_NET_ADMIN`
 - Linux gateways additionally need `/dev/net/tun`, `iproute2`, and `iptables`
+- macOS gateways additionally need `pfctl` and privileges to enable `net.inet.ip.forwarding`
 
 Optional but strongly recommended:
 
@@ -111,7 +112,7 @@ If you prefer not to install globally, you can run the binaries directly from `t
 
 ## Prepare A Config File
 
-Create `/etc/pim/pim.toml`. On macOS, use a `utunN` interface name such as `utun0`, keep `[gateway].enabled = false`, and leave Wi-Fi Direct and Bluetooth sections disabled. Start from the examples in [configuration.md](configuration.md).
+Create `/etc/pim/pim.toml`. On macOS, use a `utunN` interface name such as `utun0`, set `[gateway].nat_interface` to the real uplink such as `en0`, and leave Wi-Fi Direct and Bluetooth sections disabled. Start from the examples in [configuration.md](configuration.md).
 
 ## Verify The CLI
 

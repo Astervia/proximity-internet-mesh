@@ -1127,7 +1127,10 @@ fn render_config_template(roles: &[NodeRole], override_name: Option<&str>) -> St
             &mut out,
             "# Replace this with the real internet-facing interface on the host.",
         );
-        push_line(&mut out, "nat_interface = \"eth0\"");
+        push_line(
+            &mut out,
+            &format!("nat_interface = {:?}", default_gateway_nat_interface()),
+        );
         push_line(
             &mut out,
             "# Maximum concurrent gateway connection-tracking entries.",
@@ -1139,7 +1142,10 @@ fn render_config_template(roles: &[NodeRole], override_name: Option<&str>) -> St
             "# [gateway]  # Uncomment this section only on a node that should provide internet access.",
         );
         push_line(&mut out, "# enabled = true");
-        push_line(&mut out, "# nat_interface = \"eth0\"");
+        push_line(
+            &mut out,
+            &format!("# nat_interface = {:?}", default_gateway_nat_interface()),
+        );
         push_line(&mut out, "# max_connections = 200");
     }
     push_blank(&mut out);
@@ -1287,6 +1293,18 @@ fn default_peer_example(roles: &BTreeSet<NodeRole>) -> &'static str {
         "gateway:9100"
     } else {
         "relay-or-gateway:9100"
+    }
+}
+
+fn default_gateway_nat_interface() -> &'static str {
+    #[cfg(target_os = "macos")]
+    {
+        "en0"
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        "eth0"
     }
 }
 

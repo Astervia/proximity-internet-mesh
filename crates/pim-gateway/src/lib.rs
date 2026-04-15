@@ -13,11 +13,12 @@
 //! Entries expire after an idle timeout (default: 60 s for UDP, 300 s for TCP,
 //! 10 s for ICMP).
 //!
-//! # iptables setup
+//! # Gateway setup
 //!
-//! `GatewayEngine::setup_masquerade` shells out to `iptables` and `sysctl` to
-//! configure MASQUERADE on the internet-facing interface and enable IP
-//! forwarding.  This is idempotent (uses `-C` to check before `-A`).
+//! `GatewayEngine::setup_masquerade` performs the host-side setup needed for the
+//! userspace NAT path. On Linux it shells out to `iptables` plus `sysctl`.
+//! On macOS it enables forwarding and installs a small `pf` anchor that keeps
+//! the reserved userspace NAT port range away from the host TCP/UDP stack.
 
 #![warn(missing_docs)]
 
@@ -52,8 +53,8 @@ pub enum GatewayError {
     /// No free conntrack slot or external port was available.
     #[error("conntrack table full")]
     ConntrackFull,
-    /// An external command such as `iptables` or `sysctl` failed.
-    #[error("iptables/sysctl command failed: {0}")]
+    /// An external command such as `iptables`, `pfctl`, or `sysctl` failed.
+    #[error("gateway setup command failed: {0}")]
     CommandFailed(String),
     /// A local I/O operation failed.
     #[error("I/O error: {0}")]
@@ -306,68 +307,108 @@ impl GatewayEngine {
         self.inner.lock().await.forward.len()
     }
 
-    // ── iptables setup ────────────────────────────────────────────────────────
+    // ── Host gateway setup ────────────────────────────────────────────────────
 
-    /// Set up kernel IP forwarding and iptables MASQUERADE for `mesh_cidr`.
+    /// Set up host forwarding rules for `mesh_cidr`.
     ///
     /// Example `mesh_cidr`: `"10.77.0.0/24"`.
     /// This is idempotent.
     pub fn setup_masquerade(&self, mesh_cidr: &str) -> Result<(), GatewayError> {
-        // Enable IP forwarding (may fail with permission denied in Docker, but often already set)
-        if let Err(e) = run_cmd("sysctl", &["-w", "net.ipv4.ip_forward=1"]) {
-            tracing::warn!("sysctl failed (ignoring): {e}");
+        #[cfg(target_os = "macos")]
+        {
+            return self.setup_pf_anchor(mesh_cidr);
         }
 
-        // Add MASQUERADE rule (check first to avoid duplicates)
-        let rule_args = [
-            "-t",
-            "nat",
-            "-A",
-            "POSTROUTING",
-            "-s",
-            mesh_cidr,
-            "-o",
-            &self.internet_iface,
-            "-j",
-            "MASQUERADE",
-        ];
-        let check_args = {
-            let mut a = rule_args.to_vec();
-            a[2] = "-C"; // replace -A with -C
-            a
-        };
-
-        if !check_cmd_quiet("iptables", &check_args)? {
-            // Rule not present — add it
-            run_cmd("iptables", &rule_args)?;
+        #[cfg(not(target_os = "linux"))]
+        {
+            let _ = mesh_cidr;
+            return Err(GatewayError::CommandFailed(
+                "gateway setup is not supported on this platform".into(),
+            ));
         }
 
-        // Allow FORWARD traffic from the mesh
-        let fwd_args = ["-A", "FORWARD", "-s", mesh_cidr, "-j", "ACCEPT"];
-        let fwd_check = {
-            let mut a = fwd_args.to_vec();
-            a[0] = "-C";
-            a
-        };
-        if !check_cmd_quiet("iptables", &fwd_check)? {
-            run_cmd("iptables", &fwd_args)?;
-        }
+        #[cfg(target_os = "linux")]
+        {
+            // Enable IP forwarding (may fail with permission denied in Docker, but often already set)
+            if let Err(e) = run_cmd("sysctl", &["-w", "net.ipv4.ip_forward=1"]) {
+                tracing::warn!("sysctl failed (ignoring): {e}");
+            }
 
-        // Reserve the userspace NAT port range so the host TCP/UDP stack does
-        // not race our raw-socket gateway handling with unsolicited replies.
-        for proto in ["tcp", "udp"] {
-            let drop_args = input_drop_args(proto, &self.internet_iface);
-            let drop_check = {
-                let mut a = drop_args.to_vec();
+            // Add MASQUERADE rule (check first to avoid duplicates)
+            let rule_args = [
+                "-t",
+                "nat",
+                "-A",
+                "POSTROUTING",
+                "-s",
+                mesh_cidr,
+                "-o",
+                &self.internet_iface,
+                "-j",
+                "MASQUERADE",
+            ];
+            let check_args = {
+                let mut a = rule_args.to_vec();
+                a[2] = "-C"; // replace -A with -C
+                a
+            };
+
+            if !check_cmd_quiet("iptables", &check_args)? {
+                // Rule not present — add it
+                run_cmd("iptables", &rule_args)?;
+            }
+
+            // Allow FORWARD traffic from the mesh
+            let fwd_args = ["-A", "FORWARD", "-s", mesh_cidr, "-j", "ACCEPT"];
+            let fwd_check = {
+                let mut a = fwd_args.to_vec();
                 a[0] = "-C";
                 a
             };
-            if !check_cmd_quiet("iptables", &drop_check)? {
-                run_cmd("iptables", &drop_args)?;
+            if !check_cmd_quiet("iptables", &fwd_check)? {
+                run_cmd("iptables", &fwd_args)?;
             }
+
+            // Reserve the userspace NAT port range so the host TCP/UDP stack does
+            // not race our raw-socket gateway handling with unsolicited replies.
+            for proto in ["tcp", "udp"] {
+                let drop_args = input_drop_args(proto, &self.internet_iface);
+                let drop_check = {
+                    let mut a = drop_args.to_vec();
+                    a[0] = "-C";
+                    a
+                };
+                if !check_cmd_quiet("iptables", &drop_check)? {
+                    run_cmd("iptables", &drop_args)?;
+                }
+            }
+
+            debug!(mesh_cidr = mesh_cidr, iface = %self.internet_iface, "iptables MASQUERADE configured");
+            Ok(())
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    fn setup_pf_anchor(&self, mesh_cidr: &str) -> Result<(), GatewayError> {
+        const PF_ANCHOR: &str = "com.apple/pim.gateway";
+
+        if let Err(e) = run_cmd("sysctl", &["-w", "net.inet.ip.forwarding=1"]) {
+            tracing::warn!("sysctl failed (ignoring): {e}");
         }
 
-        debug!(mesh_cidr = mesh_cidr, iface = %self.internet_iface, "iptables MASQUERADE configured");
+        // Enabling PF is idempotent; if it is already active this still succeeds.
+        run_cmd("pfctl", &["-E"])?;
+
+        let rules = format!(
+            "# PIM userspace NAT on mesh subnet {mesh_cidr}\n\
+             block drop in quick on {iface} inet proto {{ tcp udp }} from any to ({iface}) port {port_min}:{port_max}\n",
+            iface = self.internet_iface,
+            port_min = PORT_MIN,
+            port_max = PORT_MAX,
+        );
+        run_cmd_with_stdin("pfctl", &["-a", PF_ANCHOR, "-f", "-"], &rules)?;
+
+        debug!(mesh_cidr = mesh_cidr, iface = %self.internet_iface, anchor = PF_ANCHOR, "pf gateway rules configured");
         Ok(())
     }
 }
@@ -646,6 +687,37 @@ fn run_cmd(program: &str, args: &[&str]) -> Result<(), GatewayError> {
     let status = std::process::Command::new(program)
         .args(args)
         .status()
+        .map_err(|e| GatewayError::CommandFailed(format!("{program}: {e}")))?;
+
+    if status.success() {
+        Ok(())
+    } else {
+        Err(GatewayError::CommandFailed(format!(
+            "{program} {} exited with {:?}",
+            args.join(" "),
+            status.code()
+        )))
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn run_cmd_with_stdin(program: &str, args: &[&str], stdin: &str) -> Result<(), GatewayError> {
+    use std::io::Write;
+
+    let mut child = std::process::Command::new(program)
+        .args(args)
+        .stdin(std::process::Stdio::piped())
+        .spawn()
+        .map_err(|e| GatewayError::CommandFailed(format!("{program}: {e}")))?;
+
+    if let Some(mut child_stdin) = child.stdin.take() {
+        child_stdin
+            .write_all(stdin.as_bytes())
+            .map_err(|e| GatewayError::CommandFailed(format!("{program}: {e}")))?;
+    }
+
+    let status = child
+        .wait()
         .map_err(|e| GatewayError::CommandFailed(format!("{program}: {e}")))?;
 
     if status.success() {

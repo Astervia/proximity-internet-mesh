@@ -1,12 +1,12 @@
 # Proximity Internet Mesh
 
-Proximity Internet Mesh (PIM) is a Rust workspace for running a local mesh adapter that forwards IP traffic across nearby peers until it reaches a node with internet access. The daemon now supports local TUN operation on Linux and macOS, accepts packets from the host network stack, and forwards them through the mesh. Gateway NAT remains Linux-only.
+Proximity Internet Mesh (PIM) is a Rust workspace for running a local mesh adapter that forwards IP traffic across nearby peers until it reaches a node with internet access. The daemon supports local TUN operation on Linux and macOS, accepts packets from the host network stack, and forwards them through the mesh, including gateway NAT on both platforms.
 
 The codebase is currently centered on a Linux daemon, a small CLI, and Docker-based multi-node test environments. The long-term architecture targets proximity transports such as Wi-Fi Direct, but the transport implemented in the repository today is TCP. The documentation below distinguishes current behavior from broader design material.
 
 ## Current Scope
 
-- Linux and macOS client/relay runtime with a TUN interface
+- Linux and macOS client/relay/gateway runtime with a TUN interface
 - Rust workspace with separate crates for protocol, crypto, routing, transport, gateway, discovery, daemon, and CLI
 - `pim` CLI with `up`, `down`, `status`, and `route on|off|status`
 - `pim-daemon` runtime that handles peer sessions, routing, fragmentation, metrics, and gateway NAT
@@ -18,15 +18,15 @@ The codebase is currently centered on a Linux daemon, a small CLI, and Docker-ba
 | --- | --- | --- |
 | Client runtime | Supported | Supported |
 | Relay runtime | Supported | Supported |
-| Gateway runtime and NAT | Supported | Not supported |
+| Gateway runtime and NAT | Supported | Supported |
 | Wi-Fi Direct backend | Supported | Not supported |
 | Bluetooth PAN backend | Supported | Not supported |
 | `pim config generate client` | Supported | Supported |
 | `pim config generate relay` | Supported | Supported |
-| `pim config generate gateway` | Supported | Not supported |
+| `pim config generate gateway` | Supported | Supported |
 | Docker integration labs | Supported | Not supported |
 
-On macOS, stay within the client or relay roles, use a `utunN` interface such as `utun0`, and leave Wi-Fi Direct, Bluetooth PAN, and gateway mode disabled.
+On macOS, use a `utunN` interface such as `utun0` for the mesh TUN, set `gateway.nat_interface` to the internet-facing host interface such as `en0`, and keep Wi-Fi Direct and Bluetooth PAN disabled.
 
 ## Repository Layout
 
@@ -48,6 +48,7 @@ For local development and manual runs:
 - Rust toolchain new enough to build the workspace when installing from source
 - privileges to create a TUN interface and update routes, typically `root` or `CAP_NET_ADMIN`
 - Linux gateways additionally require `/dev/net/tun`, `iproute2`, and `iptables`
+- macOS gateways additionally require `pfctl` plus privileges to enable `net.inet.ip.forwarding`
 
 For Docker-based integration testing:
 
@@ -85,7 +86,7 @@ pim config generate gateway
 pim config generate relay gateway
 ```
 
-On macOS, use only the `client` and `relay` variants. Gateway config generation is Linux-only because gateway runtime support is Linux-only.
+On macOS, the generated gateway template uses `utun0` for the mesh TUN, `en0` as the default NAT uplink, and leaves Wi-Fi Direct and Bluetooth PAN disabled because those backends are still Linux-only.
 
 Write directly to a file:
 
@@ -108,7 +109,7 @@ Published releases include prebuilt archives for:
 - macOS Intel via `x86_64-apple-darwin`
 - macOS Apple Silicon via `aarch64-apple-darwin`
 
-The daemon can now run as a client or relay on macOS using `utunN` interfaces and macOS route management. Gateway mode, NAT setup, and the Docker integration labs still require Linux.
+The daemon can run as a client, relay, or gateway on macOS using `utunN` interfaces, macOS route management, and `pf`-backed gateway setup. The Docker integration labs still require Linux.
 
 Install the latest released binaries for your host:
 
@@ -168,7 +169,7 @@ Then create `/etc/pim/pim.toml`. The easiest starting point is:
 sudo pim config generate client --output /etc/pim/pim.toml
 ```
 
-On macOS, keep the generated `utunN` interface name, leave gateway mode disabled, and do not enable Wi-Fi Direct or Bluetooth PAN.
+On macOS, keep the generated `utunN` interface name, set `gateway.nat_interface` to the real uplink if this node should be a gateway, and do not enable Wi-Fi Direct or Bluetooth PAN.
 
 You can also start from a minimal static client example:
 

@@ -1,7 +1,5 @@
 # Gateway Usage
 
-Gateway mode is Linux-only. This guide does not apply to macOS hosts because PIM does not currently support macOS internet egress/NAT.
-
 This guide shows how to run a PIM node as a gateway and how to choose the right
 interfaces for different peer connectivity mechanisms.
 
@@ -26,14 +24,14 @@ Generate a starter gateway config:
 pim config generate gateway --output /etc/pim/pim.toml
 ```
 
-If you are on macOS, stop here and use a client or relay configuration instead.
+On macOS, use a `utunN` name such as `utun0` for `[interface].name`, choose a real uplink such as `en0` for `[gateway].nat_interface`, and leave Wi-Fi Direct plus Bluetooth disabled.
 
 ## Discover the Internet-Facing Interface
 
 The most reliable way to discover the interface PIM should use for NAT is to ask
 the kernel how it would reach a public IP.
 
-Check the route to `1.1.1.1`:
+Check the route to `1.1.1.1` on Linux:
 
 ```bash
 ip route get 1.1.1.1
@@ -47,16 +45,30 @@ Typical output:
 
 In this example, the correct NAT interface is `wlan0`.
 
+On macOS, the equivalent command is:
+
+```bash
+route -n get default
+```
+
+Look for the `interface:` line and use that value for `gateway.nat_interface`.
+
 You can extract just the interface name:
 
 ```bash
 ip route get 1.1.1.1 | sed -n 's/.* dev \([^ ]*\) .*/\1/p'
 ```
 
-Confirm that the interface has an IPv4 address:
+Confirm that the interface has an IPv4 address on Linux:
 
 ```bash
 ip -4 -o addr show dev wlan0
+```
+
+On macOS, the equivalent check is:
+
+```bash
+ifconfig en0
 ```
 
 PIM requires a usable IPv4 address on `gateway.nat_interface` during startup.
