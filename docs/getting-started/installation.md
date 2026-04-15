@@ -10,7 +10,7 @@ This project supports client, relay, and gateway nodes on Linux and macOS. The g
 | Relay node | Supported | Supported |
 | Gateway node | Supported | Supported |
 | Wi-Fi Direct | Supported | Not supported |
-| Bluetooth PAN | Supported | Not supported |
+| Bluetooth PAN | Supported | Supported |
 | Docker lab flows | Supported | Not supported |
 
 On macOS, plan on a `utunN` interface name for the mesh TUN, use a real uplink such as `en0` for `gateway.nat_interface`, and do not expect Wi-Fi Direct, Bluetooth PAN, or Docker lab workflows to work there.
@@ -112,7 +112,7 @@ If you prefer not to install globally, you can run the binaries directly from `t
 
 ## Prepare A Config File
 
-Create `/etc/pim/pim.toml`. On macOS, use a `utunN` interface name such as `utun0`, set `[gateway].nat_interface` to the real uplink such as `en0`, and leave Wi-Fi Direct and Bluetooth sections disabled. Start from the examples in [configuration.md](configuration.md).
+Create `/etc/pim/pim.toml`. On macOS, use a `utunN` interface name such as `utun0`, set `[gateway].nat_interface` to the real uplink such as `en0`, leave Wi-Fi Direct disabled, and install `blueutil` if you want Bluetooth PAN radio discovery and pairing automation. Start from the examples in [configuration.md](configuration.md).
 
 ## Verify The CLI
 
