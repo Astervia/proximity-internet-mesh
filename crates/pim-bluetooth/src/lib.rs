@@ -322,7 +322,9 @@ impl BluetoothDiscovery {
             if !output.status.success() {
                 return Ok(false);
             }
-            return Ok(is_ready_ifconfig_output(&String::from_utf8_lossy(&output.stdout)));
+            return Ok(is_ready_ifconfig_output(&String::from_utf8_lossy(
+                &output.stdout,
+            )));
         }
 
         let operstate = interface_operstate_path(&self.sysfs_root, &self.config.interface);
@@ -542,7 +544,9 @@ fn parse_arp_output(output: &str, interface: &str, listen_port: u16) -> Vec<Sock
         if line.is_empty() || !line.contains(&format!(" on {interface}")) {
             continue;
         }
-        let Some(start) = line.find('(') else { continue };
+        let Some(start) = line.find('(') else {
+            continue;
+        };
         let Some(end) = line[start + 1..].find(')') else {
             continue;
         };
