@@ -243,134 +243,23 @@ impl BluetoothDiscovery {
     }
 
     async fn prepare_controller(&self) -> Result<(), BluetoothError> {
-        #[cfg(target_os = "macos")]
-        {
-            self.run_bluetoothctl(["--power", "1"]).await?;
-            self.run_bluetoothctl(["--discoverable", "1"]).await?;
-            if !self.config.local_alias.is_empty() {
-                warn!(
-                    local_alias = %self.config.local_alias,
-                    "macOS Bluetooth backend does not set the host controller alias automatically; set the Mac Bluetooth name manually if discovery by prefix is required"
-                );
-            }
-            return Ok(());
-        }
-
-        self.run_bluetoothctl(["power", "on"]).await?;
-        self.run_bluetoothctl(["pairable", "on"]).await?;
-        self.run_bluetoothctl([
-            "discoverable-timeout",
-            &self.config.discoverable_timeout_s.to_string(),
-        ])
-        .await?;
-        self.run_bluetoothctl(["discoverable", "on"]).await?;
-        self.run_bluetoothctl(["agent", "NoInputNoOutput"]).await?;
-        self.run_bluetoothctl(["default-agent"]).await?;
-        if !self.config.local_alias.is_empty() {
-            self.run_bluetoothctl(["system-alias", &self.config.local_alias])
-                .await?;
-        }
-        Ok(())
+        self.prepare_controller_impl().await
     }
 
     async fn discover_devices(&self) -> Result<Vec<DiscoveredDevice>, BluetoothError> {
-        #[cfg(target_os = "macos")]
-        {
-            let output = self
-                .run_bluetoothctl_capture([
-                    "--inquiry",
-                    &self.config.bluetoothctl_timeout_s.to_string(),
-                ])
-                .await?;
-            return Ok(parse_blueutil_inquiry_output(
-                &output,
-                &self.config.device_name_prefix,
-                &self.config.local_alias,
-            ));
-        }
-
-        let output = self.run_bluetoothctl_capture(["devices"]).await?;
-        Ok(parse_devices_output(
-            &output,
-            &self.config.device_name_prefix,
-            &self.config.local_alias,
-        ))
+        self.discover_devices_impl().await
     }
 
     async fn pair_and_request_pan(&self, device: &DiscoveredDevice) -> Result<(), BluetoothError> {
-        #[cfg(target_os = "macos")]
-        {
-            self.run_bluetoothctl(["--pair", &device.mac]).await?;
-            self.run_bluetoothctl(["--connect", &device.mac]).await?;
-            return Ok(());
-        }
-
-        self.run_bluetoothctl(["pair", &device.mac]).await?;
-        self.run_bluetoothctl(["trust", &device.mac]).await?;
-        self.run_bluetoothctl(["connect", &device.mac]).await?;
-        self.run_bt_network(&device.mac).await?;
-        Ok(())
+        self.pair_and_request_pan_impl(device).await
     }
 
     async fn interface_is_ready(&self) -> Result<bool, BluetoothError> {
-        #[cfg(target_os = "macos")]
-        {
-            let output = Command::new("ifconfig")
-                .arg(&self.config.interface)
-                .output()
-                .await?;
-            if !output.status.success() {
-                return Ok(false);
-            }
-            return Ok(is_ready_ifconfig_output(&String::from_utf8_lossy(
-                &output.stdout,
-            )));
-        }
-
-        let operstate = interface_operstate_path(&self.sysfs_root, &self.config.interface);
-        Ok(read_operstate_if_present(&operstate)
-            .await?
-            .is_some_and(|state| is_ready_operstate(&state)))
+        self.interface_is_ready_impl().await
     }
 
     async fn discover_neighbor_targets(&self) -> Result<Vec<SocketAddr>, BluetoothError> {
-        #[cfg(target_os = "macos")]
-        {
-            let output = Command::new(&self.ip_command)
-                .args(["-an", "-i", &self.config.interface])
-                .output()
-                .await?;
-
-            if !output.status.success() {
-                return Err(BluetoothError::CommandFailed {
-                    command: "arp",
-                    message: String::from_utf8_lossy(&output.stderr).trim().to_string(),
-                });
-            }
-
-            return Ok(parse_arp_output(
-                &String::from_utf8_lossy(&output.stdout),
-                &self.config.interface,
-                self.listen_port,
-            ));
-        }
-
-        let output = Command::new(&self.ip_command)
-            .args(["neigh", "show", "dev", &self.config.interface])
-            .output()
-            .await?;
-
-        if !output.status.success() {
-            return Err(BluetoothError::CommandFailed {
-                command: "ip",
-                message: String::from_utf8_lossy(&output.stderr).trim().to_string(),
-            });
-        }
-
-        Ok(parse_neighbor_output(
-            &String::from_utf8_lossy(&output.stdout),
-            self.listen_port,
-        ))
+        self.discover_neighbor_targets_impl().await
     }
 
     async fn run_bluetoothctl<const N: usize>(
@@ -421,6 +310,148 @@ impl BluetoothDiscovery {
             });
         }
         Ok(())
+    }
+
+    #[cfg(target_os = "linux")]
+    async fn prepare_controller_impl(&self) -> Result<(), BluetoothError> {
+        self.run_bluetoothctl(["power", "on"]).await?;
+        self.run_bluetoothctl(["pairable", "on"]).await?;
+        self.run_bluetoothctl([
+            "discoverable-timeout",
+            &self.config.discoverable_timeout_s.to_string(),
+        ])
+        .await?;
+        self.run_bluetoothctl(["discoverable", "on"]).await?;
+        self.run_bluetoothctl(["agent", "NoInputNoOutput"]).await?;
+        self.run_bluetoothctl(["default-agent"]).await?;
+        if !self.config.local_alias.is_empty() {
+            self.run_bluetoothctl(["system-alias", &self.config.local_alias])
+                .await?;
+        }
+        Ok(())
+    }
+
+    #[cfg(target_os = "macos")]
+    async fn prepare_controller_impl(&self) -> Result<(), BluetoothError> {
+        self.run_bluetoothctl(["--power", "1"]).await?;
+        self.run_bluetoothctl(["--discoverable", "1"]).await?;
+        if !self.config.local_alias.is_empty() {
+            warn!(
+                local_alias = %self.config.local_alias,
+                "macOS Bluetooth backend does not set the host controller alias automatically; set the Mac Bluetooth name manually if discovery by prefix is required"
+            );
+        }
+        Ok(())
+    }
+
+    #[cfg(target_os = "linux")]
+    async fn discover_devices_impl(&self) -> Result<Vec<DiscoveredDevice>, BluetoothError> {
+        let output = self.run_bluetoothctl_capture(["devices"]).await?;
+        Ok(parse_devices_output(
+            &output,
+            &self.config.device_name_prefix,
+            &self.config.local_alias,
+        ))
+    }
+
+    #[cfg(target_os = "macos")]
+    async fn discover_devices_impl(&self) -> Result<Vec<DiscoveredDevice>, BluetoothError> {
+        let output = self
+            .run_bluetoothctl_capture([
+                "--inquiry",
+                &self.config.bluetoothctl_timeout_s.to_string(),
+            ])
+            .await?;
+        Ok(parse_blueutil_inquiry_output(
+            &output,
+            &self.config.device_name_prefix,
+            &self.config.local_alias,
+        ))
+    }
+
+    #[cfg(target_os = "linux")]
+    async fn pair_and_request_pan_impl(
+        &self,
+        device: &DiscoveredDevice,
+    ) -> Result<(), BluetoothError> {
+        self.run_bluetoothctl(["pair", &device.mac]).await?;
+        self.run_bluetoothctl(["trust", &device.mac]).await?;
+        self.run_bluetoothctl(["connect", &device.mac]).await?;
+        self.run_bt_network(&device.mac).await?;
+        Ok(())
+    }
+
+    #[cfg(target_os = "macos")]
+    async fn pair_and_request_pan_impl(
+        &self,
+        device: &DiscoveredDevice,
+    ) -> Result<(), BluetoothError> {
+        self.run_bluetoothctl(["--pair", &device.mac]).await?;
+        self.run_bluetoothctl(["--connect", &device.mac]).await?;
+        Ok(())
+    }
+
+    #[cfg(target_os = "linux")]
+    async fn interface_is_ready_impl(&self) -> Result<bool, BluetoothError> {
+        let operstate = interface_operstate_path(&self.sysfs_root, &self.config.interface);
+        Ok(read_operstate_if_present(&operstate)
+            .await?
+            .is_some_and(|state| is_ready_operstate(&state)))
+    }
+
+    #[cfg(target_os = "macos")]
+    async fn interface_is_ready_impl(&self) -> Result<bool, BluetoothError> {
+        let output = Command::new("ifconfig")
+            .arg(&self.config.interface)
+            .output()
+            .await?;
+        if !output.status.success() {
+            return Ok(false);
+        }
+        Ok(is_ready_ifconfig_output(&String::from_utf8_lossy(
+            &output.stdout,
+        )))
+    }
+
+    #[cfg(target_os = "linux")]
+    async fn discover_neighbor_targets_impl(&self) -> Result<Vec<SocketAddr>, BluetoothError> {
+        let output = Command::new(&self.ip_command)
+            .args(["neigh", "show", "dev", &self.config.interface])
+            .output()
+            .await?;
+
+        if !output.status.success() {
+            return Err(BluetoothError::CommandFailed {
+                command: "ip",
+                message: String::from_utf8_lossy(&output.stderr).trim().to_string(),
+            });
+        }
+
+        Ok(parse_neighbor_output(
+            &String::from_utf8_lossy(&output.stdout),
+            self.listen_port,
+        ))
+    }
+
+    #[cfg(target_os = "macos")]
+    async fn discover_neighbor_targets_impl(&self) -> Result<Vec<SocketAddr>, BluetoothError> {
+        let output = Command::new(&self.ip_command)
+            .args(["-an", "-i", &self.config.interface])
+            .output()
+            .await?;
+
+        if !output.status.success() {
+            return Err(BluetoothError::CommandFailed {
+                command: "arp",
+                message: String::from_utf8_lossy(&output.stderr).trim().to_string(),
+            });
+        }
+
+        Ok(parse_arp_output(
+            &String::from_utf8_lossy(&output.stdout),
+            &self.config.interface,
+            self.listen_port,
+        ))
     }
 }
 
