@@ -13,7 +13,9 @@
 
 use std::collections::HashSet;
 use std::net::{IpAddr, SocketAddr};
-use std::path::{Path, PathBuf};
+#[cfg(any(test, target_os = "linux"))]
+use std::path::Path;
+use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use pim_core::BluetoothConfig;
@@ -106,10 +108,12 @@ impl BluetoothDiscovery {
         config: BluetoothConfig,
         listen_port: u16,
         static_targets: Vec<SocketAddr>,
-        sysfs_root: impl Into<PathBuf>,
+        #[cfg(target_os = "linux")] sysfs_root: impl Into<PathBuf>,
+        #[cfg(not(target_os = "linux"))] _sysfs_root: impl Into<PathBuf>,
         ip_command: impl Into<PathBuf>,
         bluetoothctl_command: impl Into<PathBuf>,
-        bt_network_command: impl Into<PathBuf>,
+        #[cfg(target_os = "linux")] bt_network_command: impl Into<PathBuf>,
+        #[cfg(not(target_os = "linux"))] _bt_network_command: impl Into<PathBuf>,
     ) -> Result<(Self, mpsc::Receiver<SocketAddr>), BluetoothError> {
         let (peer_tx, peer_rx) = mpsc::channel(16);
 
@@ -465,7 +469,7 @@ fn interface_operstate_path(sysfs_root: &Path, interface: &str) -> PathBuf {
     sysfs_root.join(interface).join("operstate")
 }
 
-#[cfg(any(test, target_os = "linux"))]
+#[cfg(target_os = "linux")]
 async fn read_operstate_if_present(path: &Path) -> Result<Option<String>, std::io::Error> {
     match tokio::fs::read_to_string(path).await {
         Ok(state) => Ok(Some(state)),
