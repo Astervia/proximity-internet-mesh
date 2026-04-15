@@ -32,7 +32,7 @@ pub struct TcpTransport {
 
 /// Handle for writing to a peer's TCP stream.
 struct PeerWriter {
-    tx: mpsc::Sender<Vec<u8>>,
+    tx: mpsc::Sender<bytes::Bytes>,
     current_id: Arc<RwLock<NodeId>>,
 }
 
@@ -109,7 +109,7 @@ impl TcpTransport {
         let current_id = Arc::new(RwLock::new(peer_id));
 
         // Write task: receives serialized frames via channel and writes to socket
-        let (write_tx, mut write_rx) = mpsc::channel::<Vec<u8>>(64);
+        let (write_tx, mut write_rx) = mpsc::channel::<bytes::Bytes>(64);
         let write_id = current_id.clone();
         tokio::spawn(async move {
             let mut writer = write_half;
@@ -226,7 +226,7 @@ impl Transport for TcpTransport {
 
         // Non-blocking: return Congested instead of blocking when the write
         // queue is full.  Callers apply priority-based drop policy.
-        writer.tx.try_send(wire_buf.to_vec()).map_err(|e| match e {
+        writer.tx.try_send(wire_buf.freeze()).map_err(|e| match e {
             tokio::sync::mpsc::error::TrySendError::Full(_) => TransportError::Congested(*peer),
             tokio::sync::mpsc::error::TrySendError::Closed(_) => {
                 TransportError::SendFailed("write channel closed".into())
