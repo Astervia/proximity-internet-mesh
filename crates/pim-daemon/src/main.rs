@@ -419,7 +419,8 @@ impl InternetGatewayLink {
     async fn send_packet(&self, packet: &[u8]) -> Result<()> {
         let dest_ip = ipv4_destination(packet).context("raw send requires IPv4 packet")?;
         let mut addr: libc::sockaddr_in = unsafe { std::mem::zeroed() };
-        addr.sin_family = libc::AF_INET as u16;
+        addr.sin_len = std::mem::size_of::<libc::sockaddr_in>() as u8;
+        addr.sin_family = libc::AF_INET as u8;
         addr.sin_addr = libc::in_addr {
             s_addr: u32::from(dest_ip).to_be(),
         };
