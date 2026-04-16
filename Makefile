@@ -10,10 +10,13 @@ docker-build:
 
 # ── Test phases ───────────────────────────────────────────────────────────────
 
-.PHONY: test-p1 test-p2 test-p3 test-p4 test-p5 test-p7 test-auth test-debug-cli test-route-cli test-bluetooth test-bluetooth-enx test-all
+.PHONY: test-p1 test-ipv6 test-p2 test-p3 test-p4 test-p5 test-p7 test-auth test-debug-cli test-route-cli test-bluetooth test-bluetooth-enx test-all
 
 test-p1: docker-build
 	bash $(TEST_DIR)/test-phase1.sh
+
+test-ipv6: docker-build
+	bash $(TEST_DIR)/test-ipv6.sh
 
 test-p2: docker-build
 	bash $(TEST_DIR)/test-phase2.sh
@@ -51,6 +54,7 @@ test-bluetooth-enx: docker-build
 
 test-all: docker-build
 	@bash $(TEST_DIR)/test-phase1.sh && \
+	 bash $(TEST_DIR)/test-ipv6.sh && \
 	 bash $(TEST_DIR)/test-phase2.sh && \
 	 bash $(TEST_DIR)/test-phase3.sh && \
 	 SKIP_SLOW=1 bash $(TEST_DIR)/test-phase4.sh && \
@@ -63,10 +67,13 @@ test-all: docker-build
 # ── Manual stack management ───────────────────────────────────────────────────
 # Use these for interactive debugging without the test scripts.
 
-.PHONY: up-p1 up-p2-relay up-p2-routing up-p3 up-p4 up-p4-fc up-p5 up-p7 up-bluetooth up-bluetooth-enx
+.PHONY: up-p1 up-ipv6 up-p2-relay up-p2-routing up-p3 up-p4 up-p4-fc up-p5 up-p7 up-bluetooth up-bluetooth-enx
 
 up-p1:
 	docker compose -f $(COMPOSE_DIR)/phase1-single-hop.yml up -d --build
+
+up-ipv6:
+	docker compose -f $(COMPOSE_DIR)/phase1-ipv6-single-hop.yml up -d --build
 
 up-p2-relay:
 	docker compose -f $(COMPOSE_DIR)/phase2-relay.yml up -d --build
@@ -95,10 +102,13 @@ up-bluetooth:
 up-bluetooth-enx:
 	docker compose -f $(COMPOSE_DIR)/bluetooth-seam-enx.yml up -d --build
 
-.PHONY: down-p1 down-p2-relay down-p2-routing down-p3 down-p4 down-p4-fc down-p5 down-p7 down-bluetooth down-bluetooth-enx
+.PHONY: down-p1 down-ipv6 down-p2-relay down-p2-routing down-p3 down-p4 down-p4-fc down-p5 down-p7 down-bluetooth down-bluetooth-enx
 
 down-p1:
 	docker compose -f $(COMPOSE_DIR)/phase1-single-hop.yml down -v --remove-orphans
+
+down-ipv6:
+	docker compose -f $(COMPOSE_DIR)/phase1-ipv6-single-hop.yml down -v --remove-orphans
 
 down-p2-relay:
 	docker compose -f $(COMPOSE_DIR)/phase2-relay.yml down -v --remove-orphans
@@ -129,10 +139,13 @@ down-bluetooth-enx:
 
 # ── Log tailing ───────────────────────────────────────────────────────────────
 
-.PHONY: logs-p1 logs-p2-relay logs-p2-routing logs-p3 logs-p4 logs-p5 logs-p7 logs-bluetooth logs-bluetooth-enx
+.PHONY: logs-p1 logs-ipv6 logs-p2-relay logs-p2-routing logs-p3 logs-p4 logs-p5 logs-p7 logs-bluetooth logs-bluetooth-enx
 
 logs-p1:
 	docker compose -f $(COMPOSE_DIR)/phase1-single-hop.yml logs -f
+
+logs-ipv6:
+	docker compose -f $(COMPOSE_DIR)/phase1-ipv6-single-hop.yml logs -f
 
 logs-p2-relay:
 	docker compose -f $(COMPOSE_DIR)/phase2-relay.yml logs -f
@@ -185,6 +198,7 @@ sh-p5-relay:
 docker-clean:
 	@for f in \
 	    $(COMPOSE_DIR)/phase1-single-hop.yml \
+	    $(COMPOSE_DIR)/phase1-ipv6-single-hop.yml \
 	    $(COMPOSE_DIR)/phase2-relay.yml \
 	    $(COMPOSE_DIR)/phase2-routing.yml \
 	    $(COMPOSE_DIR)/phase3-discovery.yml \
@@ -217,6 +231,7 @@ help:
 	@echo ""
 	@echo "  make docker-build       Build pim:latest image"
 	@echo "  make test-p1            Phase 1: single-hop tunnel"
+	@echo "  make test-ipv6         IPv6 single-hop + NAT66 + split-default routes"
 	@echo "  make test-p2            Phase 2: relay + routing + failover"
 	@echo "  make test-p3            Phase 3: discovery + peer lifecycle"
 	@echo "  make test-p4            Phase 4: resilience + flow control (SKIP_SLOW=1)"
@@ -232,8 +247,11 @@ help:
 	@echo "  make test-unit          Rust unit tests (no Docker)"
 	@echo ""
 	@echo "  make up-p1              Start phase 1 stack (no tests)"
+	@echo "  make up-ipv6            Start IPv6 single-hop stack"
 	@echo "  make down-p1            Stop phase 1 stack"
+	@echo "  make down-ipv6          Stop IPv6 single-hop stack"
 	@echo "  make logs-p1            Follow phase 1 logs"
+	@echo "  make logs-ipv6          Follow IPv6 single-hop logs"
 	@echo "  make sh-p1-client       Shell into phase 1 client container"
 	@echo "  make up-bluetooth       Start Bluetooth seam stack"
 	@echo "  make down-bluetooth     Stop Bluetooth seam stack"

@@ -1,0 +1,99 @@
+# Phase 1 IPv6 lane — single-hop tunnel with local IPv6 internet simulation.
+
+name: pim-phase1-ipv6-single-hop
+
+services:
+    gateway:
+        build:
+            context: ../..
+            dockerfile: Dockerfile
+        image: pim:latest
+        container_name: pim-p1-v6-gw
+        hostname: gateway
+        volumes:
+            - ../configs/gateway-ipv6.toml:/etc/pim/pim.toml:ro
+        environment:
+            RUST_LOG: trace
+        cap_add:
+            - NET_ADMIN
+            - NET_RAW
+        devices:
+            - /dev/net/tun:/dev/net/tun
+        sysctls:
+            net.ipv4.ip_forward: "1"
+            net.ipv6.conf.all.forwarding: "1"
+            net.ipv4.ip_local_port_range: "60000 65535"
+        networks:
+            pim-net:
+                ipv4_address: 172.45.0.10
+            uplink-v6:
+                ipv6_address: 2001:db8:1::10
+        healthcheck:
+            test:
+                [
+                    "CMD-SHELL",
+                    "test -f /run/pim.pid && kill -0 $(cat /run/pim.pid) 2>/dev/null && ip link show pim0 2>/dev/null | grep -q UP",
+                ]
+            interval: 2s
+            timeout: 4s
+            retries: 25
+            start_period: 5s
+
+    client:
+        build:
+            context: ../..
+            dockerfile: Dockerfile
+        image: pim:latest
+        container_name: pim-p1-v6-client
+        hostname: client
+        volumes:
+            - ../configs/client-ipv6.toml:/etc/pim/pim.toml:ro
+        cap_add:
+            - NET_ADMIN
+        devices:
+            - /dev/net/tun:/dev/net/tun
+        depends_on:
+            gateway:
+                condition: service_healthy
+        networks:
+            pim-net:
+                ipv4_address: 172.45.0.30
+        healthcheck:
+            test:
+                [
+                    "CMD-SHELL",
+                    "test -f /run/pim.pid && kill -0 $(cat /run/pim.pid) 2>/dev/null && ip link show pim0 2>/dev/null | grep -q UP",
+                ]
+            interval: 2s
+            timeout: 4s
+            retries: 25
+            start_period: 8s
+
+    internet6:
+        image: python:3.12-alpine
+        container_name: pim-p1-v6-internet
+        hostname: internet6
+        command:
+            [
+                "sh",
+                "-lc",
+                "mkdir -p /srv && printf 'pim ipv6 test\\n' > /srv/index.html && exec python3 -m http.server 80 --bind :: --directory /srv",
+            ]
+        networks:
+            uplink-v6:
+                ipv6_address: 2001:db8:1::80
+
+networks:
+    pim-net:
+        driver: bridge
+        ipam:
+            driver: default
+            config:
+                - subnet: 172.45.0.0/24
+    uplink-v6:
+        driver: bridge
+        enable_ipv6: true
+        ipam:
+            driver: default
+            config:
+                - subnet: 2001:db8:1::/64
