@@ -206,12 +206,221 @@ We should add manual or hardware-backed validation steps for:
 - reconnect after PAN interface disappearance
 - two hosts both capable of PAN client/server roles
 
-## Recommended Near-Term Implementation Order
+## Implementation Plan
 
-1. Add dynamic PAN interface resolution on Linux.
-2. Add daemon-managed NAP server mode for gateway nodes.
-3. Refactor Bluetooth runtime into explicit client/server/interface-monitor roles.
-4. Extend docs and test coverage around real host behavior.
+### Phase 1. Remove the fixed-interface assumption
+
+Goal:
+make Linux Bluetooth PAN work when the active interface is created dynamically
+as `bnep*` or `enx*` instead of matching the configured `bluetooth.interface`
+exactly.
+
+Primary code areas:
+
+- `crates/pim-bluetooth/src/lib.rs`
+- `crates/pim-core/src/config.rs`
+- `crates/pim-daemon/src/main.rs`
+
+Work items:
+
+1. Introduce runtime PAN interface resolution in `pim-bluetooth`.
+2. Replace direct reads of `self.config.interface` in readiness and neighbor
+   discovery paths with a resolver that:
+   - prefers the configured interface if it exists and is ready
+   - otherwise scans `/sys/class/net`
+   - prefers `bnep*` first
+   - falls back to `enx*` when the interface is up and appears only after PAN
+     setup
+3. Re-resolve on every readiness/discovery cycle instead of assuming the same
+   interface persists for the lifetime of the daemon.
+4. Add logs for:
+   - configured interface
+   - resolved runtime interface
+   - candidate interfaces considered
+   - reason no interface qualified
+5. Keep the existing `interface` field for now as a hint/default rather than as
+   a hard requirement so current configs remain backward-compatible.
+
+Acceptance criteria:
+
+- a Linux client can connect successfully when the PAN interface appears as
+  `enx*`
+- `pim-bluetooth` can recover after the PAN interface disappears and later
+  reappears with the same or different name
+- logs show which interface was selected
+
+Testing:
+
+- add unit tests around interface selection and operstate filtering
+- extend seam tests to simulate:
+  - configured interface exists
+  - configured interface missing but `bnep0` appears
+  - configured interface missing but `enx*` appears
+  - interface disappearance and re-resolution
+
+### Phase 2. Add explicit Linux PAN server support
+
+Goal:
+let a node provide NAP service under daemon control instead of requiring an
+external `bt-network -s nap` process.
+
+Primary code areas:
+
+- `crates/pim-core/src/config.rs`
+- `crates/pim-bluetooth/src/lib.rs`
+- `crates/pim-daemon/src/main.rs`
+- `scripts/generate_client_full_config.sh`
+- `scripts/generate_gateway_full_config.sh`
+
+Suggested config additions:
+
+```toml
+[bluetooth]
+enabled = true
+serve_nap = true
+nap_bridge = "br-bt"
+connect_pan = true
+```
+
+Work items:
+
+1. Extend `BluetoothConfig` with Linux-oriented role controls:
+   - `serve_nap`
+   - `nap_bridge`
+   - `connect_pan`
+2. In `pim-daemon`, start a managed NAP subprocess when `serve_nap = true`.
+3. Ensure lifecycle handling covers startup, shutdown, and restart if the helper
+   exits unexpectedly.
+4. Validate the configured bridge early and fail with a clear log if the bridge
+   is missing or unusable.
+5. Update config generators so:
+   - gateway-oriented templates can enable NAP serving
+   - client-oriented templates can disable it by default
+   - generated comments explain current Linux limitations clearly
+
+Acceptance criteria:
+
+- the gateway daemon can provide NAP without any separate operator-run helper
+- the daemon does not attempt outbound `bt-network -c ... nap` when configured
+  as server-only
+- gateway and client generated configs no longer imply that both Linux nodes
+  should behave as PAN clients
+
+Testing:
+
+- config round-trip tests for new fields
+- daemon tests that verify the managed helper is started only when enabled
+- generator tests updated to assert the new fields/comments
+
+### Phase 3. Split Bluetooth runtime roles cleanly
+
+Goal:
+separate responsibilities that are currently folded into one watcher so server,
+client, and interface-observation behavior can evolve independently.
+
+Primary code areas:
+
+- `crates/pim-bluetooth/src/lib.rs`
+- `crates/pim-daemon/src/main.rs`
+- `docs/architecture/bluetooth.md`
+
+Work items:
+
+1. Break the current watcher logic into distinct Linux role components:
+   - radio discovery / pairing
+   - PAN client connect requests
+   - NAP server process management
+   - PAN interface resolution and neighbor observation
+2. Keep a thin orchestration layer in `BluetoothDiscovery::run` or replace it
+   with a clearer controller object.
+3. Make outbound connect attempts conditional on role config instead of being
+   implied whenever radio discovery is on.
+4. Preserve the existing downstream contract: emit `SocketAddr`s into the normal
+   TCP transport path.
+
+Acceptance criteria:
+
+- server-only, client-only, and dual-role behavior are explicit in code and logs
+- hosts serving NAP no longer accidentally perform the wrong outbound role
+- future Bluetooth fixes do not require editing one monolithic loop
+
+Testing:
+
+- focused tests per role component
+- integration test covering a dual-role configuration without duplicate or
+  conflicting connect attempts
+
+### Phase 4. Update operator-facing defaults and docs
+
+Goal:
+remove misleading defaults and document the actual Linux Bluetooth PAN model.
+
+Primary code areas:
+
+- `scripts/generate_client_full_config.sh`
+- `scripts/generate_gateway_full_config.sh`
+- `scripts/test-config-generators.sh`
+- `docs/architecture/bluetooth.md`
+- `docs/getting-started/client-usage.md`
+- `docs/getting-started/gateway-usage.md`
+
+Work items:
+
+1. Stop presenting `bnep0` as a universally reliable Linux default.
+2. Document that `bluetooth.interface` is a preferred hint and that runtime
+   selection may choose another PAN-facing interface.
+3. Document role-based examples:
+   - client-only
+   - gateway serving NAP
+   - dual-role experimental mode
+4. Update operator guidance to explain what log lines confirm:
+   - NAP server started
+   - PAN client connected
+   - runtime interface resolved
+   - neighbor discovery succeeded or returned zero peers
+
+Acceptance criteria:
+
+- generated configs and docs no longer instruct operators to rely on `bnep0`
+- gateway docs describe managed NAP mode instead of requiring a manual external
+  helper
+
+### Phase 5. Add host-level validation
+
+Goal:
+prove the Linux Bluetooth PAN path on real hardware, not only through seam
+tests.
+
+Work items:
+
+1. Create a repeatable manual validation checklist for two Linux hosts.
+2. Record exact commands, expected logs, and expected peer states.
+3. Validate these scenarios:
+   - gateway serves NAP, client connects
+   - dynamic interface arrives as `bnep*`
+   - dynamic interface arrives as `enx*`
+   - PAN interface disappears and later reconnects
+   - dual-role hosts converge without manual role changes
+4. Capture failure signatures and corresponding remediation guidance for
+   operators.
+
+Acceptance criteria:
+
+- the project has one documented real-host validation path that can be run
+  before release
+- Bluetooth PAN regressions can be checked against concrete expected behavior
+
+## Recommended Delivery Order
+
+1. Phase 1 first, because dynamic interface resolution fixes the clearest
+   current runtime failure and is mostly localized to `pim-bluetooth`.
+2. Phase 2 next, because Linux nodes still need a daemon-managed NAP role to
+   avoid the current manual external helper workaround.
+3. Phase 3 after that, once the runtime has the needed behavior and can be
+   cleanly refactored around explicit roles.
+4. Phase 4 alongside or immediately after Phase 2 so generated configs stop
+   teaching the broken path.
+5. Phase 5 before calling the Linux Bluetooth PAN path production-ready.
 
 ## Operator Guidance Until Code Changes Land
 

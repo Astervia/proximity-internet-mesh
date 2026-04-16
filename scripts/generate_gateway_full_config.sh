@@ -15,7 +15,7 @@ Options:
       --mesh-ip CIDR           Mesh IP/CIDR for the gateway (default: 10.77.0.1/24)
       --nat-interface IFACE    Internet-facing interface for NAT
       --wifi-interface IFACE   Wi-Fi Direct parent interface
-      --bt-interface IFACE     Bluetooth PAN interface (default fallback: bnep0)
+      --bt-interface IFACE     Preferred Bluetooth PAN interface (default: auto)
       --listen-port PORT       Transport listen port (default: 9100)
       --discovery-port PORT    UDP discovery port (default: 9101)
       --data-dir PATH          Data dir (default: /var/lib/pim)
@@ -136,7 +136,7 @@ detect_bluetooth_interface() {
         fi
     fi
 
-    printf '%s\n' "bnep0"
+    printf '%s\n' "auto"
 }
 
 shell_quote_comment() {
@@ -217,6 +217,9 @@ generated_at="$(date -u +'%Y-%m-%dT%H:%M:%SZ' 2>/dev/null || printf '%s' unknown
 detect_note_nat="$(shell_quote_comment "${nat_interface}")"
 detect_note_wifi="$(shell_quote_comment "${wifi_interface}")"
 detect_note_bt="$(shell_quote_comment "${bt_interface}")"
+bt_connect_pan="false"
+bt_serve_nap="true"
+bt_nap_bridge="br-bt"
 
 if is_macos; then
     interface_name="utun0"
@@ -227,6 +230,9 @@ if is_macos; then
     wifi_comment="# Wi-Fi Direct is currently Linux-only; leave this disabled on macOS."
     bt_enabled="true"
     bt_comment="# macOS Bluetooth PAN uses the host Bluetooth stack. Install blueutil for radio discovery/pair/connect."
+    bt_connect_pan="true"
+    bt_serve_nap="false"
+    bt_nap_bridge="bridge0"
 else
     interface_name="pim0"
     review_cmd_1="#   ip route get 1.1.1.1"
@@ -304,6 +310,9 @@ interface = "${bt_interface}"
 radio_discovery_enabled = true
 device_name_prefix = "PIM-"
 local_alias = "PIM-${node_name}"
+connect_pan = ${bt_connect_pan}
+serve_nap = ${bt_serve_nap}
+nap_bridge = "${bt_nap_bridge}"
 auto_discover_peers = true
 poll_interval_ms = 2000
 scan_interval_ms = 5000

@@ -8,7 +8,7 @@ The key distinction is:
 - `gateway.nat_interface`: the real internet-facing interface used for NAT
 - `transport.listen_port`: the TCP port peers connect to after discovery
 - `[wifi_direct].interface`: the physical Wi-Fi interface used for P2P
-- `[bluetooth].interface`: the Bluetooth PAN network interface, usually `bnep0`
+- `[bluetooth].interface`: a preferred Bluetooth PAN interface hint; use `"auto"` on Linux unless you need to pin a specific interface
 
 ## Before You Start
 
@@ -253,8 +253,8 @@ ip -br link
 If a PAN interface already exists, inspect it. On macOS, use `bridge0` or the host's Bluetooth PAN bridge if it differs:
 
 ```bash
-ip -4 -o addr show dev bnep0
-ip neigh show dev bnep0
+ip -4 -o addr show dev <pan-iface>
+ip neigh show dev <pan-iface>
 ```
 
 Example gateway config:
@@ -266,10 +266,13 @@ nat_interface = "eth0"
 
 [bluetooth]
 enabled = true
-interface = "bnep0" # use "bridge0" on macOS unless the host exposes a different PAN bridge
+interface = "auto" # use "bridge0" on macOS unless the host exposes a different PAN bridge
 radio_discovery_enabled = true
 device_name_prefix = "PIM-"
 local_alias = "PIM-gateway-a"
+connect_pan = false
+serve_nap = true
+nap_bridge = "br-bt"
 auto_discover_peers = true
 poll_interval_ms = 2000
 scan_interval_ms = 5000
@@ -281,8 +284,10 @@ startup_timeout_ms = 15000
 
 Operational notes:
 
-- `[bluetooth].interface` should be the PAN interface, usually `bnep0` on Linux or `bridge0` on macOS
-- PIM waits for that interface to become ready
+- `[bluetooth].interface` is a preferred interface hint on Linux; `"auto"` lets the daemon resolve a ready `bnep*`, `enx*`, or configured bridge interface dynamically
+- `serve_nap = true` starts a daemon-managed Linux NAP server on `nap_bridge`
+- `connect_pan = false` keeps a Linux gateway from also behaving like an outbound PAN client by default
+- PIM waits for a PAN-facing interface to become ready
 - Linux uses `bluetoothctl`; macOS uses the host Bluetooth stack and expects `blueutil` for radio discovery and pairing automation
 - once the PAN link exists, PIM reads neighbor entries from `ip neigh show dev <interface>` on Linux or `arp -an -i <interface>` on macOS
 - discovered neighbor IPs are then used as normal TCP peer targets on `transport.listen_port`
@@ -301,8 +306,8 @@ Useful checks:
 
 ```bash
 bluetoothctl devices
-ip link show bnep0
-ip neigh show dev bnep0
+ip -br link
+ip neigh show dev <pan-iface>
 ```
 
 ## Mixed-Mechanism Gateway
@@ -332,7 +337,7 @@ interface = "wlan0"
 
 [bluetooth]
 enabled = true
-interface = "bnep0"
+interface = "auto"
 
 [[peers]]
 mechanism = "tcp"
@@ -348,7 +353,7 @@ gateway dataplane once a peer address becomes reachable.
 1. Discover the internet-facing interface with `ip route get 1.1.1.1`.
 2. Confirm that interface has IPv4 connectivity with `ip -4 -o addr show dev <iface>`.
 3. If using Wi-Fi Direct, identify the Wi-Fi radio with `iw dev`.
-4. If using Bluetooth PAN, identify the PAN interface with `ip -br link` and inspect it with `ip neigh show dev <bnepX>`.
+4. If using Bluetooth PAN, identify the active PAN interface with `ip -br link` and inspect it with `ip neigh show dev <pan-iface>`.
 5. Set `gateway.enabled = true` and `gateway.nat_interface = "<iface>"`.
 6. Enable only the peer mechanisms you actually intend to use.
 7. Start the daemon with `sudo pim up --config /etc/pim/pim.toml`.
@@ -371,8 +376,8 @@ If Wi-Fi Direct does not discover peers:
 If Bluetooth peers do not appear:
 
 - verify Bluetooth is powered: `bluetoothctl show`
-- verify the PAN interface exists: `ip link show bnep0`
-- verify neighbor discovery sees peers: `ip neigh show dev bnep0`
+- verify the PAN interface exists: `ip -br link`
+- verify neighbor discovery sees peers on the active PAN interface: `ip neigh show dev <pan-iface>`
 
 ## Related Docs
 

@@ -220,7 +220,7 @@ pub struct BluetoothConfig {
     /// Enable Bluetooth PAN link monitoring. Defaults to `false` (opt-in).
     #[serde(default)]
     pub enabled: bool,
-    /// Linux network interface expected to represent the PAN link, e.g. `bnep0`.
+    /// Preferred PAN-facing interface name or `"auto"` for runtime resolution.
     #[serde(default = "default_bluetooth_interface")]
     pub interface: String,
     /// Enable radio-level Bluetooth discovery and pairing for new peers.
@@ -232,6 +232,15 @@ pub struct BluetoothConfig {
     /// Local Bluetooth controller alias to advertise. Empty means derived from node name.
     #[serde(default)]
     pub local_alias: String,
+    /// Allow outbound PAN/NAP connection attempts to discovered peers.
+    #[serde(default = "default_bluetooth_connect_pan")]
+    pub connect_pan: bool,
+    /// Start and supervise a local Linux NAP server process.
+    #[serde(default)]
+    pub serve_nap: bool,
+    /// Linux bridge/interface to expose through the local NAP server.
+    #[serde(default = "default_bluetooth_nap_bridge")]
+    pub nap_bridge: String,
     /// Automatically discover peer IPs from the PAN interface neighbor table.
     #[serde(default = "default_bluetooth_auto_discover_peers")]
     pub auto_discover_peers: bool,
@@ -358,7 +367,7 @@ fn default_wfd_connect_method() -> String {
 }
 
 fn default_bluetooth_interface() -> String {
-    "bnep0".into()
+    "auto".into()
 }
 
 fn default_bluetooth_radio_discovery_enabled() -> bool {
@@ -367,6 +376,14 @@ fn default_bluetooth_radio_discovery_enabled() -> bool {
 
 fn default_bluetooth_device_name_prefix() -> String {
     "PIM-".into()
+}
+
+fn default_bluetooth_connect_pan() -> bool {
+    true
+}
+
+fn default_bluetooth_nap_bridge() -> String {
+    "br-bt".into()
 }
 
 fn default_bluetooth_auto_discover_peers() -> bool {
@@ -498,6 +515,9 @@ impl Default for BluetoothConfig {
             radio_discovery_enabled: default_bluetooth_radio_discovery_enabled(),
             device_name_prefix: default_bluetooth_device_name_prefix(),
             local_alias: String::new(),
+            connect_pan: default_bluetooth_connect_pan(),
+            serve_nap: false,
+            nap_bridge: default_bluetooth_nap_bridge(),
             auto_discover_peers: default_bluetooth_auto_discover_peers(),
             poll_interval_ms: default_bluetooth_poll_interval_ms(),
             scan_interval_ms: default_bluetooth_scan_interval_ms(),
@@ -609,10 +629,13 @@ connect_method = "pbc"
 
 [bluetooth]
 enabled = false
-interface = "bnep0"
+interface = "auto"
 radio_discovery_enabled = true
 device_name_prefix = "PIM-"
 local_alias = ""
+connect_pan = true
+serve_nap = false
+nap_bridge = "br-bt"
 auto_discover_peers = true
 poll_interval_ms = 2000
 scan_interval_ms = 5000
@@ -848,10 +871,13 @@ connect_method = "pin:12345670"
     fn bluetooth_defaults_to_disabled() {
         let config = Config::from_toml_str(MINIMAL_CONFIG).unwrap();
         assert!(!config.bluetooth.enabled);
-        assert_eq!(config.bluetooth.interface, "bnep0");
+        assert_eq!(config.bluetooth.interface, "auto");
         assert!(config.bluetooth.radio_discovery_enabled);
         assert_eq!(config.bluetooth.device_name_prefix, "PIM-");
         assert_eq!(config.bluetooth.local_alias, "");
+        assert!(config.bluetooth.connect_pan);
+        assert!(!config.bluetooth.serve_nap);
+        assert_eq!(config.bluetooth.nap_bridge, "br-bt");
         assert!(config.bluetooth.auto_discover_peers);
         assert_eq!(config.bluetooth.poll_interval_ms, 2_000);
         assert_eq!(config.bluetooth.scan_interval_ms, 5_000);
@@ -871,6 +897,9 @@ enabled = true
 radio_discovery_enabled = true
 device_name_prefix = "PIM-"
 local_alias = "PIM-t"
+connect_pan = false
+serve_nap = true
+nap_bridge = "br-pan0"
 auto_discover_peers = false
 "#;
         let config = Config::from_toml_str(toml).unwrap();
@@ -878,10 +907,15 @@ auto_discover_peers = false
         assert!(config.bluetooth.radio_discovery_enabled);
         assert_eq!(config.bluetooth.device_name_prefix, "PIM-");
         assert_eq!(config.bluetooth.local_alias, "PIM-t");
+        assert!(!config.bluetooth.connect_pan);
+        assert!(config.bluetooth.serve_nap);
+        assert_eq!(config.bluetooth.nap_bridge, "br-pan0");
         assert!(!config.bluetooth.auto_discover_peers);
         let serialized = config.to_toml_string().unwrap();
         let reparsed = Config::from_toml_str(&serialized).unwrap();
         assert!(reparsed.bluetooth.enabled);
+        assert!(!reparsed.bluetooth.connect_pan);
+        assert!(reparsed.bluetooth.serve_nap);
         assert!(!reparsed.bluetooth.auto_discover_peers);
     }
 
@@ -896,6 +930,9 @@ interface = "bnep1"
 radio_discovery_enabled = true
 device_name_prefix = "MESH-"
 local_alias = "MESH-t"
+connect_pan = true
+serve_nap = false
+nap_bridge = "br-bt"
 auto_discover_peers = true
 poll_interval_ms = 500
 scan_interval_ms = 750
@@ -909,6 +946,9 @@ startup_timeout_ms = 10000
         assert!(config.bluetooth.radio_discovery_enabled);
         assert_eq!(config.bluetooth.device_name_prefix, "MESH-");
         assert_eq!(config.bluetooth.local_alias, "MESH-t");
+        assert!(config.bluetooth.connect_pan);
+        assert!(!config.bluetooth.serve_nap);
+        assert_eq!(config.bluetooth.nap_bridge, "br-bt");
         assert!(config.bluetooth.auto_discover_peers);
         assert_eq!(config.bluetooth.poll_interval_ms, 500);
         assert_eq!(config.bluetooth.scan_interval_ms, 750);
