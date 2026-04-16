@@ -39,7 +39,7 @@ mod send_buffer;
 
 use std::collections::{HashMap, HashSet};
 use std::io;
-use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 use std::path::Path;
 use std::path::PathBuf;
@@ -68,7 +68,7 @@ use pim_crypto::{
     HandshakeResponse, Handshaker, Identity, SessionCipher,
 };
 use pim_discovery::{DiscoveryService, NodeCapabilities, PeerRecord, PeerTable};
-use pim_gateway::{GatewayEngine, IpPool};
+use pim_gateway::{GatewayEngine, GatewayEngineV6, IpPool};
 use pim_protocol::{
     fragment_packet, ControlFrame, DataFlags, FragmentFrame, FrameType, HandshakeFrameType,
     HandshakeWireFrame, HeartbeatFrame, MeshDataFrame, Reassembler, RouteUpdateFrame,
@@ -255,6 +255,8 @@ struct DaemonState {
     mesh_ip: AtomicU32,
     /// Mesh prefix length used when deriving the first gateway host in the subnet.
     mesh_prefix_len: AtomicU8,
+    /// Optional mesh IPv6 address and prefix configured on the TUN interface.
+    mesh_ipv6: Arc<RwLock<Option<(Ipv6Addr, u8)>>>,
     /// Whether this node expects a dynamic mesh IP from a gateway.
     request_dynamic_ip: bool,
     /// Our own X25519 public key (set only when is_gateway = true).
@@ -268,6 +270,7 @@ struct DaemonState {
     transport: Arc<TcpTransport>,
     tun: Arc<TunInterface>,
     gw_engine: Option<Arc<GatewayEngine>>,
+    gw_engine_v6: Option<Arc<GatewayEngineV6>>,
     internet_link: Option<Arc<InternetGatewayLink>>,
     /// IP address pool — gateway only.
     ip_pool: Option<Arc<Mutex<IpPool>>>,
@@ -311,83 +314,119 @@ impl DaemonState {
 
 #[cfg(target_os = "linux")]
 struct InternetGatewayLink {
-    send_fd: tokio::io::unix::AsyncFd<OwnedFd>,
-    recv_fd: tokio::io::unix::AsyncFd<OwnedFd>,
+    send_fd_v4: tokio::io::unix::AsyncFd<OwnedFd>,
+    send_fd_v6: tokio::io::unix::AsyncFd<OwnedFd>,
+    recv_fd_v4: tokio::io::unix::AsyncFd<OwnedFd>,
+    recv_fd_v6: tokio::io::unix::AsyncFd<OwnedFd>,
 }
 
 #[cfg(target_os = "linux")]
 impl InternetGatewayLink {
     fn new(interface: &str) -> Result<Self> {
-        let send_fd = create_raw_send_socket(interface)?;
-        let recv_fd = create_packet_recv_socket(interface)?;
+        let send_fd_v4 = create_raw_send_socket_v4(interface)?;
+        let send_fd_v6 = create_raw_send_socket_v6(interface)?;
+        let recv_fd_v4 = create_packet_recv_socket_v4(interface)?;
+        let recv_fd_v6 = create_packet_recv_socket_v6(interface)?;
         Ok(Self {
-            send_fd: tokio::io::unix::AsyncFd::new(send_fd).context("raw send AsyncFd")?,
-            recv_fd: tokio::io::unix::AsyncFd::new(recv_fd).context("packet recv AsyncFd")?,
+            send_fd_v4: tokio::io::unix::AsyncFd::new(send_fd_v4).context("raw send AsyncFd v4")?,
+            send_fd_v6: tokio::io::unix::AsyncFd::new(send_fd_v6).context("raw send AsyncFd v6")?,
+            recv_fd_v4: tokio::io::unix::AsyncFd::new(recv_fd_v4)
+                .context("packet recv AsyncFd v4")?,
+            recv_fd_v6: tokio::io::unix::AsyncFd::new(recv_fd_v6)
+                .context("packet recv AsyncFd v6")?,
         })
     }
 
     async fn send_packet(&self, packet: &[u8]) -> Result<()> {
-        let dest_ip = ipv4_destination(packet).context("raw send requires IPv4 packet")?;
-        let mut addr: libc::sockaddr_in = unsafe { std::mem::zeroed() };
-        addr.sin_family = libc::AF_INET as u16;
-        addr.sin_addr = libc::in_addr {
-            s_addr: u32::from(dest_ip).to_be(),
-        };
-
-        loop {
-            let mut guard = self
-                .send_fd
-                .writable()
-                .await
-                .context("raw send socket writable")?;
-            match guard.try_io(|inner| {
-                let rc = unsafe {
-                    libc::sendto(
-                        inner.as_raw_fd(),
-                        packet.as_ptr() as *const libc::c_void,
-                        packet.len(),
-                        0,
-                        &addr as *const _ as *const libc::sockaddr,
-                        std::mem::size_of::<libc::sockaddr_in>() as libc::socklen_t,
-                    )
+        match packet_ip_version(packet) {
+            Some(4) => {
+                let dest_ip = ipv4_destination(packet).context("raw send requires IPv4 packet")?;
+                let mut addr: libc::sockaddr_in = unsafe { std::mem::zeroed() };
+                addr.sin_family = libc::AF_INET as u16;
+                addr.sin_addr = libc::in_addr {
+                    s_addr: u32::from(dest_ip).to_be(),
                 };
-                if rc < 0 {
-                    Err(io::Error::last_os_error())
-                } else {
-                    Ok(())
+
+                loop {
+                    let mut guard = self
+                        .send_fd_v4
+                        .writable()
+                        .await
+                        .context("raw send socket writable v4")?;
+                    match guard.try_io(|inner| {
+                        let rc = unsafe {
+                            libc::sendto(
+                                inner.as_raw_fd(),
+                                packet.as_ptr() as *const libc::c_void,
+                                packet.len(),
+                                0,
+                                &addr as *const _ as *const libc::sockaddr,
+                                std::mem::size_of::<libc::sockaddr_in>() as libc::socklen_t,
+                            )
+                        };
+                        if rc < 0 {
+                            Err(io::Error::last_os_error())
+                        } else {
+                            Ok(())
+                        }
+                    }) {
+                        Ok(result) => return result.context("raw sendto failed v4"),
+                        Err(_would_block) => continue,
+                    }
                 }
-            }) {
-                Ok(result) => return result.context("raw sendto failed"),
-                Err(_would_block) => continue,
             }
+            Some(6) => {
+                let dest_ip = ipv6_destination(packet).context("raw send requires IPv6 packet")?;
+                let mut addr: libc::sockaddr_in6 = unsafe { std::mem::zeroed() };
+                addr.sin6_family = libc::AF_INET6 as u16;
+                addr.sin6_addr = libc::in6_addr {
+                    s6_addr: dest_ip.octets(),
+                };
+
+                loop {
+                    let mut guard = self
+                        .send_fd_v6
+                        .writable()
+                        .await
+                        .context("raw send socket writable v6")?;
+                    match guard.try_io(|inner| {
+                        let rc = unsafe {
+                            libc::sendto(
+                                inner.as_raw_fd(),
+                                packet.as_ptr() as *const libc::c_void,
+                                packet.len(),
+                                0,
+                                &addr as *const _ as *const libc::sockaddr,
+                                std::mem::size_of::<libc::sockaddr_in6>() as libc::socklen_t,
+                            )
+                        };
+                        if rc < 0 {
+                            Err(io::Error::last_os_error())
+                        } else {
+                            Ok(())
+                        }
+                    }) {
+                        Ok(result) => return result.context("raw sendto failed v6"),
+                        Err(_would_block) => continue,
+                    }
+                }
+            }
+            _ => bail!("raw send requires IPv4 or IPv6 packet"),
         }
     }
 
     async fn recv_packet(&self, buf: &mut [u8]) -> Result<usize> {
-        loop {
-            let mut guard = self
-                .recv_fd
-                .readable()
-                .await
-                .context("packet socket readable")?;
-            match guard.try_io(|inner| {
-                let rc = unsafe {
-                    libc::recv(
-                        inner.as_raw_fd(),
-                        buf.as_mut_ptr() as *mut libc::c_void,
-                        buf.len(),
-                        0,
-                    )
-                };
-                if rc < 0 {
-                    Err(io::Error::last_os_error())
-                } else {
-                    Ok(rc as usize)
-                }
-            }) {
-                Ok(result) => return result.context("packet recv failed"),
-                Err(_would_block) => continue,
-            }
+        tokio::select! {
+            result = recv_linux_packet_owned(&self.recv_fd_v4, buf.len(), "packet recv v4") => {
+                let (packet, size) = result?;
+                buf[..size].copy_from_slice(&packet[..size]);
+                Ok(size)
+            },
+            result = recv_linux_packet_owned(&self.recv_fd_v6, buf.len(), "packet recv v6") => {
+                let (packet, size) = result?;
+                buf[..size].copy_from_slice(&packet[..size]);
+                Ok(size)
+            },
         }
     }
 }
@@ -493,6 +532,10 @@ impl InternetGatewayLink {
     }
 }
 
+fn packet_ip_version(packet: &[u8]) -> Option<u8> {
+    packet.first().map(|byte| byte >> 4)
+}
+
 fn ipv4_destination(packet: &[u8]) -> Option<Ipv4Addr> {
     if packet.len() < 20 || (packet[0] >> 4) != 4 {
         return None;
@@ -500,6 +543,15 @@ fn ipv4_destination(packet: &[u8]) -> Option<Ipv4Addr> {
     Some(Ipv4Addr::new(
         packet[16], packet[17], packet[18], packet[19],
     ))
+}
+
+fn ipv6_destination(packet: &[u8]) -> Option<Ipv6Addr> {
+    if packet.len() < 40 || (packet[0] >> 4) != 6 {
+        return None;
+    }
+    let mut octets = [0u8; 16];
+    octets.copy_from_slice(&packet[24..40]);
+    Some(Ipv6Addr::from(octets))
 }
 
 fn lookup_interface_ipv4(interface: &str) -> Result<Ipv4Addr> {
@@ -536,6 +588,43 @@ fn lookup_interface_ipv4(interface: &str) -> Result<Ipv4Addr> {
         .with_context(|| format!("no IPv4 address found on interface {interface}"))
 }
 
+fn lookup_interface_ipv6(interface: &str) -> Result<Ipv6Addr> {
+    #[cfg(target_os = "linux")]
+    let output = Command::new("ip")
+        .args([
+            "-6", "-o", "addr", "show", "scope", "global", "dev", interface,
+        ])
+        .output()
+        .with_context(|| format!("failed to inspect IPv6 address for {interface}"))?;
+    #[cfg(target_os = "macos")]
+    let output = Command::new("ifconfig")
+        .arg(interface)
+        .output()
+        .with_context(|| format!("failed to inspect IPv6 address for {interface}"))?;
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    bail!("interface IPv6 lookup is not supported on this platform");
+
+    if !output.status.success() {
+        #[cfg(target_os = "linux")]
+        bail!(
+            "ip -6 -o addr show scope global dev {interface} exited with {:?}",
+            output.status.code()
+        );
+        #[cfg(target_os = "macos")]
+        bail!(
+            "ifconfig {interface} exited with {:?}",
+            output.status.code()
+        );
+        #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+        unreachable!();
+    }
+
+    let stdout =
+        String::from_utf8(output.stdout).context("invalid UTF-8 from interface IPv6 output")?;
+    parse_interface_ipv6_output(&stdout)
+        .with_context(|| format!("no global IPv6 address found on interface {interface}"))
+}
+
 fn parse_interface_ipv4_output(output: &str) -> Option<Ipv4Addr> {
     output
         .split_whitespace()
@@ -546,8 +635,19 @@ fn parse_interface_ipv4_output(output: &str) -> Option<Ipv4Addr> {
         .and_then(|ip| ip.parse().ok())
 }
 
+fn parse_interface_ipv6_output(output: &str) -> Option<Ipv6Addr> {
+    output
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .windows(2)
+        .find_map(|window| (window[0] == "inet6").then_some(window[1]))
+        .and_then(|token| token.split('/').next())
+        .and_then(|ip| ip.split('%').next())
+        .and_then(|ip| ip.parse().ok())
+}
+
 #[cfg(target_os = "linux")]
-fn create_raw_send_socket(interface: &str) -> Result<OwnedFd> {
+fn create_raw_send_socket_v4(interface: &str) -> Result<OwnedFd> {
     let fd = unsafe {
         libc::socket(
             libc::AF_INET,
@@ -593,7 +693,33 @@ fn create_raw_send_socket(interface: &str) -> Result<OwnedFd> {
 }
 
 #[cfg(target_os = "linux")]
-fn create_packet_recv_socket(interface: &str) -> Result<OwnedFd> {
+fn create_raw_send_socket_v6(interface: &str) -> Result<OwnedFd> {
+    let fd = unsafe {
+        libc::socket(
+            libc::AF_INET6,
+            libc::SOCK_RAW | libc::SOCK_NONBLOCK,
+            libc::IPPROTO_RAW,
+        )
+    };
+    if fd < 0 {
+        return Err(io::Error::last_os_error()).context("create raw send socket v6");
+    }
+    let fd = unsafe { OwnedFd::from_raw_fd(fd) };
+    let one: libc::c_int = 1;
+    setsockopt_bytes(
+        fd.as_raw_fd(),
+        libc::IPPROTO_IPV6,
+        libc::IPV6_HDRINCL,
+        &one.to_ne_bytes(),
+    )
+    .context("set IPV6_HDRINCL")?;
+    bind_socket_to_device(fd.as_raw_fd(), interface)
+        .context("bind raw send socket v6 to device")?;
+    Ok(fd)
+}
+
+#[cfg(target_os = "linux")]
+fn create_packet_recv_socket_v4(interface: &str) -> Result<OwnedFd> {
     const ETH_P_IP: u16 = 0x0800;
     let fd = unsafe {
         libc::socket(
@@ -632,11 +758,83 @@ fn create_packet_recv_socket(interface: &str) -> Result<OwnedFd> {
 }
 
 #[cfg(target_os = "linux")]
+fn create_packet_recv_socket_v6(interface: &str) -> Result<OwnedFd> {
+    const ETH_P_IPV6: u16 = 0x86dd;
+    let fd = unsafe {
+        libc::socket(
+            libc::AF_PACKET,
+            libc::SOCK_DGRAM | libc::SOCK_NONBLOCK,
+            i32::from(ETH_P_IPV6.to_be()),
+        )
+    };
+    if fd < 0 {
+        return Err(io::Error::last_os_error()).context("create packet recv socket v6");
+    }
+    let fd = unsafe { OwnedFd::from_raw_fd(fd) };
+    bind_socket_to_device(fd.as_raw_fd(), interface).context("bind packet socket v6 to device")?;
+
+    let if_name = std::ffi::CString::new(interface).context("interface contains interior NUL")?;
+    let ifindex = unsafe { libc::if_nametoindex(if_name.as_ptr()) };
+    if ifindex == 0 {
+        return Err(io::Error::last_os_error()).context("if_nametoindex failed");
+    }
+
+    let mut addr: libc::sockaddr_ll = unsafe { std::mem::zeroed() };
+    addr.sll_family = libc::AF_PACKET as u16;
+    addr.sll_protocol = ETH_P_IPV6.to_be();
+    addr.sll_ifindex = ifindex as i32;
+    let rc = unsafe {
+        libc::bind(
+            fd.as_raw_fd(),
+            &addr as *const _ as *const libc::sockaddr,
+            std::mem::size_of::<libc::sockaddr_ll>() as libc::socklen_t,
+        )
+    };
+    if rc < 0 {
+        return Err(io::Error::last_os_error()).context("bind packet socket v6");
+    }
+    Ok(fd)
+}
+
+#[cfg(target_os = "linux")]
 fn bind_socket_to_device(fd: i32, interface: &str) -> Result<()> {
     let mut name = interface.as_bytes().to_vec();
     name.push(0);
     setsockopt_bytes(fd, libc::SOL_SOCKET, libc::SO_BINDTODEVICE, &name)
         .with_context(|| format!("SO_BINDTODEVICE failed for {interface}"))
+}
+
+#[cfg(target_os = "linux")]
+async fn recv_linux_packet_owned(
+    fd: &tokio::io::unix::AsyncFd<OwnedFd>,
+    buf_len: usize,
+    context: &'static str,
+) -> Result<(Vec<u8>, usize)> {
+    let mut packet = vec![0u8; buf_len];
+    loop {
+        let mut guard = fd
+            .readable()
+            .await
+            .with_context(|| format!("{context} readable"))?;
+        match guard.try_io(|inner| {
+            let rc = unsafe {
+                libc::recv(
+                    inner.as_raw_fd(),
+                    packet.as_mut_ptr() as *mut libc::c_void,
+                    packet.len(),
+                    0,
+                )
+            };
+            if rc < 0 {
+                Err(io::Error::last_os_error())
+            } else {
+                Ok(rc as usize)
+            }
+        }) {
+            Ok(result) => return result.map(|size| (packet, size)).context(context),
+            Err(_would_block) => continue,
+        }
+    }
 }
 
 #[cfg(target_os = "macos")]
@@ -933,6 +1131,17 @@ async fn run_conntrack_gc(state: Arc<DaemonState>) {
                 debug!(
                     removed = before - after,
                     "conntrack GC: expired entries removed"
+                );
+            }
+        }
+        if let Some(gw) = &state.gw_engine_v6 {
+            let before = gw.conntrack_size().await;
+            gw.cleanup_expired().await;
+            let after = gw.conntrack_size().await;
+            if before != after {
+                debug!(
+                    removed = before - after,
+                    "IPv6 conntrack GC: expired entries removed"
                 );
             }
         }
@@ -1742,36 +1951,55 @@ async fn run_event_loop(state: Arc<DaemonState>) -> Result<()> {
                 let packet = &tun_buf[..n];
                 debug!(bytes = n, "TUN read");
 
-                if n < 20 {
-                    debug!(bytes = n, "short IPv4 packet from TUN; dropping");
+                let Some(ip_version) = packet_ip_version(packet) else {
+                    debug!(bytes = n, "empty packet from TUN; dropping");
                     continue;
-                }
+                };
+                let (dst_id, next_hop_id, mut flags) = if ip_version == 4 {
+                    if n < 20 {
+                        debug!(bytes = n, "short IPv4 packet from TUN; dropping");
+                        continue;
+                    }
 
-                let dest_ip = Ipv4Addr::new(packet[16], packet[17], packet[18], packet[19]);
+                    let dest_ip = Ipv4Addr::new(packet[16], packet[17], packet[18], packet[19]);
 
-                // Drop packets addressed to ourselves — the OS handles local delivery.
-                if dest_ip == Ipv4Addr::from(state.mesh_ip.load(Ordering::Relaxed)) {
-                    continue;
-                }
+                    if dest_ip == Ipv4Addr::from(state.mesh_ip.load(Ordering::Relaxed)) {
+                        continue;
+                    }
 
-                let mesh_route = state.routing.lock().await.lookup_mesh_ip(dest_ip);
-                let (dst_id, next_hop_id, mut flags) = match mesh_route {
-                    Some((dst_id, next_hop)) => (dst_id, next_hop, DataFlags::empty()),
-                    None => {
-                        let gw_route = state.routing.lock().await.nearest_gateway_route();
-                        match gw_route {
-                            Some((gw_id, next_hop)) => (gw_id, next_hop, DataFlags::IS_INTERNET),
-                            None => {
-                                // No route to a gateway — check direct peers as fallback
-                                let peers = state.transport.connected_peers();
-                                if peers.is_empty() {
-                                    debug!("no route and no peers; dropping packet");
-                                    continue;
+                    match state.routing.lock().await.lookup_mesh_ip(dest_ip) {
+                        Some((dst_id, next_hop)) => (dst_id, next_hop, DataFlags::empty()),
+                        None => {
+                            let gw_route = state.routing.lock().await.nearest_gateway_route();
+                            match gw_route {
+                                Some((gw_id, next_hop)) => (gw_id, next_hop, DataFlags::IS_INTERNET),
+                                None => {
+                                    let peers = state.transport.connected_peers();
+                                    if peers.is_empty() {
+                                        debug!("no route and no peers; dropping packet");
+                                        continue;
+                                    }
+                                    (peers[0], peers[0], DataFlags::IS_INTERNET)
                                 }
-                                (peers[0], peers[0], DataFlags::IS_INTERNET)
                             }
                         }
                     }
+                } else if ip_version == 6 {
+                    let gw_route = state.routing.lock().await.nearest_gateway_route();
+                    match gw_route {
+                        Some((gw_id, next_hop)) => (gw_id, next_hop, DataFlags::IS_INTERNET),
+                        None => {
+                            let peers = state.transport.connected_peers();
+                            if peers.is_empty() {
+                                debug!("no IPv6 gateway route and no peers; dropping packet");
+                                continue;
+                            }
+                            (peers[0], peers[0], DataFlags::IS_INTERNET)
+                        }
+                    }
+                } else {
+                    debug!(ip_version, "unsupported packet version from TUN; dropping");
+                    continue;
                 };
 
                 let session = state.sessions.read().await.get(&next_hop_id).cloned();
@@ -1904,6 +2132,7 @@ async fn run_event_loop(state: Arc<DaemonState>) -> Result<()> {
                             // writing to TUN (where the reply would race with
                             // run_gateway_return / run_event_loop readers).
                             let dst_local = state.gw_engine.is_some()
+                                && packet_ip_version(ip_packet_slice) == Some(4)
                                 && ip_packet_slice.len() >= 20
                                 && Ipv4Addr::new(
                                     ip_packet_slice[16], ip_packet_slice[17],
@@ -1926,20 +2155,41 @@ async fn run_event_loop(state: Arc<DaemonState>) -> Result<()> {
                                     }
                                 }
                             } else if mesh.flags.contains(DataFlags::IS_INTERNET) {
-                                match (&state.gw_engine, &state.internet_link) {
-                                    (Some(gw), Some(link)) => {
-                                        if let Err(e) = gw.translate_outbound(&mut ip_packet).await {
-                                            warn!("gateway outbound NAT failed: {e}");
+                                match packet_ip_version(ip_packet_slice) {
+                                    Some(4) => match (&state.gw_engine, &state.internet_link) {
+                                        (Some(gw), Some(link)) => {
+                                            if let Err(e) = gw.translate_outbound(&mut ip_packet).await {
+                                                warn!("gateway outbound NAT failed: {e}");
+                                                continue;
+                                            }
+                                            if let Err(e) = link.send_packet(&ip_packet).await {
+                                                warn!("gateway internet send failed: {e:#}");
+                                            }
+                                        }
+                                        _ => {
+                                            if let Err(e) = state.tun.write_packet(&ip_packet).await {
+                                                warn!("TUN write: {e}");
+                                            }
+                                        }
+                                    },
+                                    Some(6) => match (&state.gw_engine_v6, &state.internet_link) {
+                                        (Some(gw), Some(link)) => {
+                                            if let Err(e) = gw.translate_outbound(&mut ip_packet, mesh.src_id).await {
+                                                warn!("gateway outbound NAT66 failed: {e}");
+                                                continue;
+                                            }
+                                            if let Err(e) = link.send_packet(&ip_packet).await {
+                                                warn!("gateway IPv6 internet send failed: {e:#}");
+                                            }
+                                        }
+                                        _ => {
+                                            warn!("IPv6 internet packet received but IPv6 gateway support is unavailable");
                                             continue;
                                         }
-                                        if let Err(e) = link.send_packet(&ip_packet).await {
-                                            warn!("gateway internet send failed: {e:#}");
-                                        }
-                                    }
+                                    },
                                     _ => {
-                                        if let Err(e) = state.tun.write_packet(&ip_packet).await {
-                                            warn!("TUN write: {e}");
-                                        }
+                                        warn!("unsupported internet-bound packet version");
+                                        continue;
                                     }
                                 }
                             } else {
@@ -2160,6 +2410,12 @@ async fn run_event_loop(state: Arc<DaemonState>) -> Result<()> {
         if let Err(e) = state.tun.remove_default_route(gateway_ip) {
             warn!(%gateway_ip, "default route cleanup failed: {e}");
         }
+        if let Some((mesh_ipv6, prefix_len_v6)) = *state.mesh_ipv6.read().await {
+            let gateway_ipv6 = first_host_in_subnet_v6(mesh_ipv6, prefix_len_v6);
+            if let Err(e) = state.tun.remove_default_ipv6_route(gateway_ipv6) {
+                warn!(%gateway_ipv6, "IPv6 default route cleanup failed: {e}");
+            }
+        }
     }
 
     // Clean up
@@ -2179,9 +2435,11 @@ async fn run_gateway_return(state: Arc<DaemonState>) {
     let Some(link) = state.internet_link.as_ref().cloned() else {
         return;
     };
-    let Some(gw) = state.gw_engine.as_ref().cloned() else {
+    let gw = state.gw_engine.as_ref().cloned();
+    let gw_v6 = state.gw_engine_v6.as_ref().cloned();
+    if gw.is_none() && gw_v6.is_none() {
         return;
-    };
+    }
     let mut buf = vec![0u8; 65536];
 
     loop {
@@ -2192,19 +2450,41 @@ async fn run_gateway_return(state: Arc<DaemonState>) {
                     Err(e) => { error!("gateway internet recv: {e:#}"); break; }
                 };
                 let mut pkt = buf[..n].to_vec();
-                if pkt.len() < 20 {
+                let Some(version) = packet_ip_version(&pkt) else {
                     continue;
-                }
-
-                let dest_ip = match gw.translate_inbound(&mut pkt).await {
-                    Ok(dest_ip) => dest_ip,
-                    Err(_) => continue,
                 };
 
-                if let Some((dst_id, next_hop)) = state.routing.lock().await.lookup_mesh_ip(dest_ip) {
-                    let session = state.sessions.read().await.get(&next_hop).cloned();
-                    if let Some(session) = session {
-                        send_mesh_data(&state, &session, state.self_id, dst_id, 8, DataFlags::IS_INTERNET, &pkt).await;
+                if version == 4 {
+                    let Some(gw) = gw.as_ref() else {
+                        continue;
+                    };
+                    if pkt.len() < 20 {
+                        continue;
+                    }
+                    let dest_ip = match gw.translate_inbound(&mut pkt).await {
+                        Ok(dest_ip) => dest_ip,
+                        Err(_) => continue,
+                    };
+
+                    if let Some((dst_id, next_hop)) = state.routing.lock().await.lookup_mesh_ip(dest_ip) {
+                        let session = state.sessions.read().await.get(&next_hop).cloned();
+                        if let Some(session) = session {
+                            send_mesh_data(&state, &session, state.self_id, dst_id, 8, DataFlags::IS_INTERNET, &pkt).await;
+                        }
+                    }
+                } else if version == 6 {
+                    let Some(gw_v6) = gw_v6.as_ref() else {
+                        continue;
+                    };
+                    let dst_id = match gw_v6.translate_inbound(&mut pkt).await {
+                        Ok(dst_id) => dst_id,
+                        Err(_) => continue,
+                    };
+                    if let Some(next_hop) = state.routing.lock().await.lookup(dst_id) {
+                        let session = state.sessions.read().await.get(&next_hop).cloned();
+                        if let Some(session) = session {
+                            send_mesh_data(&state, &session, state.self_id, dst_id, 8, DataFlags::IS_INTERNET, &pkt).await;
+                        }
                     }
                 }
             }
@@ -2296,6 +2576,19 @@ fn parse_cidr(s: &str) -> Result<(Ipv4Addr, u8)> {
     Ok((ip, prefix))
 }
 
+fn parse_ipv6_cidr(s: &str) -> Result<(Ipv6Addr, u8)> {
+    let parts: Vec<&str> = s.split('/').collect();
+    if parts.len() != 2 {
+        bail!("invalid CIDR: {s}");
+    }
+    let ip: Ipv6Addr = parts[0].parse().context("invalid IPv6 in CIDR")?;
+    let prefix: u8 = parts[1].parse().context("invalid IPv6 prefix in CIDR")?;
+    if prefix > 128 {
+        bail!("invalid IPv6 prefix in CIDR");
+    }
+    Ok((ip, prefix))
+}
+
 fn first_host_in_subnet(network: Ipv4Addr, prefix_len: u8) -> Ipv4Addr {
     let n = u32::from(network);
     let mask: u32 = if prefix_len >= 32 {
@@ -2304,6 +2597,18 @@ fn first_host_in_subnet(network: Ipv4Addr, prefix_len: u8) -> Ipv4Addr {
         !((1u32 << (32 - prefix_len)) - 1)
     };
     Ipv4Addr::from((n & mask) | 1)
+}
+
+fn first_host_in_subnet_v6(network: Ipv6Addr, prefix_len: u8) -> Ipv6Addr {
+    let n = u128::from(network);
+    let mask: u128 = if prefix_len == 0 {
+        0
+    } else if prefix_len >= 128 {
+        u128::MAX
+    } else {
+        !((1u128 << (128 - prefix_len)) - 1)
+    };
+    Ipv6Addr::from((n & mask) | 1)
 }
 
 async fn install_signal_handler(cancel: CancellationToken) {
@@ -2806,11 +3111,22 @@ async fn main() -> Result<()> {
     } else {
         parse_cidr(&mesh_cidr)?
     };
+    let mesh_ipv6 = config
+        .interface
+        .mesh_ipv6
+        .as_deref()
+        .map(parse_ipv6_cidr)
+        .transpose()
+        .context("invalid interface.mesh_ipv6")?;
     let tun = Arc::new(
         TunInterface::create(&config.interface.name).context("failed to create TUN interface")?,
     );
     if !request_dynamic_ip {
         tun.set_ip(mesh_ip, prefix_len).context("set TUN IP")?;
+    }
+    if let Some((mesh_ipv6_addr, mesh_ipv6_prefix)) = mesh_ipv6 {
+        tun.set_ipv6(mesh_ipv6_addr, mesh_ipv6_prefix)
+            .context("set TUN IPv6")?;
     }
     tun.set_mtu(config.interface.mtu).context("set TUN MTU")?;
     tun.up().context("bring TUN up")?;
@@ -2838,6 +3154,20 @@ async fn main() -> Result<()> {
     } else {
         None
     };
+    let gateway_external_ipv6 = if is_gateway {
+        match lookup_interface_ipv6(&config.gateway.nat_interface) {
+            Ok(ip) => Some(ip),
+            Err(e) => {
+                warn!(
+                    iface = %config.gateway.nat_interface,
+                    "IPv6 gateway uplink unavailable: {e}"
+                );
+                None
+            }
+        }
+    } else {
+        None
+    };
 
     let gw_engine: Option<Arc<GatewayEngine>> = if is_gateway {
         let gw = Arc::new(GatewayEngine::new(
@@ -2849,6 +3179,20 @@ async fn main() -> Result<()> {
             warn!("iptables setup failed (may need root): {e}");
         }
         Some(gw)
+    } else {
+        None
+    };
+    let gw_engine_v6: Option<Arc<GatewayEngineV6>> = if is_gateway {
+        gateway_external_ipv6.map(|external_ip| {
+            let gw = Arc::new(GatewayEngineV6::new(
+                external_ip,
+                &config.gateway.nat_interface,
+            ));
+            if let Err(e) = gw.setup_masquerade() {
+                warn!("ip6tables setup failed (may need root): {e}");
+            }
+            gw
+        })
     } else {
         None
     };
@@ -2947,6 +3291,7 @@ async fn main() -> Result<()> {
         is_gateway,
         mesh_ip: AtomicU32::new(u32::from(mesh_ip)),
         mesh_prefix_len: AtomicU8::new(prefix_len),
+        mesh_ipv6: Arc::new(RwLock::new(mesh_ipv6)),
         request_dynamic_ip,
         own_x25519_pub,
         sessions: Arc::new(RwLock::new(HashMap::new())),
@@ -2957,6 +3302,7 @@ async fn main() -> Result<()> {
         transport,
         tun,
         gw_engine,
+        gw_engine_v6,
         internet_link,
         ip_pool,
         peer_last_hb: Arc::new(Mutex::new(HashMap::new())),
@@ -3059,7 +3405,9 @@ async fn main() -> Result<()> {
         .context("failed to construct Bluetooth PAN watcher")?;
         let c = cancel.clone();
         tokio::spawn(async move {
-            bt_svc.run(c).await.ok();
+            if let Err(err) = bt_svc.run(c).await {
+                tracing::error!("Bluetooth PAN watcher exited with error: {err}");
+            }
         });
         tokio::spawn(run_bluetooth_consumer(state.clone(), addr_rx));
     } else {

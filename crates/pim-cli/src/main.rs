@@ -8,7 +8,7 @@
 //!   pim config generate <roles...>          Generate a commented config template
 
 use std::collections::BTreeSet;
-use std::net::Ipv4Addr;
+use std::net::{Ipv4Addr, Ipv6Addr};
 use std::path::PathBuf;
 use std::process;
 use std::str::FromStr;
@@ -396,6 +396,11 @@ fn cmd_route_on(config_path: PathBuf) -> Result<()> {
     for cidr in split_default_cidrs() {
         replace_split_default_route(cidr, &route_info)?;
     }
+    if route_info.gateway_ipv6.is_some() {
+        for cidr in split_default_ipv6_cidrs() {
+            replace_split_default_route_v6(cidr, &route_info)?;
+        }
+    }
 
     println!(
         "pim routes enabled via {} dev {}",
@@ -413,6 +418,13 @@ fn cmd_route_off(config_path: PathBuf) -> Result<()> {
             removed += 1;
         }
     }
+    if route_info.gateway_ipv6.is_some() {
+        for cidr in split_default_ipv6_cidrs() {
+            if remove_split_default_route_v6(cidr, &route_info)? {
+                removed += 1;
+            }
+        }
+    }
 
     if removed == 0 {
         println!("pim routes already disabled");
@@ -424,11 +436,20 @@ fn cmd_route_off(config_path: PathBuf) -> Result<()> {
 
 fn cmd_route_status(config_path: PathBuf) -> Result<()> {
     let route_info = load_route_info(&config_path)?;
-    let active = split_default_cidrs()
+    let active_v4 = split_default_cidrs()
         .iter()
         .all(|cidr| split_default_route_present(cidr, &route_info).unwrap_or(false));
+    let active_v6 = route_info
+        .gateway_ipv6
+        .as_ref()
+        .map(|_| {
+            split_default_ipv6_cidrs()
+                .iter()
+                .all(|cidr| split_default_route_present_v6(cidr, &route_info).unwrap_or(false))
+        })
+        .unwrap_or(true);
 
-    if active {
+    if active_v4 && active_v6 {
         println!(
             "pim routes: enabled via {} dev {}",
             route_info.gateway_ip, route_info.iface
@@ -720,6 +741,7 @@ struct ConfigInfo {
 struct RouteInfo {
     iface: String,
     gateway_ip: Ipv4Addr,
+    gateway_ipv6: Option<Ipv6Addr>,
 }
 
 const STATS_PATH: &str = "/run/pim.stats";
@@ -770,8 +792,17 @@ fn load_route_info(config_path: &PathBuf) -> Result<RouteInfo> {
                 iface
             )
         })?;
+    let gateway_ipv6 = config
+        .interface
+        .mesh_ipv6
+        .as_deref()
+        .and_then(gateway_ipv6_from_config_mesh_ip);
 
-    Ok(RouteInfo { iface, gateway_ip })
+    Ok(RouteInfo {
+        iface,
+        gateway_ip,
+        gateway_ipv6,
+    })
 }
 
 fn ensure_pim_interface_present(iface: &str) -> Result<()> {
@@ -795,6 +826,13 @@ fn active_gateway_ip(iface: &str) -> Option<Ipv4Addr> {
 
 fn gateway_ip_from_config_mesh_ip(mesh_ip: &str) -> Option<Ipv4Addr> {
     parse_first_ipv4_cidr(mesh_ip).and_then(gateway_ip_from_cidr)
+}
+
+fn gateway_ipv6_from_config_mesh_ip(mesh_ip: &str) -> Option<Ipv6Addr> {
+    let (ip, prefix_len) = mesh_ip.split_once('/')?;
+    let ip: Ipv6Addr = ip.parse().ok()?;
+    let prefix_len: u8 = prefix_len.parse().ok()?;
+    first_host_in_subnet_v6(ip, prefix_len)
 }
 
 fn parse_first_ipv4_cidr(s: &str) -> Option<&str> {
@@ -826,8 +864,28 @@ fn first_host_in_subnet(ip: Ipv4Addr, prefix_len: u8) -> Option<Ipv4Addr> {
     Some(Ipv4Addr::from(network.saturating_add(1)))
 }
 
+fn first_host_in_subnet_v6(ip: Ipv6Addr, prefix_len: u8) -> Option<Ipv6Addr> {
+    if prefix_len > 128 {
+        return None;
+    }
+    let ip_u128 = u128::from(ip);
+    let mask = if prefix_len == 0 {
+        0
+    } else if prefix_len >= 128 {
+        u128::MAX
+    } else {
+        !((1u128 << (128 - prefix_len)) - 1)
+    };
+    let network = ip_u128 & mask;
+    Some(Ipv6Addr::from(network.saturating_add(1)))
+}
+
 fn split_default_cidrs() -> [&'static str; 2] {
     ["0.0.0.0/1", "128.0.0.0/1"]
+}
+
+fn split_default_ipv6_cidrs() -> [&'static str; 2] {
+    ["::/1", "8000::/1"]
 }
 
 #[cfg(target_os = "linux")]
@@ -886,6 +944,73 @@ fn replace_split_default_route(_cidr: &str, _route_info: &RouteInfo) -> Result<(
 }
 
 #[cfg(target_os = "linux")]
+fn replace_split_default_route_v6(cidr: &str, route_info: &RouteInfo) -> Result<()> {
+    let gateway_ipv6 = route_info
+        .gateway_ipv6
+        .with_context(|| format!("cannot determine IPv6 gateway for {}", route_info.iface))?;
+    let status = process::Command::new("ip")
+        .args([
+            "-6",
+            "route",
+            "replace",
+            cidr,
+            "via",
+            &gateway_ipv6.to_string(),
+            "dev",
+            &route_info.iface,
+            "onlink",
+        ])
+        .status()
+        .with_context(|| format!("failed to run ip -6 route replace for {cidr}"))?;
+    if !status.success() {
+        bail!(
+            "ip -6 route replace {cidr} via {} dev {} onlink failed",
+            gateway_ipv6,
+            route_info.iface
+        );
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
+fn replace_split_default_route_v6(cidr: &str, route_info: &RouteInfo) -> Result<()> {
+    let gateway_ipv6 = route_info
+        .gateway_ipv6
+        .with_context(|| format!("cannot determine IPv6 gateway for {}", route_info.iface))?;
+    let _ = process::Command::new("route")
+        .args([
+            "-n",
+            "delete",
+            "-inet6",
+            cidr,
+            "-interface",
+            &route_info.iface,
+        ])
+        .status();
+    let status = process::Command::new("route")
+        .args([
+            "-n",
+            "add",
+            "-inet6",
+            cidr,
+            &gateway_ipv6.to_string(),
+            "-interface",
+            &route_info.iface,
+        ])
+        .status()
+        .with_context(|| format!("failed to run route add -inet6 for {cidr}"))?;
+    if !status.success() {
+        bail!("route add -inet6 {cidr} via {} failed", gateway_ipv6);
+    }
+    Ok(())
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+fn replace_split_default_route_v6(_cidr: &str, _route_info: &RouteInfo) -> Result<()> {
+    bail!("split-default IPv6 route management is not supported on this platform")
+}
+
+#[cfg(target_os = "linux")]
 fn remove_split_default_route(cidr: &str, route_info: &RouteInfo) -> Result<bool> {
     let status = process::Command::new("ip")
         .args([
@@ -921,6 +1046,48 @@ fn remove_split_default_route(cidr: &str, route_info: &RouteInfo) -> Result<bool
 #[cfg(not(any(target_os = "linux", target_os = "macos")))]
 fn remove_split_default_route(_cidr: &str, _route_info: &RouteInfo) -> Result<bool> {
     bail!("split-default route management is not supported on this platform")
+}
+
+#[cfg(target_os = "linux")]
+fn remove_split_default_route_v6(cidr: &str, route_info: &RouteInfo) -> Result<bool> {
+    let Some(gateway_ipv6) = route_info.gateway_ipv6 else {
+        return Ok(false);
+    };
+    let status = process::Command::new("ip")
+        .args([
+            "-6",
+            "route",
+            "del",
+            cidr,
+            "via",
+            &gateway_ipv6.to_string(),
+            "dev",
+            &route_info.iface,
+        ])
+        .status()
+        .with_context(|| format!("failed to run ip -6 route del for {cidr}"))?;
+    Ok(status.success())
+}
+
+#[cfg(target_os = "macos")]
+fn remove_split_default_route_v6(cidr: &str, route_info: &RouteInfo) -> Result<bool> {
+    let status = process::Command::new("route")
+        .args([
+            "-n",
+            "delete",
+            "-inet6",
+            cidr,
+            "-interface",
+            &route_info.iface,
+        ])
+        .status()
+        .with_context(|| format!("failed to run route delete -inet6 for {cidr}"))?;
+    Ok(status.success())
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+fn remove_split_default_route_v6(_cidr: &str, _route_info: &RouteInfo) -> Result<bool> {
+    bail!("split-default IPv6 route management is not supported on this platform")
 }
 
 #[cfg(target_os = "linux")]
@@ -961,6 +1128,42 @@ fn split_default_route_present(_cidr: &str, _route_info: &RouteInfo) -> Result<b
 }
 
 #[cfg(target_os = "linux")]
+fn split_default_route_present_v6(cidr: &str, route_info: &RouteInfo) -> Result<bool> {
+    let Some(gateway_ipv6) = route_info.gateway_ipv6 else {
+        return Ok(false);
+    };
+    let routes = read_ip_route_table_v6()?;
+    let expected = format!("{cidr} via {gateway_ipv6} dev {}", route_info.iface);
+    Ok(routes.lines().any(|line| line.contains(&expected)))
+}
+
+#[cfg(target_os = "macos")]
+fn split_default_route_present_v6(cidr: &str, route_info: &RouteInfo) -> Result<bool> {
+    let probe = if cidr == "::/1" {
+        "2001:4860:4860::8888"
+    } else {
+        "8000::1"
+    };
+    let output = process::Command::new("route")
+        .args(["-n", "get", "-inet6", probe])
+        .output()
+        .with_context(|| format!("failed to run route get -inet6 for {probe}"))?;
+    if !output.status.success() {
+        return Ok(false);
+    }
+    let stdout = String::from_utf8(output.stdout).context("invalid UTF-8 from route get output")?;
+    Ok(stdout
+        .lines()
+        .filter_map(|line| line.split_once(':'))
+        .any(|(key, value)| key.trim() == "interface" && value.trim() == route_info.iface))
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+fn split_default_route_present_v6(_cidr: &str, _route_info: &RouteInfo) -> Result<bool> {
+    bail!("split-default IPv6 route management is not supported on this platform")
+}
+
+#[cfg(target_os = "linux")]
 fn read_ip_route_table() -> Result<String> {
     let output = process::Command::new("ip")
         .args(["route", "show"])
@@ -973,6 +1176,21 @@ fn read_ip_route_table() -> Result<String> {
         );
     }
     String::from_utf8(output.stdout).context("invalid UTF-8 from ip route show")
+}
+
+#[cfg(target_os = "linux")]
+fn read_ip_route_table_v6() -> Result<String> {
+    let output = process::Command::new("ip")
+        .args(["-6", "route", "show"])
+        .output()
+        .context("failed to run ip -6 route show")?;
+    if !output.status.success() {
+        bail!(
+            "ip -6 route show exited with status {:?}",
+            output.status.code()
+        );
+    }
+    String::from_utf8(output.stdout).context("invalid UTF-8 from ip -6 route show")
 }
 
 #[cfg(target_os = "linux")]
@@ -1069,6 +1287,11 @@ fn render_config_template(roles: &[NodeRole], override_name: Option<&str>) -> St
         "# Use a static CIDR for predictable labs or \"auto\" to request an address from a gateway.",
     );
     push_line(&mut out, &format!("mesh_ip = {:?}", mesh_ip));
+    push_line(
+        &mut out,
+        "# Optional static IPv6 ULA on the mesh TUN. Leave commented to run IPv4-only.",
+    );
+    push_line(&mut out, "# mesh_ipv6 = \"fd77::10/64\"");
     push_line(
         &mut out,
         "# Keep this aligned with the mesh MTU expected by other peers.",

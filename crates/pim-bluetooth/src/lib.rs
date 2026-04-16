@@ -451,8 +451,8 @@ impl BluetoothDiscovery {
             return Err(BluetoothError::CommandFailed {
                 command: "bt-network",
                 message: format!(
-                    "serve_nap enabled but configured bridge '{bridge}' was not found under {}",
-                    self.sysfs_root.display()
+                    "serve_nap enabled but configured nap_bridge '{bridge}' was not found under {}; create the bridge first or disable serve_nap",
+                    self.sysfs_root.display(),
                 ),
             });
         }
