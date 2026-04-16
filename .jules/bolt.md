@@ -27,3 +27,8 @@
 
 **Learning:** Discovery advertisement serialization/deserialization for encrypted format used standard `.encrypt` and `.decrypt` from the AEAD cipher, resulting in repeated allocation of `Vec<u8>`. For a system that handles heavy network I/O, these continuous runtime allocations can introduce bottlenecks.
 **Action:** Use `AeadInPlace::encrypt_in_place_detached` and `decrypt_in_place_detached` operating directly on stack buffers, preserving zero-copy operations across the codebase.
+
+## 2024-05-16 - Zero-copy transport framing
+
+**Learning:** Data and Transport frames were constantly taking ownership of byte buffers via `.to_vec()` instead of using zero-copy `bytes::Bytes`. This caused numerous heap allocations per forwarded packet on relay nodes, unnecessarily straining memory bandwidth.
+**Action:** Replace `Vec<u8>` payloads in protocol frame structs (`TransportFrame`, `MeshDataFrame`, `FragmentFrame`) with `bytes::Bytes` to allow zero-copy parsing and forwarding, drastically cutting allocations per packet.
