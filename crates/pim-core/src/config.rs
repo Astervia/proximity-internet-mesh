@@ -65,6 +65,9 @@ pub struct InterfaceConfig {
     /// Mesh IPv4 address or the string `\"auto\"` to request assignment automatically.
     #[serde(default = "default_mesh_ip")]
     pub mesh_ip: String,
+    /// Optional mesh IPv6 CIDR assigned to the local TUN interface.
+    #[serde(default)]
+    pub mesh_ipv6: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -428,6 +431,7 @@ impl Default for InterfaceConfig {
             name: default_interface_name(),
             mtu: default_mtu(),
             mesh_ip: default_mesh_ip(),
+            mesh_ipv6: None,
         }
     }
 }
@@ -593,6 +597,7 @@ data_dir = "/tmp/pim"
 name = "pim0"
 mtu = 1400
 mesh_ip = "auto"
+mesh_ipv6 = "fd77::10/64"
 
 [discovery]
 enabled = true
