@@ -59,9 +59,9 @@ use tracing::{debug, error, info, warn};
 use ed25519_dalek::VerifyingKey;
 use pim_bluetooth::BluetoothDiscovery;
 use pim_core::{
-    AuthorizationPolicy, Config, DebugDiscoveredPeerSnapshot, DebugGatewaySnapshot,
-    DebugNodeSnapshot, DebugPeerSnapshot, DebugRouteSnapshot, DebugSnapshot, DebugStatsSnapshot,
-    DiscoveryConfig, FrameCodec, NodeId, PeerEndpointConfig,
+    AuthorizationPolicy, BluetoothConfig, Config, DebugDiscoveredPeerSnapshot,
+    DebugGatewaySnapshot, DebugNodeSnapshot, DebugPeerSnapshot, DebugRouteSnapshot,
+    DebugSnapshot, DebugStatsSnapshot, DiscoveryConfig, FrameCodec, NodeId, PeerEndpointConfig,
 };
 use pim_crypto::{
     e2e_decrypt_in_place, e2e_encrypt, x25519_public_from_seed, HandshakeConfirm, HandshakeInit,
