@@ -19,14 +19,14 @@ The codebase is currently centered on a Linux daemon, a small CLI, and Docker-ba
 | Client runtime | Supported | Supported |
 | Relay runtime | Supported | Supported |
 | Gateway runtime and NAT | Supported | Supported |
-| Wi-Fi Direct backend | Supported | Not supported |
+| Wi-Fi Direct backend | Supported | Supported |
 | Bluetooth PAN backend | Supported | Supported |
 | `pim config generate client` | Supported | Supported |
 | `pim config generate relay` | Supported | Supported |
 | `pim config generate gateway` | Supported | Supported |
 | Docker integration labs | Supported | Not supported |
 
-On macOS, use a `utunN` interface such as `utun0` for the mesh TUN, set `gateway.nat_interface` to the internet-facing host interface such as `en0`, and keep Wi-Fi Direct disabled. The Bluetooth PAN path uses the host Bluetooth stack and currently expects `blueutil` for radio discovery and pairing automation.
+On macOS, use a `utunN` interface such as `utun0` for the mesh TUN and set `gateway.nat_interface` to the internet-facing host interface such as `en0`. The Wi-Fi Direct backend uses Bonjour peer-to-peer discovery on macOS rather than Linux `wpa_cli` group formation, so Linux-specific tuning fields in `[wifi_direct]` are ignored there.
 
 ## Repository Layout
 
@@ -86,7 +86,7 @@ pim config generate gateway
 pim config generate relay gateway
 ```
 
-On macOS, the generated gateway template uses `utun0` for the mesh TUN, `en0` as the default NAT uplink, leaves Wi-Fi Direct disabled, and enables Bluetooth PAN with the macOS host-stack flow.
+On macOS, the generated gateway template uses `utun0` for the mesh TUN and `en0` as the default NAT uplink. Wi-Fi Direct can be enabled there, but the backend uses Bonjour peer-to-peer discovery instead of Linux `wpa_supplicant` controls.
 
 Write directly to a file:
 
@@ -169,7 +169,7 @@ Then create `/etc/pim/pim.toml`. The easiest starting point is:
 sudo pim config generate client --output /etc/pim/pim.toml
 ```
 
-On macOS, keep the generated `utunN` interface name, set `gateway.nat_interface` to the real uplink if this node should be a gateway, leave Wi-Fi Direct disabled, and install `blueutil` if this node should use Bluetooth PAN radio discovery.
+On macOS, keep the generated `utunN` interface name, set `gateway.nat_interface` to the real uplink if this node should be a gateway, and install `blueutil` if this node should use Bluetooth PAN radio discovery. Wi-Fi Direct can also be enabled; macOS uses Bonjour peer-to-peer discovery for that path.
 
 You can also start from a minimal static client example:
 

@@ -6,8 +6,7 @@ interfaces for different peer connectivity mechanisms.
 Platform scope:
 
 - Linux supports TCP, LAN discovery, Wi-Fi Direct, and Bluetooth PAN client paths.
-- macOS supports the client dataplane and routing via `utunN`, plus TCP, LAN discovery, and Bluetooth PAN.
-- macOS does not currently support Wi-Fi Direct in PIM.
+- macOS supports the client dataplane and routing via `utunN`, plus TCP, LAN discovery, Bluetooth PAN, and Wi-Fi Direct.
 
 The key distinction is:
 
@@ -25,7 +24,7 @@ The client host should have:
 - a writable config file such as `/etc/pim/pim.toml`
 - at least one intended peer-connectivity path, such as LAN discovery, Wi-Fi Direct, Bluetooth PAN, or static peers
 
-On macOS, narrow that last item to LAN discovery, static TCP peers, and Bluetooth PAN. Keep Wi-Fi Direct disabled in the generated config.
+On macOS, Wi-Fi Direct uses Bonjour peer-to-peer discovery rather than Linux `wpa_cli` group formation. Keep that difference in mind when choosing and tuning `[wifi_direct]` settings.
 
 Generate a starter client config:
 
@@ -143,8 +142,6 @@ This can be combined with discovery, Wi-Fi Direct, and Bluetooth PAN.
 
 ## Wi-Fi Direct Client
 
-Linux only. This backend is not currently supported on macOS.
-
 Use Wi-Fi Direct when the client should discover peers through a Wi-Fi P2P
 radio link.
 
@@ -162,7 +159,9 @@ Confirm the interface is up:
 ip link show wlan0
 ```
 
-PIM uses the physical Wi-Fi interface in `[wifi_direct].interface`.
+On Linux, PIM uses the physical Wi-Fi interface in `[wifi_direct].interface`. On
+macOS, the OS owns the peer-to-peer Wi-Fi control path, so `[wifi_direct].interface`
+is accepted for config compatibility but ignored by the runtime backend.
 
 Example client config:
 
@@ -179,7 +178,9 @@ connect_method = "pbc"
 Operational notes:
 
 - the client configures the parent Wi-Fi interface, not a transient `p2p-*` group interface
-- `wpa_supplicant` with P2P support must already be running on that interface
+- Linux requires `wpa_supplicant` with P2P support already running on that interface
+- macOS advertises and discovers peers over Bonjour peer-to-peer Wi-Fi using the TCP `listen_port`
+- macOS ignores `go_intent`, `listen_channel`, `op_channel`, and `connect_method`
 - once a group forms, PIM uses the resulting IP path to open its normal TCP session
 
 Useful checks:
@@ -188,6 +189,9 @@ Useful checks:
 iw dev
 wpa_cli -i wlan0 p2p_find
 ```
+
+On macOS, the closest equivalent check is simply to enable `[wifi_direct]` and
+watch the daemon logs for Bonjour peer-to-peer registration and peer resolution.
 
 ## Bluetooth PAN Client
 
