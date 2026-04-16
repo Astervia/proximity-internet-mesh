@@ -2668,6 +2668,27 @@ fn bt_network_command() -> PathBuf {
     bt_network_command_from_env(std::env::var_os("PIM_BLUETOOTH_BT_NETWORK_COMMAND"))
 }
 
+#[cfg(any(test, target_os = "macos"))]
+fn macos_bluetooth_config_warnings(config: &BluetoothConfig) -> Vec<String> {
+    let mut warnings = Vec::new();
+
+    if config.serve_nap {
+        warnings.push(
+            "macOS ignores [bluetooth].serve_nap; daemon-managed NAP server mode is Linux-only"
+                .to_string(),
+        );
+    }
+
+    if !config.nap_bridge.trim().is_empty() && config.nap_bridge != "bridge0" {
+        warnings.push(format!(
+            "macOS ignores [bluetooth].nap_bridge = {:?}; NAP bridge management is Linux-only",
+            config.nap_bridge
+        ));
+    }
+
+    warnings
+}
+
 #[derive(Debug, Default)]
 struct ResolvedPeerTargets {
     startup_targets: Vec<ConnectTarget>,
@@ -3004,6 +3025,10 @@ async fn main() -> Result<()> {
                 "{}{}",
                 bluetooth_config.device_name_prefix, config.node.name
             );
+        }
+        #[cfg(target_os = "macos")]
+        for message in macos_bluetooth_config_warnings(&bluetooth_config) {
+            warn!("{message}");
         }
         let bluetooth_sysfs_root = bluetooth_sysfs_root();
         let bluetooth_ip_command = bluetooth_ip_command();
@@ -3880,6 +3905,30 @@ en0: flags=8863<UP,BROADCAST,RUNNING,SIMPLEX,MULTICAST> mtu 1500\n\
             bt_network_command_from_env(Some("/tmp/fake-bt-network".into())),
             PathBuf::from("/tmp/fake-bt-network")
         );
+    }
+
+    #[test]
+    fn macos_bluetooth_config_warning_omits_linux_only_fields_when_unused() {
+        let warnings = macos_bluetooth_config_warnings(
+            &Config::from_toml_str(
+                "[node]\nname=\"t\"\n[bluetooth]\nenabled=true\nnap_bridge=\"bridge0\"\n",
+            )
+            .unwrap()
+            .bluetooth,
+        );
+        assert!(warnings.is_empty());
+    }
+
+    #[test]
+    fn macos_bluetooth_config_warning_reports_linux_only_fields() {
+        let warnings = macos_bluetooth_config_warnings(&Config::from_toml_str(
+            "[node]\nname=\"t\"\n[bluetooth]\nenabled=true\nserve_nap=true\nnap_bridge=\"br-bt\"\n",
+        )
+        .unwrap()
+        .bluetooth);
+        assert_eq!(warnings.len(), 2);
+        assert!(warnings[0].contains("serve_nap"));
+        assert!(warnings[1].contains("nap_bridge"));
     }
 
     /// On receiving a Goodbye, the peer must be removed from the heartbeat map immediately.
