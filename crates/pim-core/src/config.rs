@@ -879,6 +879,9 @@ connect_method = "pin:12345670"
     fn bluetooth_defaults_to_disabled() {
         let config = Config::from_toml_str(MINIMAL_CONFIG).unwrap();
         assert!(!config.bluetooth.enabled);
+        #[cfg(target_os = "macos")]
+        assert_eq!(config.bluetooth.interface, "bridge0");
+        #[cfg(not(target_os = "macos"))]
         assert_eq!(config.bluetooth.interface, "auto");
         assert!(config.bluetooth.radio_discovery_enabled);
         assert_eq!(config.bluetooth.device_name_prefix, "PIM-");
