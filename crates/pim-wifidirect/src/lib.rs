@@ -292,6 +292,7 @@ impl WifiDirectDiscovery {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashSet;
 
     #[test]
     fn discovery_new_returns_receiver() {
