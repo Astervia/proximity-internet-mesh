@@ -1,10 +1,14 @@
 # Wi-Fi Direct Transport
 
-Wi-Fi Direct (IEEE 802.11 P2P) allows two Linux devices to form a direct wireless
-link without any access point or LAN infrastructure. PIM uses it as an optional
-**peer-finding** layer — once a P2P group is established and both sides have IP
-addresses, the existing `TcpTransport` handles all framing, handshake, and sessions
-unchanged.
+PIM uses Wi-Fi Direct as an optional **peer-finding** layer. The transport and
+session logic remain the normal TCP path after discovery succeeds.
+
+Platform backends:
+
+- Linux uses `wpa_supplicant` P2P control via `wpa_cli`, forms a P2P group, and
+  resolves the resulting peer IP from the group interface.
+- macOS uses Bonjour DNS-SD on Apple's peer-to-peer Wi-Fi interface to advertise
+  and discover the daemon's TCP listen port directly.
 
 ## Overview
 
@@ -26,7 +30,7 @@ unchanged.
           │◀─── AES-256-GCM session ───────────┤
 ```
 
-After group formation the path is identical to a standard LAN connection.
+After discovery, the path is identical to a standard LAN connection.
 
 ## Linux Prerequisites
 
@@ -43,6 +47,12 @@ wpa_cli -i wlan0 p2p_find   → should print "OK"
 
 If this fails, PIM logs a warning and skips Wi-Fi Direct entirely.
 
+## macOS Prerequisites
+
+- no `wpa_cli` or `wpa_supplicant` setup is required
+- the host must permit Bonjour peer-to-peer Wi-Fi service advertisement and browsing
+- the daemon's TCP `listen_port` must be reachable once a peer is discovered
+
 ## Configuration
 
 ```toml
@@ -58,7 +68,11 @@ connect_method  = "pbc"   # "pbc" (push-button) or "pin:<8-digit>"
 The `listen_port` used for the TCP connection is taken from `[transport] listen_port`
 (default `9100`), not from this section.
 
-## Group Roles and IP Addresses
+On macOS, only `enabled` is acted on directly. The Linux-specific tuning fields
+remain in the shared config schema for compatibility but are ignored by the
+Bonjour backend.
+
+## Linux Group Roles and IP Addresses
 
 wpa_supplicant negotiates which device becomes the **Group Owner (GO)** and which
 becomes the **Group Client (GC)** using the `go_intent` value. The GO acts as a
@@ -71,10 +85,16 @@ soft AP and runs a built-in DHCP server:
 
 PIM detects its role by comparing its own interface IP to `192.168.49.1`.
 
+macOS does not expose that Linux P2P group model. The backend resolves peer
+socket addresses directly from Bonjour service discovery, so there is no GO/GC
+role handling in the daemon on macOS.
+
 ## WifiDirectDiscovery Service
 
 `WifiDirectDiscovery` runs as a background Tokio task started by the daemon when
-`wifi_direct.enabled = true`:
+`wifi_direct.enabled = true`.
+
+Linux flow:
 
 ```
                  WifiDirectDiscovery (background task)
@@ -114,6 +134,25 @@ After issuing `p2p_connect`, `WifiDirectDiscovery` polls `list_interfaces` every
 500 ms for up to 15 s, looking for a new `p2p-*` interface. If none appears, the
 attempt is logged as an error and the MAC is not re-tried in the current run (it
 stays in `seen_macs`).
+
+macOS flow:
+
+```
+                 WifiDirectDiscovery (background task)
+                 ─────────────────────────────────────
+                 ┌─────────────────────────────────┐
+startup      ──▶ │  register _pimmesh._tcp        │
+browse loop  ──▶ │  browse peer-to-peer services  │
+                │  → for each new service:         │
+                │      resolve host + port         │
+                │      → peer_tx.send(SocketAddr)  │
+                └─────────────────────────────────┘
+                          │
+                          ▼
+                 run_wifidirect_consumer
+```
+
+macOS deduplicates by Bonjour service identity (`name@domain`) instead of peer MAC.
 
 ## Coexistence with LAN Discovery
 
@@ -195,6 +234,8 @@ When the daemon exits, P2P group interfaces are not explicitly removed.
 `wpa_supplicant` should clean them up on process restart, but a crashed daemon
 may leave a stale `p2p-*` interface. Run `wpa_cli -i wlan0 p2p_group_remove p2p-wlan0-0`
 to clean up manually.
+
+This Linux-only limitation does not apply to the macOS Bonjour backend.
 
 ### Seen-MAC Expiry Not Implemented
 

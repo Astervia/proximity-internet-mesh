@@ -9,11 +9,11 @@ This project supports client, relay, and gateway nodes on Linux and macOS. The g
 | Client node | Supported | Supported |
 | Relay node | Supported | Supported |
 | Gateway node | Supported | Supported |
-| Wi-Fi Direct | Supported | Not supported |
+| Wi-Fi Direct | Supported | Supported |
 | Bluetooth PAN | Supported | Supported |
 | Docker lab flows | Supported | Not supported |
 
-On macOS, plan on a `utunN` interface name for the mesh TUN, use a real uplink such as `en0` for `gateway.nat_interface`, and do not expect Wi-Fi Direct, Bluetooth PAN, or Docker lab workflows to work there.
+On macOS, plan on a `utunN` interface name for the mesh TUN and use a real uplink such as `en0` for `gateway.nat_interface`. Wi-Fi Direct uses Bonjour peer-to-peer discovery on macOS, Bluetooth PAN uses the host stack, and the Docker lab workflows still remain Linux-only.
 
 ## Requirements
 
@@ -112,7 +112,7 @@ If you prefer not to install globally, you can run the binaries directly from `t
 
 ## Prepare A Config File
 
-Create `/etc/pim/pim.toml`. On macOS, use a `utunN` interface name such as `utun0`, set `[gateway].nat_interface` to the real uplink such as `en0`, leave Wi-Fi Direct disabled, and install `blueutil` if you want Bluetooth PAN radio discovery and pairing automation. Start from the examples in [configuration.md](configuration.md).
+Create `/etc/pim/pim.toml`. On macOS, use a `utunN` interface name such as `utun0`, set `[gateway].nat_interface` to the real uplink such as `en0`, and install `blueutil` if you want Bluetooth PAN radio discovery and pairing automation. Wi-Fi Direct can also be enabled there; the backend uses Bonjour peer-to-peer discovery rather than Linux `wpa_cli` controls. Start from the examples in [configuration.md](configuration.md).
 
 ## Verify The CLI
 
