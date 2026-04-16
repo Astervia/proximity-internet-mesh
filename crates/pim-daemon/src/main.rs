@@ -3011,6 +3011,9 @@ async fn main() -> Result<()> {
         let bt_network_command = bt_network_command();
         info!(
             interface = %bluetooth_config.interface,
+            connect_pan = bluetooth_config.connect_pan,
+            serve_nap = bluetooth_config.serve_nap,
+            nap_bridge = %bluetooth_config.nap_bridge,
             static_peers = configured_targets.bluetooth_static_targets.len(),
             sysfs_root = %bluetooth_sysfs_root.display(),
             ip_command = %bluetooth_ip_command.display(),
@@ -3782,6 +3785,8 @@ en0: flags=8863<UP,BROADCAST,RUNNING,SIMPLEX,MULTICAST> mtu 1500\n\
         let config = Config::from_toml_str(toml).unwrap();
         assert!(config.bluetooth.enabled);
         assert_eq!(config.bluetooth.interface, "bnep1");
+        assert!(config.bluetooth.connect_pan);
+        assert!(!config.bluetooth.serve_nap);
         assert_eq!(config.peers.len(), 1);
         assert_eq!(config.transport.listen_port, 9100);
     }

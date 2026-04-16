@@ -34,10 +34,13 @@ listen_port = 9100
 
 [bluetooth]
 enabled = true
-interface = "bnep0"
+interface = "auto"         # runtime hint on Linux; use "bridge0" on macOS
 radio_discovery_enabled = true
 device_name_prefix = "PIM-"
 local_alias = "PIM-my-node"  # optional; defaults from node.name
+connect_pan = true
+serve_nap = false
+nap_bridge = "br-bt"
 auto_discover_peers = true
 poll_interval_ms = 2000
 scan_interval_ms = 5000
@@ -47,10 +50,18 @@ discoverable_timeout_s = 180
 startup_timeout_ms = 15000
 ```
 
-When `radio_discovery_enabled = true`, the daemon scans for nearby devices
-whose names match `device_name_prefix`. Linux uses `bluetoothctl` followed by
-`bt-network -c <mac> nap`. macOS uses `blueutil` for inquiry, pairing, and
-connection against the host Bluetooth stack.
+`interface` is now a preferred hint on Linux rather than a fixed requirement.
+When set to `"auto"`, the daemon prefers a ready configured interface if one
+exists, then falls back to live `bnep*` or `enx*` PAN interfaces.
+
+When `connect_pan = true` and `radio_discovery_enabled = true`, the daemon
+scans for nearby devices whose names match `device_name_prefix`. Linux uses
+`bluetoothctl` followed by `bt-network -c <mac> nap`. macOS uses `blueutil`
+for inquiry, pairing, and connection against the host Bluetooth stack.
+
+When `serve_nap = true` on Linux, the daemon supervises `bt-network -s nap
+<nap_bridge>` so a gateway can expose a local NAP service without a separate
+operator-managed helper process.
 
 When `auto_discover_peers = true`, the daemon also polls the host neighbor
 table and converts discovered PAN neighbor IPs into `SocketAddr`s using
@@ -71,8 +82,9 @@ BluetoothDiscovery::run
         ├─ Linux: bluetoothctl scan on
         ├─ Linux/macOS: device discovery → filter names by prefix
         ├─ Linux/macOS: pair/connect <mac>
-        ├─ Linux: bt-network -c <mac> nap
-        ├─ Linux: waits for /sys/class/net/<interface>/operstate
+        ├─ Linux: optionally starts bt-network -s nap <bridge>
+        ├─ Linux: bt-network -c <mac> nap when connect_pan = true
+        ├─ Linux: resolves a ready PAN interface from configured / bnep* / enx*
         ├─ macOS: waits for ifconfig <interface> to become active
         ├─ Linux: runs ip neigh show dev <interface>
         ├─ macOS: runs arp -an -i <interface>
@@ -125,7 +137,7 @@ connection attempts still collapse onto the existing session and reconnect logic
 - Real-world success still depends on the host BlueZ stack and a PAN/NAP-capable peer.
 - Automatic discovery depends on the platform neighbor table for the PAN interface.
 - Docker can test the orchestration seams, but not real RF discovery or PAN behavior.
-- The readiness check is platform-specific: Linux uses `/sys/class/net/<interface>/operstate`, while macOS uses `ifconfig <interface>`.
+- The readiness check is platform-specific: Linux resolves a ready interface from `/sys/class/net`, while macOS uses `ifconfig <interface>`.
 
 ## Related Documents
 

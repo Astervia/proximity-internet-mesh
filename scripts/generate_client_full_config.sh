@@ -14,7 +14,7 @@ Options:
       --name NAME              Node name to use
       --mesh-ip CIDR|auto      Mesh IP/CIDR for the client (default: auto)
       --wifi-interface IFACE   Wi-Fi Direct parent interface
-      --bt-interface IFACE     Bluetooth PAN interface (default fallback: bnep0)
+      --bt-interface IFACE     Preferred Bluetooth PAN interface (default: auto)
       --listen-port PORT       Transport listen port (default: 9100)
       --discovery-port PORT    UDP discovery port (default: 9101)
       --data-dir PATH          Data dir (default: /var/lib/pim)
@@ -95,7 +95,7 @@ detect_bluetooth_interface() {
         fi
     fi
 
-    printf '%s\n' "bnep0"
+    printf '%s\n' "auto"
 }
 
 shell_quote_comment() {
@@ -249,6 +249,9 @@ interface = "${bt_interface}"
 radio_discovery_enabled = true
 device_name_prefix = "PIM-"
 local_alias = "PIM-${node_name}"
+connect_pan = true
+serve_nap = false
+nap_bridge = "br-bt"
 auto_discover_peers = true
 poll_interval_ms = 2000
 scan_interval_ms = 5000

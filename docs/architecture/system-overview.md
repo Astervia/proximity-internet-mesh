@@ -238,7 +238,7 @@ enabled = false
 
 [bluetooth]
 enabled = false
-interface = "bnep0"
+interface = "auto"
 
 [routing]
 max_hops = 10

@@ -39,6 +39,7 @@ docker/
     client2.toml                 — second client
   compose/
     bluetooth-seam.yml          — single-node Bluetooth fake-sysfs seam test
+    bluetooth-seam-enx.yml      — single-node Bluetooth dynamic-enx fallback seam
     phase1-single-hop.yml        — gateway + client
     phase2-relay.yml             — gateway + relay + client
     phase2-routing.yml           — gateway + relay1 + relay2 + client
@@ -48,6 +49,7 @@ docker/
     phase5-multigateway.yml      — gateway1 + gateway2 + relay + client
   tests/
     test-bluetooth.sh           — Bluetooth seam test runner
+    test-bluetooth-enx.sh       — Bluetooth dynamic-enx seam test runner
     test-debug-cli.sh           — debug CLI output runner
     test-route-cli.sh           — split-default route CLI runner
     common.sh                    — shared assertion and lifecycle helpers
@@ -155,8 +157,8 @@ prefer a smaller container scenario when the behavior under test is:
 - fixture-driven readiness checks
 - log or status-level handoff into the main daemon path
 
-The Bluetooth test follows this pattern. It starts one daemon container, mounts
-`docker/configs/bluetooth-seam.toml`, sets fake command paths for:
+The Bluetooth seam tests follow this pattern. They start one daemon container,
+mount a Bluetooth seam config, and set fake command paths for:
 
 - `PIM_BLUETOOTH_BLUETOOTHCTL_COMMAND`
 - `PIM_BLUETOOTH_BT_NETWORK_COMMAND`
@@ -165,11 +167,14 @@ The Bluetooth test follows this pattern. It starts one daemon container, mounts
 
 The fake `bluetoothctl` script reports a nearby `PIM-` device, the fake
 `bt-network` script marks the PAN interface as ready, and the fake `ip neigh`
-script returns the resulting peer IP. The test then asserts that the daemon:
+script returns the resulting peer IP. The baseline seam keeps the PAN on
+`bnep0`; the second seam leaves the configured `bnep0` unresolved and exposes a
+live `enx*` interface instead. Together they assert that the daemon:
 
 - radio-discovers and prepares a new Bluetooth peer
 - auto-discovers the PAN neighbor IP
 - hands the resulting address into the normal connection path
+- falls back from a configured `bnep0` hint to a live `enx*` interface on Linux
 
 ## Debug CLI Test Lane
 
