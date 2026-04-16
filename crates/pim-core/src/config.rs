@@ -367,7 +367,15 @@ fn default_wfd_connect_method() -> String {
 }
 
 fn default_bluetooth_interface() -> String {
-    "auto".into()
+    #[cfg(target_os = "macos")]
+    {
+        return "bridge0".into();
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        "auto".into()
+    }
 }
 
 fn default_bluetooth_radio_discovery_enabled() -> bool {

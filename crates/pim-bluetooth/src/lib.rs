@@ -527,18 +527,20 @@ impl BluetoothDiscovery {
     async fn resolve_pan_interface_impl(
         &self,
     ) -> Result<Option<ResolvedPanInterface>, BluetoothError> {
-        let output = Command::new("ifconfig")
-            .arg(&self.config.interface)
-            .output()
-            .await?;
+        let interface = resolve_macos_pan_interface_hint(&self.config.interface);
+        let output = Command::new("ifconfig").arg(interface).output().await?;
         if !output.status.success() {
             return Ok(None);
         }
         Ok(
             is_ready_ifconfig_output(&String::from_utf8_lossy(&output.stdout)).then(|| {
                 ResolvedPanInterface {
-                    name: self.config.interface.clone(),
-                    source: "configured",
+                    name: interface.to_string(),
+                    source: if self.config.interface.trim() == "auto" {
+                        "auto-default"
+                    } else {
+                        "configured"
+                    },
                 }
             }),
         )
@@ -720,6 +722,14 @@ fn is_ready_ifconfig_output(output: &str) -> bool {
     !output.is_empty() && !output.contains("status: inactive")
 }
 
+#[cfg(any(test, target_os = "macos"))]
+fn resolve_macos_pan_interface_hint(interface: &str) -> &str {
+    match interface.trim() {
+        "" | "auto" => "bridge0",
+        explicit => explicit,
+    }
+}
+
 #[cfg(any(test, target_os = "linux"))]
 fn parse_neighbor_output(output: &str, listen_port: u16) -> Vec<SocketAddr> {
     let mut addrs = Vec::new();
@@ -892,6 +902,13 @@ bridge0: flags=41<UP,RUNNING> mtu 1500\n\
         assert!(is_ready_ifconfig_output(active));
         assert!(is_ready_ifconfig_output(no_status));
         assert!(!is_ready_ifconfig_output(inactive));
+    }
+
+    #[test]
+    fn macos_auto_interface_hint_defaults_to_bridge0() {
+        assert_eq!(resolve_macos_pan_interface_hint("auto"), "bridge0");
+        assert_eq!(resolve_macos_pan_interface_hint(""), "bridge0");
+        assert_eq!(resolve_macos_pan_interface_hint("bridge1"), "bridge1");
     }
 
     #[test]
