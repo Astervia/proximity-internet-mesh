@@ -19,7 +19,7 @@ struct ReassemblyBuffer {
     total_length: u16,
     /// Received chunks keyed by their starting byte offset within the original
     /// packet.  Stored in a `BTreeMap` so we can iterate offsets in order.
-    chunks: BTreeMap<u16, Vec<u8>>,
+    chunks: BTreeMap<u16, bytes::Bytes>,
     /// Monotonic timestamp of the first fragment received.
     created_at: Instant,
 }
@@ -34,7 +34,7 @@ impl ReassemblyBuffer {
     }
 
     /// Insert a chunk.  Returns `true` if this chunk was new (not a duplicate).
-    fn insert(&mut self, offset: u16, payload: Vec<u8>) -> bool {
+    fn insert(&mut self, offset: u16, payload: bytes::Bytes) -> bool {
         use std::collections::btree_map::Entry;
         match self.chunks.entry(offset) {
             Entry::Vacant(e) => {

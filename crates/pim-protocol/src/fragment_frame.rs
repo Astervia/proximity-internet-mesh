@@ -29,7 +29,7 @@ pub struct FragmentFrame {
     /// Total byte length of the original (unfragmented) packet.
     pub total_length: u16,
     /// Fragment payload.
-    pub payload: Vec<u8>,
+    pub payload: bytes::Bytes,
 }
 
 impl FragmentFrame {
@@ -52,7 +52,7 @@ impl FragmentFrame {
         let fragment_id = u32::from_be_bytes(buf[0..4].try_into().ok()?);
         let fragment_offset = u16::from_be_bytes(buf[4..6].try_into().ok()?);
         let total_length = u16::from_be_bytes(buf[6..8].try_into().ok()?);
-        let payload = buf[8..].to_vec();
+        let payload = bytes::Bytes::copy_from_slice(&buf[8..]);
 
         // Basic sanity checks.
         let end = (fragment_offset as usize).checked_add(payload.len())?;
@@ -94,7 +94,7 @@ pub fn fragment_packet(data: &[u8], fragment_id: u32) -> Vec<FragmentFrame> {
             fragment_id,
             fragment_offset: offset as u16,
             total_length,
-            payload: data[offset..end].to_vec(),
+            payload: bytes::Bytes::copy_from_slice(&data[offset..end]),
         });
         offset = end;
     }
@@ -145,7 +145,7 @@ mod tests {
             fragment_id: 0xDEAD_BEEF,
             fragment_offset: 1200,
             total_length: 2400,
-            payload: vec![1, 2, 3, 4],
+            payload: bytes::Bytes::from(vec![1, 2, 3, 4]),
         };
         let bytes = frame.serialize();
         let decoded = FragmentFrame::deserialize(&bytes).unwrap();
@@ -164,7 +164,7 @@ mod tests {
             fragment_id: 1,
             fragment_offset: 1000,
             total_length: 500, // total < offset
-            payload: vec![0u8; 100],
+            payload: bytes::Bytes::from(vec![0u8; 100]),
         };
         // Serialize then hand-patch so deserializer sees inconsistent values.
         let bytes = bad.serialize();

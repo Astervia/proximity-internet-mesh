@@ -2235,7 +2235,7 @@ async fn run_event_loop(state: Arc<DaemonState>) -> Result<()> {
                     continue;
                 };
 
-                let payload: Vec<u8>;
+                let payload: bytes::Bytes;
 
                 // E2E-encrypt if we have the destination gateway's X25519 public key
                 // and this packet is internet-bound. Must use the key of the *selected*
@@ -2246,18 +2246,18 @@ async fn run_event_loop(state: Arc<DaemonState>) -> Result<()> {
                         match e2e_encrypt(packet, &gw_pub) {
                             Ok(enc) => {
                                 flags |= DataFlags::IS_E2E;
-                                payload = enc;
+                                payload = bytes::Bytes::from(enc);
                             }
                             Err(e) => {
                                 warn!("E2E encrypt failed: {e}");
-                                payload = packet.to_vec();
+                                payload = bytes::Bytes::copy_from_slice(packet);
                             }
                         }
                     } else {
-                        payload = packet.to_vec();
+                        payload = bytes::Bytes::copy_from_slice(packet);
                     }
                 } else {
-                    payload = packet.to_vec();
+                    payload = bytes::Bytes::copy_from_slice(packet);
                 }
 
                 debug!(%dst_id, %next_hop_id, ?flags, bytes = payload.len(), "dispatching TUN packet to mesh");
