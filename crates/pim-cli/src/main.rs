@@ -945,36 +945,22 @@ fn replace_split_default_route(_cidr: &str, _route_info: &RouteInfo) -> Result<(
 
 #[cfg(target_os = "linux")]
 fn replace_split_default_route_v6(cidr: &str, route_info: &RouteInfo) -> Result<()> {
-    let gateway_ipv6 = route_info
+    let _gateway_ipv6 = route_info
         .gateway_ipv6
         .with_context(|| format!("cannot determine IPv6 gateway for {}", route_info.iface))?;
     let status = process::Command::new("ip")
-        .args([
-            "-6",
-            "route",
-            "replace",
-            cidr,
-            "via",
-            &gateway_ipv6.to_string(),
-            "dev",
-            &route_info.iface,
-            "onlink",
-        ])
+        .args(["-6", "route", "replace", cidr, "dev", &route_info.iface])
         .status()
         .with_context(|| format!("failed to run ip -6 route replace for {cidr}"))?;
     if !status.success() {
-        bail!(
-            "ip -6 route replace {cidr} via {} dev {} onlink failed",
-            gateway_ipv6,
-            route_info.iface
-        );
+        bail!("ip -6 route replace {cidr} dev {} failed", route_info.iface);
     }
     Ok(())
 }
 
 #[cfg(target_os = "macos")]
 fn replace_split_default_route_v6(cidr: &str, route_info: &RouteInfo) -> Result<()> {
-    let gateway_ipv6 = route_info
+    let _gateway_ipv6 = route_info
         .gateway_ipv6
         .with_context(|| format!("cannot determine IPv6 gateway for {}", route_info.iface))?;
     let _ = process::Command::new("route")
@@ -988,19 +974,11 @@ fn replace_split_default_route_v6(cidr: &str, route_info: &RouteInfo) -> Result<
         ])
         .status();
     let status = process::Command::new("route")
-        .args([
-            "-n",
-            "add",
-            "-inet6",
-            cidr,
-            &gateway_ipv6.to_string(),
-            "-interface",
-            &route_info.iface,
-        ])
+        .args(["-n", "add", "-inet6", cidr, "-interface", &route_info.iface])
         .status()
         .with_context(|| format!("failed to run route add -inet6 for {cidr}"))?;
     if !status.success() {
-        bail!("route add -inet6 {cidr} via {} failed", gateway_ipv6);
+        bail!("route add -inet6 {cidr} failed");
     }
     Ok(())
 }
@@ -1050,20 +1028,11 @@ fn remove_split_default_route(_cidr: &str, _route_info: &RouteInfo) -> Result<bo
 
 #[cfg(target_os = "linux")]
 fn remove_split_default_route_v6(cidr: &str, route_info: &RouteInfo) -> Result<bool> {
-    let Some(gateway_ipv6) = route_info.gateway_ipv6 else {
+    let Some(_gateway_ipv6) = route_info.gateway_ipv6 else {
         return Ok(false);
     };
     let status = process::Command::new("ip")
-        .args([
-            "-6",
-            "route",
-            "del",
-            cidr,
-            "via",
-            &gateway_ipv6.to_string(),
-            "dev",
-            &route_info.iface,
-        ])
+        .args(["-6", "route", "del", cidr, "dev", &route_info.iface])
         .status()
         .with_context(|| format!("failed to run ip -6 route del for {cidr}"))?;
     Ok(status.success())
@@ -1129,11 +1098,11 @@ fn split_default_route_present(_cidr: &str, _route_info: &RouteInfo) -> Result<b
 
 #[cfg(target_os = "linux")]
 fn split_default_route_present_v6(cidr: &str, route_info: &RouteInfo) -> Result<bool> {
-    let Some(gateway_ipv6) = route_info.gateway_ipv6 else {
+    let Some(_gateway_ipv6) = route_info.gateway_ipv6 else {
         return Ok(false);
     };
     let routes = read_ip_route_table_v6()?;
-    let expected = format!("{cidr} via {gateway_ipv6} dev {}", route_info.iface);
+    let expected = format!("{cidr} dev {}", route_info.iface);
     Ok(routes.lines().any(|line| line.contains(&expected)))
 }
 
