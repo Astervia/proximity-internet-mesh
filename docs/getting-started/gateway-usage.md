@@ -24,7 +24,7 @@ Generate a starter gateway config:
 pim config generate gateway --output /etc/pim/pim.toml
 ```
 
-On macOS, use a `utunN` name such as `utun0` for `[interface].name`, choose a real uplink such as `en0` for `[gateway].nat_interface`, leave Wi-Fi Direct disabled, and install `blueutil` if this gateway should use Bluetooth PAN radio discovery.
+On macOS, use a `utunN` name such as `utun0` for `[interface].name`, choose a real uplink such as `en0` for `[gateway].nat_interface`, and install `blueutil` if this gateway should use Bluetooth PAN radio discovery. Wi-Fi Direct can also be enabled there; macOS uses Bonjour peer-to-peer discovery instead of Linux `wpa_supplicant` controls.
 
 ## Discover the Internet-Facing Interface
 
@@ -164,8 +164,6 @@ Notes:
 
 ## Wi-Fi Direct Gateway
 
-Linux only.
-
 Use Wi-Fi Direct when the gateway should form P2P Wi-Fi groups and let peers
 connect through the resulting link.
 
@@ -183,7 +181,9 @@ Confirm the interface is up:
 ip link show wlan0
 ```
 
-PIM uses the physical Wi-Fi interface in `[wifi_direct].interface`.
+On Linux, PIM uses the physical Wi-Fi interface in `[wifi_direct].interface`. On
+macOS, the OS owns the peer-to-peer Wi-Fi control path, so `[wifi_direct].interface`
+is accepted for config compatibility but ignored by the runtime backend.
 
 Example gateway config:
 
@@ -204,9 +204,11 @@ connect_method = "pbc"
 Operational notes:
 
 - `gateway.nat_interface` is still the real internet uplink, often `eth0` or `wlan0`
-- `[wifi_direct].interface` is the radio used for P2P group formation
+- Linux uses `[wifi_direct].interface` as the radio for P2P group formation
+- macOS advertises and discovers the gateway over Bonjour peer-to-peer Wi-Fi using the TCP `listen_port`
+- macOS ignores `go_intent`, `listen_channel`, `op_channel`, and `connect_method`
 - these may be the same physical uplink on some systems, but do not assume that
-- `wpa_supplicant` with P2P support must already be running on that interface
+- Linux requires `wpa_supplicant` with P2P support already running on that interface
 
 Useful checks:
 
@@ -219,6 +221,9 @@ If a P2P group is formed, Linux often creates an additional interface such as
 `p2p-wlan0-0`. PIM discovers and uses that group interface automatically after
 formation; you configure the parent Wi-Fi interface, not the transient `p2p-*`
 name.
+
+On macOS, no transient `p2p-*` interface is managed by PIM. Discovery is driven
+through Bonjour peer-to-peer service advertisement and resolution instead.
 
 ## Bluetooth PAN Gateway
 

@@ -495,7 +495,7 @@ Add Wi-Fi Direct (IEEE 802.11 P2P) as an optional peer-finding layer. After a P2
     - `GO_INTERFACE_IP` constant (`192.168.49.1`)
     - `WifiDirectGroup::from_iface`: polls interface IP, resolves peer IP
 - [x] `src/lib.rs` — `WifiDirectDiscovery`: orchestrates find → connect → group formation
-    - `WifiDirectDiscovery::new(config, listen_port) -> (Self, Receiver<SocketAddr>)`
+    - `WifiDirectDiscovery::new(node_name, config, listen_port) -> (Self, Receiver<SocketAddr>)`
     - `WifiDirectDiscovery::run(cancel)` — polling loop, emits `SocketAddr` per formed group
 - [x] **Tests** (all pure unit tests, no subprocess invoked):
     - [x] `wpa_cli_p2p_peers_parses_empty_output`

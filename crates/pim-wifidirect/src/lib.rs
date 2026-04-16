@@ -21,19 +21,22 @@
 
 #![warn(missing_docs)]
 
+#[cfg(target_os = "macos")]
+mod bonjour;
 pub mod group;
 pub mod wpa_cli;
 
-use std::{
-    collections::HashSet,
-    net::{IpAddr, SocketAddr},
-    time::Duration,
-};
+use std::net::SocketAddr;
+
+#[cfg(not(target_os = "macos"))]
+use std::{collections::HashSet, net::IpAddr, time::Duration};
 
 use pim_core::WifiDirectConfig;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
-use tracing::{debug, info, warn};
+#[cfg(not(target_os = "macos"))]
+use tracing::debug;
+use tracing::{info, warn};
 
 pub use group::{GroupRole, WifiDirectGroup, GO_INTERFACE_IP};
 pub use wpa_cli::{P2pPeerInfo, WpaCliController};
@@ -44,6 +47,9 @@ pub enum WifiDirectError {
     /// A `wpa_cli` invocation failed or returned an unexpected response.
     #[error("wpa_cli error: {0}")]
     WpaCli(String),
+    /// A Bonjour / DNS-SD operation failed on macOS.
+    #[error("bonjour error: {0}")]
+    Bonjour(String),
     /// P2P group formation did not complete within the expected time.
     #[error("group formation failed: {0}")]
     GroupFormation(String),
@@ -59,10 +65,21 @@ pub enum WifiDirectError {
 /// P2P group.  The address is `peer_ip:listen_port` — ready to be passed
 /// directly to `initiate_peer_connection`.
 pub struct WifiDirectDiscovery {
+    #[cfg(target_os = "macos")]
+    node_name: String,
+    #[cfg(not(target_os = "macos"))]
     ctrl: WpaCliController,
     config: WifiDirectConfig,
     listen_port: u16,
     peer_tx: mpsc::Sender<SocketAddr>,
+}
+
+#[cfg(target_os = "macos")]
+struct WifiDirectServiceType;
+
+#[cfg(target_os = "macos")]
+impl WifiDirectServiceType {
+    const REG_TYPE: &'static str = "_pimmesh._tcp";
 }
 
 impl WifiDirectDiscovery {
@@ -70,12 +87,21 @@ impl WifiDirectDiscovery {
     ///
     /// Returns `(service, receiver)`.  Call [`WifiDirectDiscovery::run`] to start
     /// background operation; receive discovered peer addresses from the receiver.
-    pub fn new(config: WifiDirectConfig, listen_port: u16) -> (Self, mpsc::Receiver<SocketAddr>) {
+    pub fn new(
+        node_name: impl Into<String>,
+        config: WifiDirectConfig,
+        listen_port: u16,
+    ) -> (Self, mpsc::Receiver<SocketAddr>) {
+        #[cfg(not(target_os = "macos"))]
+        let _ = node_name;
+
         let (peer_tx, peer_rx) = mpsc::channel(16);
-        let ctrl = WpaCliController::new(&config.interface);
         (
             Self {
-                ctrl,
+                #[cfg(target_os = "macos")]
+                node_name: node_name.into(),
+                #[cfg(not(target_os = "macos"))]
+                ctrl: WpaCliController::new(&config.interface),
                 config,
                 listen_port,
                 peer_tx,
@@ -94,34 +120,60 @@ impl WifiDirectDiscovery {
     /// 5. Resolves peer IP via [`WifiDirectGroup::from_iface`].
     /// 6. Sends `SocketAddr` on the peer channel.
     pub async fn run(self, cancel: CancellationToken) {
-        info!(
-            "Wi-Fi Direct discovery starting on interface {}",
-            self.config.interface
-        );
+        #[cfg(target_os = "macos")]
+        {
+            if self.config.interface != WifiDirectConfig::default().interface
+                || self.config.go_intent != WifiDirectConfig::default().go_intent
+                || self.config.listen_channel != WifiDirectConfig::default().listen_channel
+                || self.config.op_channel != WifiDirectConfig::default().op_channel
+                || self.config.connect_method != WifiDirectConfig::default().connect_method
+            {
+                info!(
+                    interface = %self.config.interface,
+                    go_intent = self.config.go_intent,
+                    listen_channel = self.config.listen_channel,
+                    op_channel = self.config.op_channel,
+                    connect_method = %self.config.connect_method,
+                    "Wi-Fi Direct macOS backend uses Bonjour peer-to-peer discovery; Linux-specific P2P tuning fields are ignored"
+                );
+            }
 
-        // Verify wpa_cli is available; log a warning and return early if not.
-        if let Err(e) = self.ctrl.p2p_find().await {
-            warn!("Wi-Fi Direct: p2p_find failed (wpa_supplicant not running?): {e}");
+            bonjour::run(self.node_name, self.listen_port, self.peer_tx, cancel).await;
             return;
         }
 
-        let mut seen_macs: HashSet<String> = HashSet::new();
-        let mut poll_interval = tokio::time::interval(Duration::from_secs(2));
+        #[cfg(not(target_os = "macos"))]
+        {
+            info!(
+                "Wi-Fi Direct discovery starting on interface {}",
+                self.config.interface
+            );
 
-        loop {
-            tokio::select! {
-                _ = cancel.cancelled() => {
-                    debug!("Wi-Fi Direct discovery cancelled");
-                    let _ = self.ctrl.p2p_stop_find().await;
-                    return;
-                }
-                _ = poll_interval.tick() => {
-                    self.poll_and_connect(&mut seen_macs).await;
+            // Verify wpa_cli is available; log a warning and return early if not.
+            if let Err(e) = self.ctrl.p2p_find().await {
+                warn!("Wi-Fi Direct: p2p_find failed (wpa_supplicant not running?): {e}");
+                return;
+            }
+
+            let mut seen_macs: HashSet<String> = HashSet::new();
+            let mut poll_interval = tokio::time::interval(Duration::from_secs(2));
+
+            loop {
+                tokio::select! {
+                    _ = cancel.cancelled() => {
+                        debug!("Wi-Fi Direct discovery cancelled");
+                        let _ = self.ctrl.p2p_stop_find().await;
+                        return;
+                    }
+                    _ = poll_interval.tick() => {
+                        self.poll_and_connect(&mut seen_macs).await;
+                    }
                 }
             }
         }
     }
 
+    #[cfg(not(target_os = "macos"))]
     async fn poll_and_connect(&self, seen_macs: &mut HashSet<String>) {
         let peers = match self.ctrl.p2p_peers().await {
             Ok(p) => p,
@@ -145,6 +197,7 @@ impl WifiDirectDiscovery {
         }
     }
 
+    #[cfg(not(target_os = "macos"))]
     async fn connect_and_emit(&self, mac: &str) -> Result<(), WifiDirectError> {
         // Initiate connection based on configured method.
         if self.config.connect_method == "pbc" {
@@ -214,6 +267,7 @@ impl WifiDirectDiscovery {
         Ok(())
     }
 
+    #[cfg(not(target_os = "macos"))]
     async fn wait_for_group_iface(&self, timeout: Duration) -> Result<String, WifiDirectError> {
         let deadline = tokio::time::Instant::now() + timeout;
 
@@ -242,7 +296,7 @@ mod tests {
     #[test]
     fn discovery_new_returns_receiver() {
         let config = WifiDirectConfig::default();
-        let (_svc, _rx) = WifiDirectDiscovery::new(config, 9100);
+        let (_svc, _rx) = WifiDirectDiscovery::new("node-a", config, 9100);
         // Verifies construction does not panic and returns both parts.
     }
 

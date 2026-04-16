@@ -2984,8 +2984,11 @@ async fn main() -> Result<()> {
             interface = %config.wifi_direct.interface,
             "starting Wi-Fi Direct discovery"
         );
-        let (wd_svc, addr_rx) =
-            WifiDirectDiscovery::new(config.wifi_direct.clone(), config.transport.listen_port);
+        let (wd_svc, addr_rx) = WifiDirectDiscovery::new(
+            config.node.name.clone(),
+            config.wifi_direct.clone(),
+            config.transport.listen_port,
+        );
         let c = cancel.clone();
         tokio::spawn(async move { wd_svc.run(c).await });
         tokio::spawn(run_wifidirect_consumer(state.clone(), addr_rx));
@@ -3756,8 +3759,11 @@ en0: flags=8863<UP,BROADCAST,RUNNING,SIMPLEX,MULTICAST> mtu 1500\n\
         use pim_wifidirect::WifiDirectDiscovery;
         let toml = "[node]\nname=\"t\"\n[wifi_direct]\nenabled=true\n";
         let config = Config::from_toml_str(toml).unwrap();
-        let (_svc, _rx) =
-            WifiDirectDiscovery::new(config.wifi_direct, config.transport.listen_port);
+        let (_svc, _rx) = WifiDirectDiscovery::new(
+            config.node.name,
+            config.wifi_direct,
+            config.transport.listen_port,
+        );
         // Construction must not panic.
     }
 
