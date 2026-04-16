@@ -59,9 +59,9 @@ use tracing::{debug, error, info, warn};
 use ed25519_dalek::VerifyingKey;
 use pim_bluetooth::BluetoothDiscovery;
 use pim_core::{
-    AuthorizationPolicy, BluetoothConfig, Config, DebugDiscoveredPeerSnapshot,
-    DebugGatewaySnapshot, DebugNodeSnapshot, DebugPeerSnapshot, DebugRouteSnapshot,
-    DebugSnapshot, DebugStatsSnapshot, DiscoveryConfig, FrameCodec, NodeId, PeerEndpointConfig,
+    AuthorizationPolicy, Config, DebugDiscoveredPeerSnapshot, DebugGatewaySnapshot,
+    DebugNodeSnapshot, DebugPeerSnapshot, DebugRouteSnapshot, DebugSnapshot, DebugStatsSnapshot,
+    DiscoveryConfig, FrameCodec, NodeId, PeerEndpointConfig,
 };
 use pim_crypto::{
     e2e_decrypt_in_place, e2e_encrypt, x25519_public_from_seed, HandshakeConfirm, HandshakeInit,
@@ -2669,7 +2669,7 @@ fn bt_network_command() -> PathBuf {
 }
 
 #[cfg(any(test, target_os = "macos"))]
-fn macos_bluetooth_config_warnings(config: &BluetoothConfig) -> Vec<String> {
+fn macos_bluetooth_config_warnings(config: &pim_core::BluetoothConfig) -> Vec<String> {
     let mut warnings = Vec::new();
 
     if config.serve_nap {
