@@ -1,0 +1,20 @@
+# Gateway node — IPv4 + IPv6 single-hop Docker tests.
+
+[node]
+name = "gateway-v6"
+data_dir = "/var/lib/pim"
+
+[interface]
+mesh_ip = "10.77.0.1/24"
+mesh_ipv6 = "fd77::1/64"
+mtu = 1400
+
+[transport]
+listen_port = 9100
+
+[security]
+key_file = "/var/lib/pim/node.key"
+
+[gateway]
+enabled = true
+nat_interface = "eth1"
