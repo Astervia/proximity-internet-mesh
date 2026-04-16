@@ -14,7 +14,7 @@ The key distinction is:
 - `[interface].mesh_ip`: usually `"auto"` on clients so the gateway can assign it
 - `transport.listen_port`: the TCP port used once a peer becomes reachable
 - `[wifi_direct].interface`: the physical Wi-Fi interface used for P2P
-- `[bluetooth].interface`: the Bluetooth PAN network interface, usually `bnep0`
+- `[bluetooth].interface`: a preferred Bluetooth PAN interface hint; use `"auto"` on Linux unless you need to pin a specific interface
 
 ## Before You Start
 
@@ -52,7 +52,7 @@ These commands help identify:
 
 - the host uplink currently in use
 - the Wi-Fi interface that should back Wi-Fi Direct
-- whether a Bluetooth PAN interface such as `bnep0` already exists
+- whether a Bluetooth PAN interface such as `bnep0` or `enx*` already exists
 
 If you want to see which interface the host would use to reach the public
 internet, check:
@@ -221,8 +221,8 @@ ip -br link
 If a PAN interface already exists, inspect it. On macOS, use `bridge0` or the host's Bluetooth PAN bridge if it differs:
 
 ```bash
-ip -4 -o addr show dev bnep0
-ip neigh show dev bnep0
+ip -4 -o addr show dev <pan-iface>
+ip neigh show dev <pan-iface>
 ```
 
 Example client config:
@@ -230,10 +230,13 @@ Example client config:
 ```toml
 [bluetooth]
 enabled = true
-interface = "bnep0" # use "bridge0" on macOS unless the host exposes a different PAN bridge
+interface = "auto" # use "bridge0" on macOS unless the host exposes a different PAN bridge
 radio_discovery_enabled = true
 device_name_prefix = "PIM-"
 local_alias = "PIM-client-a"
+connect_pan = true
+serve_nap = false
+nap_bridge = "br-bt"
 auto_discover_peers = true
 poll_interval_ms = 2000
 scan_interval_ms = 5000
@@ -245,8 +248,10 @@ startup_timeout_ms = 15000
 
 Operational notes:
 
-- `[bluetooth].interface` should be the PAN interface, usually `bnep0` on Linux or `bridge0` on macOS
-- PIM waits for that interface to become ready
+- `[bluetooth].interface` is a preferred interface hint on Linux; `"auto"` lets the daemon resolve a ready `bnep*` or `enx*` PAN interface dynamically
+- `connect_pan = true` allows outbound `bt-network -c <mac> nap` requests after radio discovery
+- `serve_nap = false` keeps clients out of Linux NAP server mode by default
+- PIM waits for a PAN-facing interface to become ready
 - Linux uses `bluetoothctl`; macOS uses the host Bluetooth stack and expects `blueutil` for radio discovery and pairing automation
 - once the PAN link exists, PIM reads neighbor entries from `ip neigh show dev <interface>` on Linux or `arp -an -i <interface>` on macOS
 - discovered neighbor IPs are then used as normal TCP peer targets on `transport.listen_port`
@@ -265,8 +270,8 @@ Useful checks:
 
 ```bash
 bluetoothctl devices
-ip link show bnep0
-ip neigh show dev bnep0
+ip -br link
+ip neigh show dev <pan-iface>
 ```
 
 ## Mixed-Mechanism Client
@@ -297,7 +302,7 @@ interface = "wlan0"
 
 [bluetooth]
 enabled = true
-interface = "bnep0"
+interface = "auto"
 
 [[peers]]
 mechanism = "tcp"
@@ -312,7 +317,7 @@ gateway-selection logic once a peer address becomes reachable.
 
 1. List local interfaces with `ip -br link`.
 2. If using Wi-Fi Direct, identify the Wi-Fi radio with `iw dev`.
-3. If using Bluetooth PAN, identify the PAN interface with `ip -br link` and inspect it with `ip neigh show dev <bnepX>`.
+3. If using Bluetooth PAN, identify the active PAN interface with `ip -br link` and inspect it with `ip neigh show dev <pan-iface>`.
 4. Set `interface.mesh_ip = "auto"` unless you have a reason to force a static mesh CIDR.
 5. Enable discovery if the client should auto-connect to nearby peers.
 6. Enable only the peer mechanisms you actually intend to use.
@@ -336,8 +341,8 @@ If Wi-Fi Direct does not discover peers:
 If Bluetooth peers do not appear:
 
 - verify Bluetooth is powered: `bluetoothctl show`
-- verify the PAN interface exists: `ip link show bnep0`
-- verify neighbor discovery sees peers: `ip neigh show dev bnep0`
+- verify the PAN interface exists: `ip -br link`
+- verify neighbor discovery sees peers on the active PAN interface: `ip neigh show dev <pan-iface>`
 
 ## Related Docs
 

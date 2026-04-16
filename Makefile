@@ -10,7 +10,7 @@ docker-build:
 
 # ── Test phases ───────────────────────────────────────────────────────────────
 
-.PHONY: test-p1 test-p2 test-p3 test-p4 test-p5 test-p7 test-auth test-debug-cli test-route-cli test-bluetooth test-all
+.PHONY: test-p1 test-p2 test-p3 test-p4 test-p5 test-p7 test-auth test-debug-cli test-route-cli test-bluetooth test-bluetooth-enx test-all
 
 test-p1: docker-build
 	bash $(TEST_DIR)/test-phase1.sh
@@ -46,6 +46,9 @@ test-route-cli: docker-build
 test-bluetooth: docker-build
 	bash $(TEST_DIR)/test-bluetooth.sh
 
+test-bluetooth-enx: docker-build
+	bash $(TEST_DIR)/test-bluetooth-enx.sh
+
 test-all: docker-build
 	@bash $(TEST_DIR)/test-phase1.sh && \
 	 bash $(TEST_DIR)/test-phase2.sh && \
@@ -54,12 +57,13 @@ test-all: docker-build
 	 bash $(TEST_DIR)/test-phase5.sh && \
 	 bash $(TEST_DIR)/test-authorization.sh && \
 	 bash $(TEST_DIR)/test-route-cli.sh && \
-	 bash $(TEST_DIR)/test-bluetooth.sh
+	 bash $(TEST_DIR)/test-bluetooth.sh && \
+	 bash $(TEST_DIR)/test-bluetooth-enx.sh
 
 # ── Manual stack management ───────────────────────────────────────────────────
 # Use these for interactive debugging without the test scripts.
 
-.PHONY: up-p1 up-p2-relay up-p2-routing up-p3 up-p4 up-p4-fc up-p5 up-p7 up-bluetooth
+.PHONY: up-p1 up-p2-relay up-p2-routing up-p3 up-p4 up-p4-fc up-p5 up-p7 up-bluetooth up-bluetooth-enx
 
 up-p1:
 	docker compose -f $(COMPOSE_DIR)/phase1-single-hop.yml up -d --build
@@ -88,7 +92,10 @@ up-p7:
 up-bluetooth:
 	docker compose -f $(COMPOSE_DIR)/bluetooth-seam.yml up -d --build
 
-.PHONY: down-p1 down-p2-relay down-p2-routing down-p3 down-p4 down-p4-fc down-p5 down-p7 down-bluetooth
+up-bluetooth-enx:
+	docker compose -f $(COMPOSE_DIR)/bluetooth-seam-enx.yml up -d --build
+
+.PHONY: down-p1 down-p2-relay down-p2-routing down-p3 down-p4 down-p4-fc down-p5 down-p7 down-bluetooth down-bluetooth-enx
 
 down-p1:
 	docker compose -f $(COMPOSE_DIR)/phase1-single-hop.yml down -v --remove-orphans
@@ -117,9 +124,12 @@ down-p7:
 down-bluetooth:
 	docker compose -f $(COMPOSE_DIR)/bluetooth-seam.yml down -v --remove-orphans
 
+down-bluetooth-enx:
+	docker compose -f $(COMPOSE_DIR)/bluetooth-seam-enx.yml down -v --remove-orphans
+
 # ── Log tailing ───────────────────────────────────────────────────────────────
 
-.PHONY: logs-p1 logs-p2-relay logs-p2-routing logs-p3 logs-p4 logs-p5 logs-p7 logs-bluetooth
+.PHONY: logs-p1 logs-p2-relay logs-p2-routing logs-p3 logs-p4 logs-p5 logs-p7 logs-bluetooth logs-bluetooth-enx
 
 logs-p1:
 	docker compose -f $(COMPOSE_DIR)/phase1-single-hop.yml logs -f
@@ -144,6 +154,9 @@ logs-p7:
 
 logs-bluetooth:
 	docker compose -f $(COMPOSE_DIR)/bluetooth-seam.yml logs -f
+
+logs-bluetooth-enx:
+	docker compose -f $(COMPOSE_DIR)/bluetooth-seam-enx.yml logs -f
 
 # ── Shortcuts for exec ────────────────────────────────────────────────────────
 # e.g.:  make sh-p1-client
@@ -183,7 +196,8 @@ docker-clean:
 	    $(COMPOSE_DIR)/auth-allow-list.yml \
 	    $(COMPOSE_DIR)/auth-tofu.yml \
 	    $(COMPOSE_DIR)/auth-discovery-key.yml \
-	    $(COMPOSE_DIR)/bluetooth-seam.yml; do \
+	    $(COMPOSE_DIR)/bluetooth-seam.yml \
+	    $(COMPOSE_DIR)/bluetooth-seam-enx.yml; do \
 	    docker compose -f $$f down -v --remove-orphans 2>/dev/null || true; \
 	done
 
@@ -213,6 +227,7 @@ help:
 	@echo "  make test-debug-cli     Debug CLI output in multi-gateway and discovery labs"
 	@echo "  make test-route-cli     Split-default route CLI flow in the single-hop Docker lab"
 	@echo "  make test-bluetooth     Bluetooth fake-sysfs seam test in Docker"
+	@echo "  make test-bluetooth-enx Bluetooth dynamic enx PAN fallback seam test in Docker"
 	@echo "  make test-all           All phases (slow tests skipped)"
 	@echo "  make test-unit          Rust unit tests (no Docker)"
 	@echo ""

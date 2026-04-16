@@ -62,6 +62,7 @@ They validate real daemon startup, TUN interface handling, peer connectivity, ro
 - `test-debug-cli`: `pim debug` output from the client view in the dual-gateway Docker lab
 - `test-route-cli`: `pim route on|status|off` flow in the single-hop Docker lab
 - `test-bluetooth`: Bluetooth PAN automatic peer discovery seam using fake sysfs and `ip neigh` fixtures in Docker
+- `test-bluetooth-enx`: Bluetooth PAN dynamic `enx*` interface fallback seam using fake sysfs and `ip neigh` fixtures in Docker
 
 ## Local Workflow
 
