@@ -625,6 +625,18 @@ fn lookup_interface_ipv6(interface: &str) -> Result<Ipv6Addr> {
         .with_context(|| format!("no global IPv6 address found on interface {interface}"))
 }
 
+async fn lookup_interface_ipv6_with_retry(interface: &str) -> Result<Ipv6Addr> {
+    let mut last_err = None;
+    for _ in 0..20 {
+        match lookup_interface_ipv6(interface) {
+            Ok(ip) => return Ok(ip),
+            Err(err) => last_err = Some(err),
+        }
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    }
+    Err(last_err.unwrap_or_else(|| anyhow::anyhow!("failed to resolve IPv6 address")))
+}
+
 fn parse_interface_ipv4_output(output: &str) -> Option<Ipv4Addr> {
     output
         .split_whitespace()
@@ -3155,7 +3167,7 @@ async fn main() -> Result<()> {
         None
     };
     let gateway_external_ipv6 = if is_gateway {
-        match lookup_interface_ipv6(&config.gateway.nat_interface) {
+        match lookup_interface_ipv6_with_retry(&config.gateway.nat_interface).await {
             Ok(ip) => Some(ip),
             Err(e) => {
                 warn!(
@@ -3406,7 +3418,7 @@ async fn main() -> Result<()> {
         let c = cancel.clone();
         tokio::spawn(async move {
             if let Err(err) = bt_svc.run(c).await {
-                tracing::error!("Bluetooth PAN watcher exited with error: {err}");
+                tracing::warn!("Bluetooth PAN watcher exited with error: {err}");
             }
         });
         tokio::spawn(run_bluetooth_consumer(state.clone(), addr_rx));

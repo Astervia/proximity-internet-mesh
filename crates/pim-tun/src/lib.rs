@@ -419,12 +419,10 @@ mod platform {
         }
 
         pub fn add_default_ipv6_route(&self, gateway_ip: Ipv6Addr) -> Result<(), TunError> {
-            let gw_str = gateway_ip.to_string();
+            let _ = gateway_ip;
             for cidr in split_default_ipv6_cidrs() {
                 let status = std::process::Command::new("ip")
-                    .args([
-                        "-6", "route", "replace", cidr, "via", &gw_str, "dev", &self.name, "onlink",
-                    ])
+                    .args(["-6", "route", "replace", cidr, "dev", &self.name])
                     .status()?;
 
                 if !status.success() {
@@ -452,12 +450,10 @@ mod platform {
         }
 
         pub fn remove_default_ipv6_route(&self, gateway_ip: Ipv6Addr) -> Result<(), TunError> {
-            let gw_str = gateway_ip.to_string();
+            let _ = gateway_ip;
             for cidr in split_default_ipv6_cidrs() {
                 let _ = std::process::Command::new("ip")
-                    .args([
-                        "-6", "route", "del", cidr, "via", &gw_str, "dev", &self.name,
-                    ])
+                    .args(["-6", "route", "del", cidr, "dev", &self.name])
                     .status()?;
             }
 
@@ -775,22 +771,14 @@ mod platform {
         }
 
         pub fn add_default_ipv6_route(&self, gateway_ip: Ipv6Addr) -> Result<(), TunError> {
-            let gw_str = gateway_ip.to_string();
+            let _ = gateway_ip;
             for cidr in split_default_ipv6_cidrs() {
                 let _ = Command::new("route")
                     .args(["-n", "delete", "-inet6", cidr, "-interface", &self.name])
                     .status();
                 run_command(
                     "route",
-                    &[
-                        "-n",
-                        "add",
-                        "-inet6",
-                        cidr,
-                        &gw_str,
-                        "-interface",
-                        &self.name,
-                    ],
+                    &["-n", "add", "-inet6", cidr, "-interface", &self.name],
                     "route add -inet6",
                 )?;
             }
