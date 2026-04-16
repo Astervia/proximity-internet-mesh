@@ -3,7 +3,7 @@
 #![warn(missing_docs)]
 
 use std::io;
-use std::net::Ipv4Addr;
+use std::net::{Ipv4Addr, Ipv6Addr};
 
 /// Errors from TUN operations.
 #[derive(Debug, thiserror::Error)]
@@ -48,6 +48,11 @@ impl TunInterface {
         self.inner.set_ip(addr, prefix_len)
     }
 
+    /// Assign an IPv6 address and prefix length.
+    pub fn set_ipv6(&self, addr: Ipv6Addr, prefix_len: u8) -> Result<(), TunError> {
+        self.inner.set_ipv6(addr, prefix_len)
+    }
+
     /// Set the interface MTU in bytes.
     pub fn set_mtu(&self, mtu: u32) -> Result<(), TunError> {
         self.inner.set_mtu(mtu)
@@ -78,9 +83,19 @@ impl TunInterface {
         self.inner.add_default_route(gateway_ip)
     }
 
+    /// Add split-default IPv6 routes on this interface.
+    pub fn add_default_ipv6_route(&self, gateway_ip: Ipv6Addr) -> Result<(), TunError> {
+        self.inner.add_default_ipv6_route(gateway_ip)
+    }
+
     /// Remove split-default routes on this interface.
     pub fn remove_default_route(&self, gateway_ip: Ipv4Addr) -> Result<(), TunError> {
         self.inner.remove_default_route(gateway_ip)
+    }
+
+    /// Remove split-default IPv6 routes on this interface.
+    pub fn remove_default_ipv6_route(&self, gateway_ip: Ipv6Addr) -> Result<(), TunError> {
+        self.inner.remove_default_ipv6_route(gateway_ip)
     }
 }
 
@@ -99,12 +114,16 @@ fn split_default_cidrs() -> [&'static str; 2] {
     ["0.0.0.0/1", "128.0.0.0/1"]
 }
 
+fn split_default_ipv6_cidrs() -> [&'static str; 2] {
+    ["::/1", "8000::/1"]
+}
+
 #[cfg(target_os = "linux")]
 mod platform {
-    use super::{prefix_to_mask, split_default_cidrs, TunError};
+    use super::{prefix_to_mask, split_default_cidrs, split_default_ipv6_cidrs, TunError};
     use std::fs::{File, OpenOptions};
     use std::io;
-    use std::net::Ipv4Addr;
+    use std::net::{Ipv4Addr, Ipv6Addr};
     use std::os::fd::AsRawFd;
 
     use tokio::io::unix::AsyncFd;
@@ -278,6 +297,22 @@ mod platform {
             Ok(())
         }
 
+        pub fn set_ipv6(&self, addr: Ipv6Addr, prefix_len: u8) -> Result<(), TunError> {
+            let addr_str = format!("{addr}/{prefix_len}");
+            let status = std::process::Command::new("ip")
+                .args(["-6", "addr", "replace", &addr_str, "dev", &self.name])
+                .status()?;
+            if !status.success() {
+                return Err(TunError::Ioctl(
+                    "ip -6 addr replace".into(),
+                    io::Error::other(format!("ip -6 addr replace {addr_str} failed")),
+                ));
+            }
+
+            debug!(addr = %addr, prefix = prefix_len, iface = %self.name, "IPv6 address set");
+            Ok(())
+        }
+
         pub fn set_mtu(&self, mtu: u32) -> Result<(), TunError> {
             let sock = ConfigSocket::open()?;
 
@@ -383,6 +418,27 @@ mod platform {
             Ok(())
         }
 
+        pub fn add_default_ipv6_route(&self, gateway_ip: Ipv6Addr) -> Result<(), TunError> {
+            let gw_str = gateway_ip.to_string();
+            for cidr in split_default_ipv6_cidrs() {
+                let status = std::process::Command::new("ip")
+                    .args([
+                        "-6", "route", "replace", cidr, "via", &gw_str, "dev", &self.name, "onlink",
+                    ])
+                    .status()?;
+
+                if !status.success() {
+                    return Err(TunError::Ioctl(
+                        "ip -6 route replace".into(),
+                        io::Error::other(format!("ip -6 route replace {cidr} failed")),
+                    ));
+                }
+            }
+
+            debug!(gateway = %gateway_ip, iface = %self.name, "split-default IPv6 routes added");
+            Ok(())
+        }
+
         pub fn remove_default_route(&self, gateway_ip: Ipv4Addr) -> Result<(), TunError> {
             let gw_str = gateway_ip.to_string();
             for cidr in split_default_cidrs() {
@@ -392,6 +448,20 @@ mod platform {
             }
 
             debug!(gateway = %gateway_ip, iface = %self.name, "split-default routes removed");
+            Ok(())
+        }
+
+        pub fn remove_default_ipv6_route(&self, gateway_ip: Ipv6Addr) -> Result<(), TunError> {
+            let gw_str = gateway_ip.to_string();
+            for cidr in split_default_ipv6_cidrs() {
+                let _ = std::process::Command::new("ip")
+                    .args([
+                        "-6", "route", "del", cidr, "via", &gw_str, "dev", &self.name,
+                    ])
+                    .status()?;
+            }
+
+            debug!(gateway = %gateway_ip, iface = %self.name, "split-default IPv6 routes removed");
             Ok(())
         }
     }
@@ -443,10 +513,10 @@ mod platform {
 
 #[cfg(target_os = "macos")]
 mod platform {
-    use super::{prefix_to_mask, split_default_cidrs, TunError};
+    use super::{prefix_to_mask, split_default_cidrs, split_default_ipv6_cidrs, TunError};
     use std::ffi::CStr;
     use std::io;
-    use std::net::Ipv4Addr;
+    use std::net::{Ipv4Addr, Ipv6Addr};
     use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
     use std::process::Command;
 
@@ -592,6 +662,17 @@ mod platform {
             Ok(())
         }
 
+        pub fn set_ipv6(&self, addr: Ipv6Addr, prefix_len: u8) -> Result<(), TunError> {
+            let addr_str = format!("{addr}/{prefix_len}");
+            run_command(
+                "ifconfig",
+                &[&self.name, "inet6", &addr_str, "alias"],
+                "ifconfig inet6",
+            )?;
+            debug!(addr = %addr, prefix = prefix_len, iface = %self.name, "IPv6 address set");
+            Ok(())
+        }
+
         pub fn set_mtu(&self, mtu: u32) -> Result<(), TunError> {
             let mtu_str = mtu.to_string();
             run_command("ifconfig", &[&self.name, "mtu", &mtu_str], "ifconfig mtu")?;
@@ -644,7 +725,11 @@ mod platform {
 
         pub async fn write_packet(&self, packet: &[u8]) -> Result<(), TunError> {
             let mut frame = Vec::with_capacity(packet.len() + 4);
-            frame.extend_from_slice(&(libc::AF_INET as u32).to_be_bytes());
+            let family = match packet.first().map(|byte| byte >> 4) {
+                Some(6) => libc::AF_INET6,
+                _ => libc::AF_INET,
+            };
+            frame.extend_from_slice(&(family as u32).to_be_bytes());
             frame.extend_from_slice(packet);
 
             loop {
@@ -689,6 +774,30 @@ mod platform {
             Ok(())
         }
 
+        pub fn add_default_ipv6_route(&self, gateway_ip: Ipv6Addr) -> Result<(), TunError> {
+            let gw_str = gateway_ip.to_string();
+            for cidr in split_default_ipv6_cidrs() {
+                let _ = Command::new("route")
+                    .args(["-n", "delete", "-inet6", cidr, "-interface", &self.name])
+                    .status();
+                run_command(
+                    "route",
+                    &[
+                        "-n",
+                        "add",
+                        "-inet6",
+                        cidr,
+                        &gw_str,
+                        "-interface",
+                        &self.name,
+                    ],
+                    "route add -inet6",
+                )?;
+            }
+            debug!(gateway = %gateway_ip, iface = %self.name, "split-default IPv6 routes added");
+            Ok(())
+        }
+
         pub fn remove_default_route(&self, gateway_ip: Ipv4Addr) -> Result<(), TunError> {
             for cidr in split_default_cidrs() {
                 let _ = Command::new("route")
@@ -696,6 +805,16 @@ mod platform {
                     .status()?;
             }
             debug!(gateway = %gateway_ip, iface = %self.name, "split-default routes removed");
+            Ok(())
+        }
+
+        pub fn remove_default_ipv6_route(&self, gateway_ip: Ipv6Addr) -> Result<(), TunError> {
+            for cidr in split_default_ipv6_cidrs() {
+                let _ = Command::new("route")
+                    .args(["-n", "delete", "-inet6", cidr, "-interface", &self.name])
+                    .status()?;
+            }
+            debug!(gateway = %gateway_ip, iface = %self.name, "split-default IPv6 routes removed");
             Ok(())
         }
     }
@@ -748,7 +867,7 @@ mod platform {
 
 #[cfg(not(any(target_os = "linux", target_os = "macos")))]
 mod platform {
-    use super::{Ipv4Addr, TunError};
+    use super::{Ipv4Addr, Ipv6Addr, TunError};
 
     pub struct PlatformTunInterface;
 
@@ -762,6 +881,10 @@ mod platform {
         }
 
         pub fn set_ip(&self, _addr: Ipv4Addr, _prefix_len: u8) -> Result<(), TunError> {
+            Err(TunError::Unavailable)
+        }
+
+        pub fn set_ipv6(&self, _addr: Ipv6Addr, _prefix_len: u8) -> Result<(), TunError> {
             Err(TunError::Unavailable)
         }
 
@@ -789,7 +912,15 @@ mod platform {
             Err(TunError::Unavailable)
         }
 
+        pub fn add_default_ipv6_route(&self, _gateway_ip: Ipv6Addr) -> Result<(), TunError> {
+            Err(TunError::Unavailable)
+        }
+
         pub fn remove_default_route(&self, _gateway_ip: Ipv4Addr) -> Result<(), TunError> {
+            Err(TunError::Unavailable)
+        }
+
+        pub fn remove_default_ipv6_route(&self, _gateway_ip: Ipv6Addr) -> Result<(), TunError> {
             Err(TunError::Unavailable)
         }
     }

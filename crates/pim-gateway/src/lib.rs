@@ -23,7 +23,9 @@
 #![warn(missing_docs)]
 
 pub mod ip_pool;
+mod ipv6;
 pub use ip_pool::{IpPool, IpPoolError, Lease};
+pub use ipv6::{GatewayEngineV6, PROTO_ICMPV6};
 
 use std::collections::HashMap;
 use std::io;
@@ -110,8 +112,8 @@ impl ConntrackEntry {
 
 // ── Port pool ─────────────────────────────────────────────────────────────────
 
-const PORT_MIN: u16 = 30000;
-const PORT_MAX: u16 = 59999;
+pub(crate) const PORT_MIN: u16 = 30000;
+pub(crate) const PORT_MAX: u16 = 59999;
 
 struct PortPool {
     next: u16,
