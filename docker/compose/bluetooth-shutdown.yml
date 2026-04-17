@@ -1,0 +1,55 @@
+name: pim-bluetooth-shutdown
+
+# Seam test that verifies pim-daemon cleans up its Bluetooth gateway
+# resources (br-bt bridge, MASQUERADE rule, TCP listener) when it receives
+# SIGTERM. The test driver is docker/tests/test-bluetooth-shutdown.sh; the
+# in-container probe is docker/tests/bluetooth-shutdown-probe.sh.
+#
+# No real Bluetooth hardware is required: a fake `bt-network` binary is
+# used for the NAP server, but `ip` and `iptables` are real, so the
+# teardown exercises the same code paths as a physical host.
+
+services:
+  node:
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+    image: pim:latest
+    container_name: pim-bt-shutdown
+    hostname: node
+    entrypoint:
+      - /bin/bash
+      - -lc
+      - >-
+        set -euo pipefail;
+        mkdir -p /tmp/fake-sysfs/bnep0 /tmp/fake-bin;
+        printf 'up\n' > /tmp/fake-sysfs/bnep0/operstate;
+        printf '%s\n' '#!/bin/sh' 'exit 0' > /tmp/fake-bin/bluetoothctl;
+        printf '%s\n' '#!/bin/sh' 'exec sleep 3600' > /tmp/fake-bin/bt-network;
+        chmod +x /tmp/fake-bin/bluetoothctl /tmp/fake-bin/bt-network;
+        exec /usr/local/bin/bluetooth-shutdown-probe.sh
+    environment:
+      PIM_BLUETOOTH_SYSFS_ROOT: /tmp/fake-sysfs
+      PIM_BLUETOOTH_BLUETOOTHCTL_COMMAND: /tmp/fake-bin/bluetoothctl
+      PIM_BLUETOOTH_BT_NETWORK_COMMAND: /tmp/fake-bin/bt-network
+      RUST_LOG: info,pim_daemon=debug,pim_bluetooth=debug
+    volumes:
+      - ../configs/gateway-bt-shutdown.toml:/etc/pim/pim.toml:ro
+      - ../tests/bluetooth-shutdown-probe.sh:/usr/local/bin/bluetooth-shutdown-probe.sh:ro
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    restart: "no"
+    networks:
+      pim-net:
+        ipv4_address: 172.41.0.10
+
+networks:
+  pim-net:
+    driver: bridge
+    ipam:
+      driver: default
+      config:
+        - subnet: 172.41.0.0/24

@@ -2583,6 +2583,8 @@ async fn run_event_loop(state: Arc<DaemonState>) -> Result<()> {
     for peer in peers {
         state.transport.disconnect(&peer).await.ok();
     }
+    // Release the TCP listening port: cancels accept loops and drops sockets.
+    state.transport.shutdown().await;
     state.tun.down().ok();
     Ok(())
 }
@@ -3346,11 +3348,14 @@ async fn main() -> Result<()> {
     tun.up().context("bring TUN up")?;
     info!(iface = %tun.name(), addr = %mesh_ip, prefix = prefix_len, "TUN up");
 
+    // ── Cancellation (created early so transport listeners honour it) ─────
+    let cancel = CancellationToken::new();
+
     // ── Transport ─────────────────────────────────────────────────────────
     let listen_addr: SocketAddr = format!("0.0.0.0:{}", config.transport.listen_port)
         .parse()
         .context("invalid listen address")?;
-    let transport = TcpTransport::new(listen_addr, self_id)
+    let transport = TcpTransport::new_with_cancel(listen_addr, self_id, cancel.clone())
         .await
         .context("failed to start TCP transport")?;
     info!(listen = %transport.listen_addr, "transport listening");
@@ -3439,8 +3444,7 @@ async fn main() -> Result<()> {
         None
     };
 
-    // ── Cancellation ──────────────────────────────────────────────────────
-    let cancel = CancellationToken::new();
+    // ── Signal handler ────────────────────────────────────────────────────
     {
         let cancel = cancel.clone();
         tokio::spawn(async move {
@@ -3581,6 +3585,7 @@ async fn main() -> Result<()> {
     }
 
     // ── Bluetooth PAN discovery ────────────────────────────────────────────
+    let mut bt_handle: Option<tokio::task::JoinHandle<()>> = None;
     if config.bluetooth.enabled {
         let mut bluetooth_config = config.bluetooth.clone();
         if bluetooth_config.local_alias.is_empty() {
@@ -3642,11 +3647,12 @@ async fn main() -> Result<()> {
         )
         .context("failed to construct Bluetooth PAN watcher")?;
         let c = cancel.clone();
-        tokio::spawn(async move {
+        let handle = tokio::spawn(async move {
             if let Err(err) = bt_svc.run(c).await {
                 tracing::warn!("Bluetooth PAN watcher exited with error: {err}");
             }
         });
+        bt_handle = Some(handle);
         tokio::spawn(run_bluetooth_consumer(state.clone(), addr_rx));
     } else {
         debug!("Bluetooth PAN disabled by config");
@@ -3668,7 +3674,20 @@ async fn main() -> Result<()> {
     }
 
     // ── Main event loop ───────────────────────────────────────────────────
-    run_event_loop(state).await
+    let event_result = run_event_loop(state).await;
+
+    // Wait for the Bluetooth task to finish its teardown (bridge delete,
+    // MASQUERADE removal, child kill) before the process exits. Bounded so
+    // a wedged teardown can't hold the daemon open indefinitely.
+    if let Some(handle) = bt_handle {
+        match tokio::time::timeout(Duration::from_secs(10), handle).await {
+            Ok(Ok(())) => {}
+            Ok(Err(err)) => warn!("Bluetooth task join error: {err}"),
+            Err(_) => warn!("Bluetooth teardown did not complete within 10s; continuing shutdown"),
+        }
+    }
+
+    event_result
 }
 
 // ── Unit tests ────────────────────────────────────────────────────────────────
