@@ -237,6 +237,10 @@ local_alias = "PIM-client-a"
 connect_pan = true
 serve_nap = false
 nap_bridge = "br-bt"
+# dhcp_enabled only matters when serve_nap = true; leave as default on clients.
+# On Linux clients, once the PAN interface is up the daemon runs `dhclient -d -v`
+# automatically to pick up an address from the gateway's DHCP server.
+request_dhcp = true
 auto_discover_peers = true
 poll_interval_ms = 2000
 scan_interval_ms = 5000
@@ -251,6 +255,7 @@ Operational notes:
 - `[bluetooth].interface` is a preferred interface hint on Linux; `"auto"` lets the daemon resolve a ready `bnep*` or `enx*` PAN interface dynamically
 - `connect_pan = true` allows outbound `bt-network -c <mac> nap` requests after radio discovery
 - `serve_nap = false` keeps clients out of Linux NAP server mode by default
+- `request_dhcp = true` (default) causes the daemon to run `dhclient -d -v <interface>` on Linux PAN clients once the interface is up, so the client gets an IP, gateway, and DNS from the gateway's DHCP server
 - PIM waits for a PAN-facing interface to become ready
 - Linux uses `bluetoothctl`; macOS uses the host Bluetooth stack and expects `blueutil` for radio discovery and pairing automation
 - once the PAN link exists, PIM reads neighbor entries from `ip neigh show dev <interface>` on Linux or `arp -an -i <interface>` on macOS

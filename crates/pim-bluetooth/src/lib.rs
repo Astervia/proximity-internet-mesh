@@ -48,6 +48,14 @@ pub const DEFAULT_BLUETOOTHCTL_COMMAND: &str = "bluetoothctl";
 pub const DEFAULT_BLUETOOTHCTL_COMMAND: &str = "blueutil";
 /// Default `bt-network` command used to request a PAN/NAP connection.
 pub const DEFAULT_BT_NETWORK_COMMAND: &str = "bt-network";
+/// Default `iptables` command used to install NAT rules for the Bluetooth subnet.
+pub const DEFAULT_IPTABLES_COMMAND: &str = "iptables";
+/// Default `dnsmasq` command used to run a DHCP server on the NAP bridge.
+pub const DEFAULT_DNSMASQ_COMMAND: &str = "dnsmasq";
+/// Default `dhclient` command used to acquire an IP on the PAN interface.
+pub const DEFAULT_DHCLIENT_COMMAND: &str = "dhclient";
+/// Default location of the host resolver file used to inherit upstream DNS.
+pub const DEFAULT_RESOLV_CONF: &str = "/etc/resolv.conf";
 
 /// Errors produced by the Bluetooth subsystem.
 #[derive(Debug, thiserror::Error)]
@@ -92,6 +100,16 @@ pub struct BluetoothDiscovery {
     bluetoothctl_command: PathBuf,
     #[cfg(target_os = "linux")]
     bt_network_command: PathBuf,
+    #[cfg(target_os = "linux")]
+    iptables_command: PathBuf,
+    #[cfg(target_os = "linux")]
+    dnsmasq_command: PathBuf,
+    #[cfg(target_os = "linux")]
+    dhclient_command: PathBuf,
+    #[cfg(target_os = "linux")]
+    resolv_conf_path: PathBuf,
+    #[allow(dead_code)]
+    nat_interface: Option<String>,
     peer_tx: mpsc::Sender<SocketAddr>,
 }
 
@@ -110,10 +128,28 @@ impl BluetoothDiscovery {
             DEFAULT_IP_COMMAND,
             DEFAULT_BLUETOOTHCTL_COMMAND,
             DEFAULT_BT_NETWORK_COMMAND,
+            #[cfg(target_os = "linux")]
+            DEFAULT_IPTABLES_COMMAND,
+            #[cfg(not(target_os = "linux"))]
+            "",
+            #[cfg(target_os = "linux")]
+            DEFAULT_DNSMASQ_COMMAND,
+            #[cfg(not(target_os = "linux"))]
+            "",
+            #[cfg(target_os = "linux")]
+            DEFAULT_DHCLIENT_COMMAND,
+            #[cfg(not(target_os = "linux"))]
+            "",
+            #[cfg(target_os = "linux")]
+            DEFAULT_RESOLV_CONF,
+            #[cfg(not(target_os = "linux"))]
+            "",
+            None::<String>,
         )
     }
 
     /// Build a watcher with explicit command and sysfs paths.
+    #[allow(clippy::too_many_arguments)]
     pub fn new_with_system_paths(
         config: BluetoothConfig,
         listen_port: u16,
@@ -124,6 +160,15 @@ impl BluetoothDiscovery {
         bluetoothctl_command: impl Into<PathBuf>,
         #[cfg(target_os = "linux")] bt_network_command: impl Into<PathBuf>,
         #[cfg(not(target_os = "linux"))] _bt_network_command: impl Into<PathBuf>,
+        #[cfg(target_os = "linux")] iptables_command: impl Into<PathBuf>,
+        #[cfg(not(target_os = "linux"))] _iptables_command: impl Into<PathBuf>,
+        #[cfg(target_os = "linux")] dnsmasq_command: impl Into<PathBuf>,
+        #[cfg(not(target_os = "linux"))] _dnsmasq_command: impl Into<PathBuf>,
+        #[cfg(target_os = "linux")] dhclient_command: impl Into<PathBuf>,
+        #[cfg(not(target_os = "linux"))] _dhclient_command: impl Into<PathBuf>,
+        #[cfg(target_os = "linux")] resolv_conf_path: impl Into<PathBuf>,
+        #[cfg(not(target_os = "linux"))] _resolv_conf_path: impl Into<PathBuf>,
+        nat_interface: Option<impl Into<String>>,
     ) -> Result<(Self, mpsc::Receiver<SocketAddr>), BluetoothError> {
         let (peer_tx, peer_rx) = mpsc::channel(16);
 
@@ -138,6 +183,15 @@ impl BluetoothDiscovery {
                 bluetoothctl_command: bluetoothctl_command.into(),
                 #[cfg(target_os = "linux")]
                 bt_network_command: bt_network_command.into(),
+                #[cfg(target_os = "linux")]
+                iptables_command: iptables_command.into(),
+                #[cfg(target_os = "linux")]
+                dnsmasq_command: dnsmasq_command.into(),
+                #[cfg(target_os = "linux")]
+                dhclient_command: dhclient_command.into(),
+                #[cfg(target_os = "linux")]
+                resolv_conf_path: resolv_conf_path.into(),
+                nat_interface: nat_interface.map(Into::into),
                 peer_tx,
             },
             peer_rx,
@@ -181,10 +235,15 @@ impl BluetoothDiscovery {
 
         #[cfg(target_os = "linux")]
         let mut nap_server = if self.config.serve_nap {
+            self.install_bluetooth_masquerade().await?;
             Some(self.start_nap_server().await?)
         } else {
             None
         };
+        #[cfg(target_os = "linux")]
+        let mut dnsmasq_child: Option<Child> = None;
+        #[cfg(target_os = "linux")]
+        let mut dhclient_child: Option<(String, Child)> = None;
 
         let mut active_interface: Option<ResolvedPanInterface> = None;
         let startup_deadline =
@@ -205,16 +264,34 @@ impl BluetoothDiscovery {
             tokio::select! {
                 _ = cancel.cancelled() => {
                     #[cfg(target_os = "linux")]
-                    if let Some(mut child) = nap_server.take() {
-                        let _ = child.kill().await;
-                        let _ = child.wait().await;
+                    {
+                        if let Some(mut child) = nap_server.take() {
+                            let _ = child.kill().await;
+                            let _ = child.wait().await;
+                        }
+                        if let Some(mut child) = dnsmasq_child.take() {
+                            let _ = child.kill().await;
+                            let _ = child.wait().await;
+                        }
+                        if let Some((_, mut child)) = dhclient_child.take() {
+                            let _ = child.kill().await;
+                            let _ = child.wait().await;
+                        }
                     }
                     debug!("Bluetooth service cancelled");
                     return Ok(());
                 }
                 _ = interface_interval.tick() => {
                     #[cfg(target_os = "linux")]
-                    self.ensure_nap_server_running(&mut nap_server).await?;
+                    {
+                        self.ensure_nap_server_running(&mut nap_server).await?;
+                        if self.config.serve_nap && self.config.dhcp_enabled {
+                            let bridge = self.config.nap_bridge.trim().to_string();
+                            if !bridge.is_empty() {
+                                self.ensure_dnsmasq_running(&bridge, &mut dnsmasq_child).await?;
+                            }
+                        }
+                    }
 
                     let resolved = self.resolve_pan_interface().await?;
                     if active_interface != resolved {
@@ -232,6 +309,17 @@ impl BluetoothDiscovery {
                             (None, None) => {}
                         }
                         active_interface = resolved;
+                    }
+
+                    #[cfg(target_os = "linux")]
+                    if let Some(interface) = active_interface.as_ref() {
+                        if self.config.request_dhcp
+                            && self.config.connect_pan
+                            && !self.config.serve_nap
+                        {
+                            self.ensure_dhclient_running(&interface.name, &mut dhclient_child)
+                                .await?;
+                        }
                     }
 
                     if active_interface.is_none() && Instant::now() >= startup_deadline {
@@ -441,31 +529,21 @@ impl BluetoothDiscovery {
     #[cfg(target_os = "linux")]
     async fn start_nap_server(&self) -> Result<Child, BluetoothError> {
         let bridge = self.config.nap_bridge.trim();
-        let mut args = vec!["-s".to_string(), "nap".to_string()];
-        let mut bridge_in_use = None;
         if bridge.is_empty() {
-            warn!("serve_nap enabled with an empty nap_bridge; falling back to bt-network -s nap");
-        } else if self.sysfs_root.join(bridge).exists() {
-            args.push(bridge.to_string());
-            bridge_in_use = Some(bridge);
-        } else {
-            warn!(
-                bridge,
-                sysfs_root = %self.sysfs_root.display(),
-                "configured nap_bridge was not found; falling back to bt-network -s nap without a bridge"
-            );
+            return Err(BluetoothError::CommandFailed {
+                command: "bt-network",
+                message: "serve_nap requires a non-empty nap_bridge".to_string(),
+            });
         }
+        self.ensure_bridge_ready(bridge).await?;
 
         let child = Command::new(&self.bt_network_command)
-            .args(&args)
+            .args(["-s", "nap", bridge])
             .stdout(Stdio::null())
             .stderr(Stdio::null())
+            .kill_on_drop(true)
             .spawn()?;
-        if let Some(bridge) = bridge_in_use {
-            info!(bridge, "Bluetooth NAP server started");
-        } else {
-            info!("Bluetooth NAP server started without an explicit bridge");
-        }
+        info!(bridge, "Bluetooth NAP server started");
         Ok(child)
     }
 
@@ -487,6 +565,291 @@ impl BluetoothDiscovery {
             *child = Some(self.start_nap_server().await?);
         }
 
+        Ok(())
+    }
+
+    #[cfg(target_os = "linux")]
+    async fn ensure_bridge_ready(&self, bridge: &str) -> Result<(), BluetoothError> {
+        let bridge_path = self.sysfs_root.join(bridge);
+        if !bridge_path.exists() {
+            let output = Command::new(&self.ip_command)
+                .args(["link", "add", "name", bridge, "type", "bridge"])
+                .output()
+                .await?;
+            if !output.status.success() {
+                let msg = String::from_utf8_lossy(&output.stderr).trim().to_string();
+                if !msg.contains("File exists") && !msg.contains("already exists") {
+                    return Err(BluetoothError::CommandFailed {
+                        command: "ip",
+                        message: format!("failed to create bridge {bridge}: {msg}"),
+                    });
+                }
+            } else {
+                info!(bridge, "Bluetooth NAP bridge created");
+            }
+        }
+
+        let up_output = Command::new(&self.ip_command)
+            .args(["link", "set", bridge, "up"])
+            .output()
+            .await?;
+        if !up_output.status.success() {
+            let msg = String::from_utf8_lossy(&up_output.stderr)
+                .trim()
+                .to_string();
+            return Err(BluetoothError::CommandFailed {
+                command: "ip",
+                message: format!("failed to bring bridge {bridge} up: {msg}"),
+            });
+        }
+
+        let addr = self.config.nap_bridge_addr.trim();
+        if !addr.is_empty() {
+            let output = Command::new(&self.ip_command)
+                .args(["addr", "add", addr, "dev", bridge])
+                .output()
+                .await?;
+            if output.status.success() {
+                info!(bridge, %addr, "Bluetooth NAP bridge address assigned");
+            } else {
+                let msg = String::from_utf8_lossy(&output.stderr).trim().to_string();
+                if !msg.contains("File exists") {
+                    return Err(BluetoothError::CommandFailed {
+                        command: "ip",
+                        message: format!("failed to assign address {addr} to {bridge}: {msg}"),
+                    });
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    #[cfg(target_os = "linux")]
+    async fn install_bluetooth_masquerade(&self) -> Result<(), BluetoothError> {
+        let Some(nat_iface) = self.nat_interface.as_deref() else {
+            debug!("Bluetooth MASQUERADE not installed; no nat_interface configured");
+            return Ok(());
+        };
+        let (gateway, prefix) = match parse_ipv4_cidr(&self.config.nap_bridge_addr) {
+            Ok(v) => v,
+            Err(msg) => {
+                warn!(
+                    addr = %self.config.nap_bridge_addr,
+                    error = %msg,
+                    "Bluetooth MASQUERADE: invalid nap_bridge_addr; skipping"
+                );
+                return Ok(());
+            }
+        };
+        let (network, _) = subnet_network(gateway, prefix);
+        let subnet = format!("{network}/{prefix}");
+
+        let _ = Command::new("sysctl")
+            .args(["-w", "net.ipv4.ip_forward=1"])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .await;
+
+        let post_args = [
+            "-t",
+            "nat",
+            "-A",
+            "POSTROUTING",
+            "-s",
+            subnet.as_str(),
+            "-o",
+            nat_iface,
+            "-j",
+            "MASQUERADE",
+        ];
+        self.iptables_ensure(&post_args).await?;
+
+        let fwd_args = ["-A", "FORWARD", "-s", subnet.as_str(), "-j", "ACCEPT"];
+        self.iptables_ensure(&fwd_args).await?;
+
+        info!(%subnet, nat_iface, "Bluetooth MASQUERADE installed");
+        Ok(())
+    }
+
+    #[cfg(target_os = "linux")]
+    async fn iptables_ensure(&self, args: &[&str]) -> Result<(), BluetoothError> {
+        let mut check_args: Vec<&str> = args.to_vec();
+        if let Some(pos) = check_args.iter().position(|a| *a == "-A") {
+            check_args[pos] = "-C";
+        }
+        let check = Command::new(&self.iptables_command)
+            .args(&check_args)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .await?;
+        if check.success() {
+            return Ok(());
+        }
+        let output = Command::new(&self.iptables_command)
+            .args(args)
+            .output()
+            .await?;
+        if !output.status.success() {
+            return Err(BluetoothError::CommandFailed {
+                command: "iptables",
+                message: String::from_utf8_lossy(&output.stderr).trim().to_string(),
+            });
+        }
+        Ok(())
+    }
+
+    #[cfg(target_os = "linux")]
+    async fn resolve_dhcp_dns(&self) -> String {
+        if let Some(custom) = self.config.dhcp_dns.as_deref() {
+            let trimmed = custom.trim();
+            if !trimmed.is_empty() {
+                return trimmed.to_string();
+            }
+        }
+        match tokio::fs::read_to_string(&self.resolv_conf_path).await {
+            Ok(content) => {
+                let servers: Vec<String> = content
+                    .lines()
+                    .filter_map(|line| {
+                        let line = line.trim();
+                        if line.starts_with('#') {
+                            return None;
+                        }
+                        let stripped = line.strip_prefix("nameserver")?.trim();
+                        if stripped.is_empty() {
+                            return None;
+                        }
+                        Some(stripped.split_whitespace().next()?.to_string())
+                    })
+                    .collect();
+                if servers.is_empty() {
+                    "1.1.1.1,8.8.8.8".to_string()
+                } else {
+                    servers.join(",")
+                }
+            }
+            Err(err) => {
+                debug!(
+                    path = %self.resolv_conf_path.display(),
+                    %err,
+                    "unable to read resolv.conf; falling back to public DNS"
+                );
+                "1.1.1.1,8.8.8.8".to_string()
+            }
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    async fn start_dnsmasq(&self, bridge: &str) -> Result<Child, BluetoothError> {
+        let (gateway, prefix) = parse_ipv4_cidr(&self.config.nap_bridge_addr).map_err(|msg| {
+            BluetoothError::CommandFailed {
+                command: "dnsmasq",
+                message: msg,
+            }
+        })?;
+        let range = match self.config.dhcp_range.as_deref().map(str::trim) {
+            Some(explicit) if !explicit.is_empty() => explicit.to_string(),
+            _ => default_dhcp_range(gateway, prefix).ok_or_else(|| {
+                BluetoothError::CommandFailed {
+                    command: "dnsmasq",
+                    message: format!(
+                        "unable to derive DHCP range from {}",
+                        self.config.nap_bridge_addr
+                    ),
+                }
+            })?,
+        };
+        let lease = self.config.dhcp_lease_time.trim();
+        let dns = self.resolve_dhcp_dns().await;
+        let dhcp_range_arg = if lease.is_empty() {
+            format!("--dhcp-range={range}")
+        } else {
+            format!("--dhcp-range={range},{lease}")
+        };
+        let router_arg = format!("--dhcp-option=3,{gateway}");
+        let dns_arg = format!("--dhcp-option=6,{dns}");
+        let iface_arg = format!("--interface={bridge}");
+        let child = Command::new(&self.dnsmasq_command)
+            .args([
+                "--keep-in-foreground",
+                "--log-facility=-",
+                "--port=0",
+                "--bind-interfaces",
+                "--except-interface=lo",
+                iface_arg.as_str(),
+                dhcp_range_arg.as_str(),
+                router_arg.as_str(),
+                dns_arg.as_str(),
+            ])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .kill_on_drop(true)
+            .spawn()?;
+        info!(bridge, %range, %gateway, %dns, "Bluetooth DHCP server started");
+        Ok(child)
+    }
+
+    #[cfg(target_os = "linux")]
+    async fn ensure_dnsmasq_running(
+        &self,
+        bridge: &str,
+        child: &mut Option<Child>,
+    ) -> Result<(), BluetoothError> {
+        if let Some(existing) = child.as_mut() {
+            if let Some(status) = existing.try_wait()? {
+                warn!(?status, bridge, "Bluetooth DHCP server exited; restarting");
+                *child = Some(self.start_dnsmasq(bridge).await?);
+            }
+        } else {
+            *child = Some(self.start_dnsmasq(bridge).await?);
+        }
+        Ok(())
+    }
+
+    #[cfg(target_os = "linux")]
+    async fn start_dhclient(&self, interface: &str) -> Result<Child, BluetoothError> {
+        let child = Command::new(&self.dhclient_command)
+            .args(["-d", "-v", interface])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .kill_on_drop(true)
+            .spawn()?;
+        info!(interface, "Bluetooth DHCP client started");
+        Ok(child)
+    }
+
+    #[cfg(target_os = "linux")]
+    async fn ensure_dhclient_running(
+        &self,
+        interface: &str,
+        child: &mut Option<(String, Child)>,
+    ) -> Result<(), BluetoothError> {
+        if let Some((current, existing)) = child.as_mut() {
+            if current != interface {
+                warn!(
+                    previous = %current,
+                    new = %interface,
+                    "Bluetooth DHCP client interface changed; restarting"
+                );
+                let _ = existing.kill().await;
+                let _ = existing.wait().await;
+                *child = None;
+            }
+        }
+        if let Some((_, existing)) = child.as_mut() {
+            if let Some(status) = existing.try_wait()? {
+                warn!(
+                    ?status,
+                    interface, "Bluetooth DHCP client exited; restarting"
+                );
+                *child = Some((interface.to_string(), self.start_dhclient(interface).await?));
+            }
+        } else {
+            *child = Some((interface.to_string(), self.start_dhclient(interface).await?));
+        }
         Ok(())
     }
 
@@ -636,6 +999,69 @@ async fn list_pan_candidates(
     }
     candidates.sort_by(|a, b| a.name.cmp(&b.name));
     Ok(candidates)
+}
+
+#[cfg(any(test, target_os = "linux"))]
+fn parse_ipv4_cidr(cidr: &str) -> Result<(std::net::Ipv4Addr, u8), String> {
+    let trimmed = cidr.trim();
+    let (addr_str, prefix_str) = trimmed
+        .split_once('/')
+        .ok_or_else(|| format!("invalid CIDR {trimmed:?} (expected IPV4/PREFIX)"))?;
+    let addr: std::net::Ipv4Addr = addr_str
+        .parse()
+        .map_err(|err| format!("invalid IPv4 in {trimmed:?}: {err}"))?;
+    let prefix: u8 = prefix_str
+        .parse()
+        .map_err(|err| format!("invalid prefix in {trimmed:?}: {err}"))?;
+    if prefix > 32 {
+        return Err(format!("prefix out of range in {trimmed:?}"));
+    }
+    Ok((addr, prefix))
+}
+
+#[cfg(any(test, target_os = "linux"))]
+fn subnet_network(addr: std::net::Ipv4Addr, prefix: u8) -> (std::net::Ipv4Addr, u32) {
+    let octets = u32::from(addr);
+    let mask = if prefix == 0 {
+        0
+    } else {
+        u32::MAX << (32 - prefix)
+    };
+    (std::net::Ipv4Addr::from(octets & mask), mask)
+}
+
+#[cfg(any(test, target_os = "linux"))]
+fn default_dhcp_range(gateway: std::net::Ipv4Addr, prefix: u8) -> Option<String> {
+    if prefix >= 31 {
+        return None;
+    }
+    let (network, mask) = subnet_network(gateway, prefix);
+    let network_int = u32::from(network);
+    let broadcast_int = network_int | !mask;
+    let mut start = network_int.saturating_add(10);
+    let mut end = broadcast_int.saturating_sub(10);
+    if start >= end {
+        start = network_int.saturating_add(2);
+        end = broadcast_int.saturating_sub(1);
+    }
+    if start >= end {
+        return None;
+    }
+    let gw_int = u32::from(gateway);
+    if start == gw_int {
+        start = start.saturating_add(1);
+    }
+    if end == gw_int {
+        end = end.saturating_sub(1);
+    }
+    if start >= end {
+        return None;
+    }
+    Some(format!(
+        "{},{}",
+        std::net::Ipv4Addr::from(start),
+        std::net::Ipv4Addr::from(end)
+    ))
 }
 
 #[cfg(any(test, target_os = "linux"))]
@@ -1078,8 +1504,21 @@ address: aa-bb-cc-dd-ee-03, not connected, not favourite, not paired, name: \"PI
             peer_discovery_interval_ms: 10,
             startup_timeout_ms: 500,
             bluetoothctl_timeout_s: 1,
+            request_dhcp: false,
             ..Default::default()
         };
+
+        let fake_iptables = fake_root.join("iptables");
+        fs::write(&fake_iptables, "#!/bin/sh\nexit 0\n").unwrap();
+        make_executable(&fake_iptables);
+        let fake_dnsmasq = fake_root.join("dnsmasq");
+        fs::write(&fake_dnsmasq, "#!/bin/sh\nexit 0\n").unwrap();
+        make_executable(&fake_dnsmasq);
+        let fake_dhclient = fake_root.join("dhclient");
+        fs::write(&fake_dhclient, "#!/bin/sh\nexit 0\n").unwrap();
+        make_executable(&fake_dhclient);
+        let fake_resolv = fake_root.join("resolv.conf");
+        fs::write(&fake_resolv, "nameserver 1.1.1.1\n").unwrap();
 
         let (svc, mut rx) = BluetoothDiscovery::new_with_system_paths(
             config,
@@ -1089,6 +1528,11 @@ address: aa-bb-cc-dd-ee-03, not connected, not favourite, not paired, name: \"PI
             fake_ip,
             fake_bluetoothctl,
             fake_bt_network,
+            fake_iptables,
+            fake_dnsmasq,
+            fake_dhclient,
+            fake_resolv,
+            None::<String>,
         )
         .unwrap();
         let cancel = CancellationToken::new();
@@ -1139,8 +1583,21 @@ address: aa-bb-cc-dd-ee-03, not connected, not favourite, not paired, name: \"PI
             poll_interval_ms: 10,
             peer_discovery_interval_ms: 10,
             startup_timeout_ms: 500,
+            request_dhcp: false,
             ..Default::default()
         };
+
+        let fake_iptables = fake_root.join("iptables");
+        fs::write(&fake_iptables, "#!/bin/sh\nexit 0\n").unwrap();
+        make_executable(&fake_iptables);
+        let fake_dnsmasq = fake_root.join("dnsmasq");
+        fs::write(&fake_dnsmasq, "#!/bin/sh\nexit 0\n").unwrap();
+        make_executable(&fake_dnsmasq);
+        let fake_dhclient = fake_root.join("dhclient");
+        fs::write(&fake_dhclient, "#!/bin/sh\nexit 0\n").unwrap();
+        make_executable(&fake_dhclient);
+        let fake_resolv = fake_root.join("resolv.conf");
+        fs::write(&fake_resolv, "nameserver 1.1.1.1\n").unwrap();
 
         let (svc, mut rx) = BluetoothDiscovery::new_with_system_paths(
             config,
@@ -1150,6 +1607,11 @@ address: aa-bb-cc-dd-ee-03, not connected, not favourite, not paired, name: \"PI
             fake_ip,
             fake_bluetoothctl,
             fake_bt_network,
+            fake_iptables,
+            fake_dnsmasq,
+            fake_dhclient,
+            fake_resolv,
+            None::<String>,
         )
         .unwrap();
         let cancel = CancellationToken::new();
@@ -1172,8 +1634,8 @@ address: aa-bb-cc-dd-ee-03, not connected, not favourite, not paired, name: \"PI
 
     #[cfg(target_os = "linux")]
     #[tokio::test]
-    async fn start_nap_server_falls_back_when_bridge_is_missing() {
-        let fake_root = unique_test_dir("pim-bt-fake-root-nap-fallback");
+    async fn start_nap_server_auto_creates_bridge_and_invokes_bt_network_with_bridge() {
+        let fake_root = unique_test_dir("pim-bt-fake-root-nap-auto");
         fs::create_dir_all(fake_root.join("sysfs")).unwrap();
 
         let fake_bt_network = fake_root.join("bt-network");
@@ -1189,15 +1651,35 @@ address: aa-bb-cc-dd-ee-03, not connected, not favourite, not paired, name: \"PI
         let fake_bluetoothctl = fake_root.join("bluetoothctl");
         fs::write(&fake_bluetoothctl, "#!/bin/sh\nexit 0\n").unwrap();
         let fake_ip = fake_root.join("ip");
-        fs::write(&fake_ip, "#!/bin/sh\nexit 0\n").unwrap();
+        let fake_ip_log = fake_root.join("ip-invocations");
+        fs::write(
+            &fake_ip,
+            format!(
+                "#!/bin/sh\nprintf '%s\\n' \"$*\" >> {log}\nexit 0\n",
+                log = fake_ip_log.display(),
+            ),
+        )
+        .unwrap();
+        let fake_iptables = fake_root.join("iptables");
+        fs::write(&fake_iptables, "#!/bin/sh\nexit 0\n").unwrap();
+        let fake_dnsmasq = fake_root.join("dnsmasq");
+        fs::write(&fake_dnsmasq, "#!/bin/sh\nexit 0\n").unwrap();
+        let fake_dhclient = fake_root.join("dhclient");
+        fs::write(&fake_dhclient, "#!/bin/sh\nexit 0\n").unwrap();
+        let fake_resolv = fake_root.join("resolv.conf");
+        fs::write(&fake_resolv, "nameserver 1.1.1.1\n").unwrap();
         make_executable(&fake_bt_network);
         make_executable(&fake_bluetoothctl);
         make_executable(&fake_ip);
+        make_executable(&fake_iptables);
+        make_executable(&fake_dnsmasq);
+        make_executable(&fake_dhclient);
 
         let config = BluetoothConfig {
             serve_nap: true,
             connect_pan: false,
             nap_bridge: "br-bt".into(),
+            nap_bridge_addr: "192.168.44.1/24".into(),
             ..Default::default()
         };
 
@@ -1209,6 +1691,11 @@ address: aa-bb-cc-dd-ee-03, not connected, not favourite, not paired, name: \"PI
             fake_ip,
             fake_bluetoothctl,
             fake_bt_network,
+            fake_iptables,
+            fake_dnsmasq,
+            fake_dhclient,
+            fake_resolv,
+            None::<String>,
         )
         .unwrap();
 
@@ -1216,9 +1703,100 @@ address: aa-bb-cc-dd-ee-03, not connected, not favourite, not paired, name: \"PI
         child.wait().await.unwrap();
 
         let args = fs::read_to_string(fake_args).unwrap();
-        assert_eq!(args, "-s\nnap\n");
+        assert_eq!(args, "-s\nnap\nbr-bt\n");
+
+        let ip_log = fs::read_to_string(&fake_ip_log).unwrap();
+        assert!(
+            ip_log.contains("link add name br-bt type bridge"),
+            "expected bridge creation in ip log: {ip_log}"
+        );
+        assert!(
+            ip_log.contains("link set br-bt up"),
+            "expected bridge up in ip log: {ip_log}"
+        );
+        assert!(
+            ip_log.contains("addr add 192.168.44.1/24 dev br-bt"),
+            "expected address assignment in ip log: {ip_log}"
+        );
 
         fs::remove_dir_all(fake_root).unwrap();
+    }
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn start_nap_server_rejects_empty_bridge() {
+        let fake_root = unique_test_dir("pim-bt-fake-root-nap-empty");
+        fs::create_dir_all(fake_root.join("sysfs")).unwrap();
+
+        let fake_bt_network = fake_root.join("bt-network");
+        fs::write(&fake_bt_network, "#!/bin/sh\nexit 0\n").unwrap();
+        let fake_bluetoothctl = fake_root.join("bluetoothctl");
+        fs::write(&fake_bluetoothctl, "#!/bin/sh\nexit 0\n").unwrap();
+        let fake_ip = fake_root.join("ip");
+        fs::write(&fake_ip, "#!/bin/sh\nexit 0\n").unwrap();
+        let fake_iptables = fake_root.join("iptables");
+        fs::write(&fake_iptables, "#!/bin/sh\nexit 0\n").unwrap();
+        let fake_dnsmasq = fake_root.join("dnsmasq");
+        fs::write(&fake_dnsmasq, "#!/bin/sh\nexit 0\n").unwrap();
+        let fake_dhclient = fake_root.join("dhclient");
+        fs::write(&fake_dhclient, "#!/bin/sh\nexit 0\n").unwrap();
+        let fake_resolv = fake_root.join("resolv.conf");
+        fs::write(&fake_resolv, "nameserver 1.1.1.1\n").unwrap();
+        make_executable(&fake_bt_network);
+        make_executable(&fake_bluetoothctl);
+        make_executable(&fake_ip);
+        make_executable(&fake_iptables);
+        make_executable(&fake_dnsmasq);
+        make_executable(&fake_dhclient);
+
+        let config = BluetoothConfig {
+            serve_nap: true,
+            connect_pan: false,
+            nap_bridge: "".into(),
+            ..Default::default()
+        };
+
+        let (svc, _rx) = BluetoothDiscovery::new_with_system_paths(
+            config,
+            9100,
+            Vec::new(),
+            fake_root.join("sysfs"),
+            fake_ip,
+            fake_bluetoothctl,
+            fake_bt_network,
+            fake_iptables,
+            fake_dnsmasq,
+            fake_dhclient,
+            fake_resolv,
+            None::<String>,
+        )
+        .unwrap();
+
+        let err = svc.start_nap_server().await.unwrap_err();
+        match err {
+            BluetoothError::CommandFailed { command, message } => {
+                assert_eq!(command, "bt-network");
+                assert!(message.contains("non-empty nap_bridge"), "got: {message}");
+            }
+            other => panic!("expected CommandFailed, got {other:?}"),
+        }
+
+        fs::remove_dir_all(fake_root).unwrap();
+    }
+
+    #[test]
+    fn parse_ipv4_cidr_accepts_common_cases() {
+        let (ip, prefix) = parse_ipv4_cidr("192.168.44.1/24").unwrap();
+        assert_eq!(ip, std::net::Ipv4Addr::new(192, 168, 44, 1));
+        assert_eq!(prefix, 24);
+        assert!(parse_ipv4_cidr("not a cidr").is_err());
+        assert!(parse_ipv4_cidr("192.168.44.1/33").is_err());
+    }
+
+    #[test]
+    fn default_dhcp_range_keeps_gateway_out_of_pool() {
+        let range = default_dhcp_range(std::net::Ipv4Addr::new(192, 168, 44, 1), 24).unwrap();
+        assert_eq!(range, "192.168.44.10,192.168.44.245");
     }
 
     fn unique_test_dir(prefix: &str) -> PathBuf {

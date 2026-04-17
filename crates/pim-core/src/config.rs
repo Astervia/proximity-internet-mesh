@@ -244,6 +244,26 @@ pub struct BluetoothConfig {
     /// Linux bridge/interface to expose through the local NAP server.
     #[serde(default = "default_bluetooth_nap_bridge")]
     pub nap_bridge: String,
+    /// IPv4 address/CIDR assigned to `nap_bridge` when the daemon manages it.
+    #[serde(default = "default_bluetooth_nap_bridge_addr")]
+    pub nap_bridge_addr: String,
+    /// Run a daemon-supervised DHCP server on `nap_bridge` when serving NAP.
+    #[serde(default = "default_bluetooth_dhcp_enabled")]
+    pub dhcp_enabled: bool,
+    /// Explicit DHCP range (`start,end`). When unset, derived from `nap_bridge_addr`.
+    #[serde(default)]
+    pub dhcp_range: Option<String>,
+    /// DHCP lease time passed to dnsmasq (e.g. `"12h"`, `"infinite"`).
+    #[serde(default = "default_bluetooth_dhcp_lease_time")]
+    pub dhcp_lease_time: String,
+    /// Comma-separated DNS server list advertised to DHCP clients. When unset,
+    /// inherited from the host's `/etc/resolv.conf` at runtime.
+    #[serde(default)]
+    pub dhcp_dns: Option<String>,
+    /// Automatically request DHCP on the resolved PAN interface when acting as a
+    /// Linux PAN client (`connect_pan = true`, `serve_nap = false`).
+    #[serde(default = "default_bluetooth_request_dhcp")]
+    pub request_dhcp: bool,
     /// Automatically discover peer IPs from the PAN interface neighbor table.
     #[serde(default = "default_bluetooth_auto_discover_peers")]
     pub auto_discover_peers: bool,
@@ -397,6 +417,22 @@ fn default_bluetooth_nap_bridge() -> String {
     "br-bt".into()
 }
 
+fn default_bluetooth_nap_bridge_addr() -> String {
+    "192.168.44.1/24".into()
+}
+
+fn default_bluetooth_dhcp_enabled() -> bool {
+    true
+}
+
+fn default_bluetooth_dhcp_lease_time() -> String {
+    "12h".into()
+}
+
+fn default_bluetooth_request_dhcp() -> bool {
+    true
+}
+
 fn default_bluetooth_auto_discover_peers() -> bool {
     true
 }
@@ -530,6 +566,12 @@ impl Default for BluetoothConfig {
             connect_pan: default_bluetooth_connect_pan(),
             serve_nap: false,
             nap_bridge: default_bluetooth_nap_bridge(),
+            nap_bridge_addr: default_bluetooth_nap_bridge_addr(),
+            dhcp_enabled: default_bluetooth_dhcp_enabled(),
+            dhcp_range: None,
+            dhcp_lease_time: default_bluetooth_dhcp_lease_time(),
+            dhcp_dns: None,
+            request_dhcp: default_bluetooth_request_dhcp(),
             auto_discover_peers: default_bluetooth_auto_discover_peers(),
             poll_interval_ms: default_bluetooth_poll_interval_ms(),
             scan_interval_ms: default_bluetooth_scan_interval_ms(),
@@ -894,6 +936,12 @@ connect_method = "pin:12345670"
         assert!(config.bluetooth.connect_pan);
         assert!(!config.bluetooth.serve_nap);
         assert_eq!(config.bluetooth.nap_bridge, "br-bt");
+        assert_eq!(config.bluetooth.nap_bridge_addr, "192.168.44.1/24");
+        assert!(config.bluetooth.dhcp_enabled);
+        assert!(config.bluetooth.dhcp_range.is_none());
+        assert_eq!(config.bluetooth.dhcp_lease_time, "12h");
+        assert!(config.bluetooth.dhcp_dns.is_none());
+        assert!(config.bluetooth.request_dhcp);
         assert!(config.bluetooth.auto_discover_peers);
         assert_eq!(config.bluetooth.poll_interval_ms, 2_000);
         assert_eq!(config.bluetooth.scan_interval_ms, 5_000);

@@ -273,6 +273,15 @@ local_alias = "PIM-gateway-a"
 connect_pan = false
 serve_nap = true
 nap_bridge = "br-bt"
+# IPv4 address/CIDR assigned to nap_bridge when the daemon creates it.
+nap_bridge_addr = "192.168.44.1/24"
+# Run a daemon-supervised dnsmasq DHCP server on the bridge.
+dhcp_enabled = true
+# dhcp_range = "192.168.44.10,192.168.44.200" # optional; derived from nap_bridge_addr when unset.
+dhcp_lease_time = "12h"
+# dhcp_dns = "1.1.1.1,8.8.8.8"   # optional; inherits /etc/resolv.conf when unset.
+# Gateway serves DHCP, so it doesn't need to request one itself.
+request_dhcp = false
 auto_discover_peers = true
 poll_interval_ms = 2000
 scan_interval_ms = 5000
@@ -285,9 +294,11 @@ startup_timeout_ms = 15000
 Operational notes:
 
 - `[bluetooth].interface` is a preferred interface hint on Linux; `"auto"` lets the daemon resolve a ready `bnep*`, `enx*`, or configured bridge interface dynamically
-- `serve_nap = true` starts a daemon-managed Linux NAP server and prefers `nap_bridge` when that bridge exists
-- if `nap_bridge` is absent on Linux, the daemon falls back to `bt-network -s nap` without an explicit bridge
-- `connect_pan = false` keeps a Linux gateway from also behaving like an outbound PAN client by default
+- `serve_nap = true` starts a daemon-managed Linux NAP server; the daemon auto-creates `nap_bridge` (e.g. `br-bt`), brings it up, and assigns `nap_bridge_addr` when missing
+- when `dhcp_enabled = true`, the daemon supervises a `dnsmasq` DHCP server on the bridge so PAN clients get an address automatically; the DHCP range and DNS servers are derived from `nap_bridge_addr` and `/etc/resolv.conf` when not set explicitly
+- when `gateway.enabled = true`, the daemon installs iptables MASQUERADE/FORWARD rules from the derived Bluetooth subnet to `gateway.nat_interface` so client traffic can reach the internet
+- `connect_pan = true` lets a Linux gateway also act as an outbound PAN client to reach peer gateways
+- on PAN clients (`serve_nap = false`, `request_dhcp = true`), the daemon runs `dhclient -d -v <interface>` automatically once the PAN interface comes up
 - PIM waits for a PAN-facing interface to become ready
 - Linux uses `bluetoothctl`; macOS uses the host Bluetooth stack and expects `blueutil` for radio discovery and pairing automation
 - once the PAN link exists, PIM reads neighbor entries from `ip neigh show dev <interface>` on Linux or `arp -an -i <interface>` on macOS

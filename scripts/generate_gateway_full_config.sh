@@ -217,9 +217,12 @@ generated_at="$(date -u +'%Y-%m-%dT%H:%M:%SZ' 2>/dev/null || printf '%s' unknown
 detect_note_nat="$(shell_quote_comment "${nat_interface}")"
 detect_note_wifi="$(shell_quote_comment "${wifi_interface}")"
 detect_note_bt="$(shell_quote_comment "${bt_interface}")"
-bt_connect_pan="false"
+bt_connect_pan="true"
 bt_serve_nap="true"
 bt_nap_bridge="br-bt"
+bt_nap_bridge_addr="192.168.44.1/24"
+bt_dhcp_enabled="true"
+bt_request_dhcp="false"
 
 if is_macos; then
     interface_name="utun0"
@@ -233,6 +236,8 @@ if is_macos; then
     bt_connect_pan="true"
     bt_serve_nap="false"
     bt_nap_bridge="bridge0"
+    bt_dhcp_enabled="false"
+    bt_request_dhcp="false"
 else
     interface_name="pim0"
     review_cmd_1="#   ip route get 1.1.1.1"
@@ -313,6 +318,15 @@ local_alias = "PIM-${node_name}"
 connect_pan = ${bt_connect_pan}
 serve_nap = ${bt_serve_nap}
 nap_bridge = "${bt_nap_bridge}"
+# IPv4 address assigned to nap_bridge when the daemon creates it.
+nap_bridge_addr = "${bt_nap_bridge_addr}"
+# Run a daemon-supervised dnsmasq DHCP server on the bridge when serving NAP.
+dhcp_enabled = ${bt_dhcp_enabled}
+# dhcp_range = "192.168.44.10,192.168.44.200"  # optional override; derived from nap_bridge_addr when unset.
+dhcp_lease_time = "12h"
+# dhcp_dns = "1.1.1.1,8.8.8.8"  # optional; inherited from /etc/resolv.conf when unset.
+# Automatically run dhclient on the PAN interface when acting as a PAN client.
+request_dhcp = ${bt_request_dhcp}
 auto_discover_peers = true
 poll_interval_ms = 2000
 scan_interval_ms = 5000

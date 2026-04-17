@@ -3017,6 +3017,46 @@ fn bt_network_command() -> PathBuf {
     bt_network_command_from_env(std::env::var_os("PIM_BLUETOOTH_BT_NETWORK_COMMAND"))
 }
 
+fn bluetooth_iptables_command_from_env(value: Option<std::ffi::OsString>) -> PathBuf {
+    value
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(pim_bluetooth::DEFAULT_IPTABLES_COMMAND))
+}
+
+fn bluetooth_iptables_command() -> PathBuf {
+    bluetooth_iptables_command_from_env(std::env::var_os("PIM_BLUETOOTH_IPTABLES_COMMAND"))
+}
+
+fn bluetooth_dnsmasq_command_from_env(value: Option<std::ffi::OsString>) -> PathBuf {
+    value
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(pim_bluetooth::DEFAULT_DNSMASQ_COMMAND))
+}
+
+fn bluetooth_dnsmasq_command() -> PathBuf {
+    bluetooth_dnsmasq_command_from_env(std::env::var_os("PIM_BLUETOOTH_DNSMASQ_COMMAND"))
+}
+
+fn bluetooth_dhclient_command_from_env(value: Option<std::ffi::OsString>) -> PathBuf {
+    value
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(pim_bluetooth::DEFAULT_DHCLIENT_COMMAND))
+}
+
+fn bluetooth_dhclient_command() -> PathBuf {
+    bluetooth_dhclient_command_from_env(std::env::var_os("PIM_BLUETOOTH_DHCLIENT_COMMAND"))
+}
+
+fn bluetooth_resolv_conf_path_from_env(value: Option<std::ffi::OsString>) -> PathBuf {
+    value
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(pim_bluetooth::DEFAULT_RESOLV_CONF))
+}
+
+fn bluetooth_resolv_conf_path() -> PathBuf {
+    bluetooth_resolv_conf_path_from_env(std::env::var_os("PIM_BLUETOOTH_RESOLV_CONF"))
+}
+
 #[cfg(any(test, target_os = "macos"))]
 fn macos_bluetooth_config_warnings(config: &pim_core::BluetoothConfig) -> Vec<String> {
     let mut warnings = Vec::new();
@@ -3425,16 +3465,32 @@ async fn main() -> Result<()> {
         let bluetooth_ip_command = bluetooth_ip_command();
         let bluetoothctl_command = bluetoothctl_command();
         let bt_network_command = bt_network_command();
+        let bluetooth_iptables_command = bluetooth_iptables_command();
+        let bluetooth_dnsmasq_command = bluetooth_dnsmasq_command();
+        let bluetooth_dhclient_command = bluetooth_dhclient_command();
+        let bluetooth_resolv_conf_path = bluetooth_resolv_conf_path();
+        let bluetooth_nat_interface = config
+            .gateway
+            .enabled
+            .then(|| config.gateway.nat_interface.clone());
         info!(
             interface = %bluetooth_config.interface,
             connect_pan = bluetooth_config.connect_pan,
             serve_nap = bluetooth_config.serve_nap,
             nap_bridge = %bluetooth_config.nap_bridge,
+            nap_bridge_addr = %bluetooth_config.nap_bridge_addr,
+            dhcp_enabled = bluetooth_config.dhcp_enabled,
+            request_dhcp = bluetooth_config.request_dhcp,
             static_peers = configured_targets.bluetooth_static_targets.len(),
             sysfs_root = %bluetooth_sysfs_root.display(),
             ip_command = %bluetooth_ip_command.display(),
             bluetoothctl_command = %bluetoothctl_command.display(),
             bt_network_command = %bt_network_command.display(),
+            iptables_command = %bluetooth_iptables_command.display(),
+            dnsmasq_command = %bluetooth_dnsmasq_command.display(),
+            dhclient_command = %bluetooth_dhclient_command.display(),
+            resolv_conf_path = %bluetooth_resolv_conf_path.display(),
+            nat_interface = bluetooth_nat_interface.as_deref().unwrap_or("<disabled>"),
             local_alias = %bluetooth_config.local_alias,
             "starting Bluetooth PAN watcher"
         );
@@ -3446,6 +3502,11 @@ async fn main() -> Result<()> {
             bluetooth_ip_command,
             bluetoothctl_command,
             bt_network_command,
+            bluetooth_iptables_command,
+            bluetooth_dnsmasq_command,
+            bluetooth_dhclient_command,
+            bluetooth_resolv_conf_path,
+            bluetooth_nat_interface,
         )
         .context("failed to construct Bluetooth PAN watcher")?;
         let c = cancel.clone();
