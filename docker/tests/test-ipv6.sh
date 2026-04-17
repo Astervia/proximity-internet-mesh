@@ -57,9 +57,20 @@ assert_cmd_output \
     "8000::/1 dev pim0" \
     in_svc "$COMPOSE_FILE" client ip -6 route show
 
-assert_logs_contain \
-    "$COMPOSE_FILE" gateway "NAT66 outbound" \
-    "gateway logs show outbound IPv6 NAT activity"
+# Force at least one IPv6 packet into the mesh so the gateway NAT66 path has
+# something observable to process even if end-to-end TCP later stalls.
+in_svc "$COMPOSE_FILE" client bash -lc \
+    "ping -6 -c 1 -W 2 2001:db8:1::80 >/dev/null 2>&1 || true" \
+    >/dev/null 2>&1 || true
+
+assert_cmd \
+    "gateway logs show outbound IPv6 NAT activity" \
+    bash -lc "for i in 1 2 3 4 5; do \
+        docker compose -f '$COMPOSE_DIR/$COMPOSE_FILE' logs --no-color gateway 2>/dev/null \
+            | grep -Fq 'NAT66 outbound' && exit 0; \
+        sleep 1; \
+    done; \
+    exit 1"
 
 if in_svc "$COMPOSE_FILE" client curl -g -6 -sf --max-time 15 "$UPLINK_HTTP_V6" >/dev/null 2>&1; then
     log_ok "client reaches simulated IPv6 internet through the mesh"
