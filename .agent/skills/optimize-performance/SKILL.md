@@ -6,6 +6,32 @@ Use this skill when identifying and implementing performance optimizations in th
 
 Standardize the workflow for making performance improvements (e.g., zero-copy parsing, replacing blocking I/O with async I/O, optimizing cryptographic operations) while ensuring code readability, safety, and proper documentation.
 
+## PR Formatting
+
+When creating a performance-focused PR, adhere to the following template:
+
+**Title Format:**
+- `⚡ Bolt: [performance improvement]`
+
+**PR Description Sections:**
+Must include the following exact sections:
+- `What`
+- `Why`
+- `Impact`
+- `Measurement`
+
+## Logging to `.jules/bolt.md`
+
+Whenever you complete a performance optimization task that involves a critical performance learning, you must document it in `.jules/bolt.md`. Do not journal routine fixes.
+
+**Format for logging:**
+
+```markdown
+## YYYY-MM-DD - [Title]
+**Learning:** [Insight]
+**Action:** [How to apply next time]
+```
+
 ## Workflow
 
 1. **Identify the Bottleneck**
