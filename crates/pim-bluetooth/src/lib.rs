@@ -441,28 +441,31 @@ impl BluetoothDiscovery {
     #[cfg(target_os = "linux")]
     async fn start_nap_server(&self) -> Result<Child, BluetoothError> {
         let bridge = self.config.nap_bridge.trim();
+        let mut args = vec!["-s".to_string(), "nap".to_string()];
+        let mut bridge_in_use = None;
         if bridge.is_empty() {
-            return Err(BluetoothError::CommandFailed {
-                command: "bt-network",
-                message: "serve_nap enabled but nap_bridge is empty".into(),
-            });
-        }
-        if !self.sysfs_root.join(bridge).exists() {
-            return Err(BluetoothError::CommandFailed {
-                command: "bt-network",
-                message: format!(
-                    "serve_nap enabled but configured nap_bridge '{bridge}' was not found under {}; create the bridge first or disable serve_nap",
-                    self.sysfs_root.display(),
-                ),
-            });
+            warn!("serve_nap enabled with an empty nap_bridge; falling back to bt-network -s nap");
+        } else if self.sysfs_root.join(bridge).exists() {
+            args.push(bridge.to_string());
+            bridge_in_use = Some(bridge);
+        } else {
+            warn!(
+                bridge,
+                sysfs_root = %self.sysfs_root.display(),
+                "configured nap_bridge was not found; falling back to bt-network -s nap without a bridge"
+            );
         }
 
         let child = Command::new(&self.bt_network_command)
-            .args(["-s", "nap", bridge])
+            .args(&args)
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .spawn()?;
-        info!(bridge, "Bluetooth NAP server started");
+        if let Some(bridge) = bridge_in_use {
+            info!(bridge, "Bluetooth NAP server started");
+        } else {
+            info!("Bluetooth NAP server started without an explicit bridge");
+        }
         Ok(child)
     }
 
@@ -1164,6 +1167,57 @@ address: aa-bb-cc-dd-ee-03, not connected, not favourite, not paired, name: \"PI
 
         cancel.cancel();
         runner.await.unwrap().unwrap();
+        fs::remove_dir_all(fake_root).unwrap();
+    }
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn start_nap_server_falls_back_when_bridge_is_missing() {
+        let fake_root = unique_test_dir("pim-bt-fake-root-nap-fallback");
+        fs::create_dir_all(fake_root.join("sysfs")).unwrap();
+
+        let fake_bt_network = fake_root.join("bt-network");
+        let fake_args = fake_root.join("bt-network-args");
+        fs::write(
+            &fake_bt_network,
+            format!(
+                "#!/bin/sh\nprintf '%s\\n' \"$@\" > {args}\nexit 0\n",
+                args = fake_args.display(),
+            ),
+        )
+        .unwrap();
+        let fake_bluetoothctl = fake_root.join("bluetoothctl");
+        fs::write(&fake_bluetoothctl, "#!/bin/sh\nexit 0\n").unwrap();
+        let fake_ip = fake_root.join("ip");
+        fs::write(&fake_ip, "#!/bin/sh\nexit 0\n").unwrap();
+        make_executable(&fake_bt_network);
+        make_executable(&fake_bluetoothctl);
+        make_executable(&fake_ip);
+
+        let config = BluetoothConfig {
+            serve_nap: true,
+            connect_pan: false,
+            nap_bridge: "br-bt".into(),
+            ..Default::default()
+        };
+
+        let (svc, _rx) = BluetoothDiscovery::new_with_system_paths(
+            config,
+            9100,
+            Vec::new(),
+            fake_root.join("sysfs"),
+            fake_ip,
+            fake_bluetoothctl,
+            fake_bt_network,
+        )
+        .unwrap();
+
+        let mut child = svc.start_nap_server().await.unwrap();
+        child.wait().await.unwrap();
+
+        let args = fs::read_to_string(fake_args).unwrap();
+        assert_eq!(args, "-s\nnap\n");
+
         fs::remove_dir_all(fake_root).unwrap();
     }
 
