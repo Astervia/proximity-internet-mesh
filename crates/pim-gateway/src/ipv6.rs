@@ -238,6 +238,20 @@ impl GatewayEngineV6 {
             Ok(())
         }
     }
+
+    /// Reverse of `setup_masquerade`: removes the `ip6tables` INPUT DROP
+    /// rules. Best-effort; errors are logged, not propagated. Safe to call
+    /// even when setup was never run.
+    pub fn teardown_masquerade(&self) {
+        #[cfg(target_os = "linux")]
+        {
+            for proto in ["tcp", "udp"] {
+                let drop_args = input_drop_args_v6(proto, &self.internet_iface);
+                crate::iptables_delete_if_present("ip6tables", &drop_args);
+            }
+            debug!(iface = %self.internet_iface, "ip6tables INPUT DROP removed");
+        }
+    }
 }
 
 #[cfg(target_os = "linux")]
