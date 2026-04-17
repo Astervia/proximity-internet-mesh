@@ -4,6 +4,7 @@ version = "0.1.1"
 edition = "2021"
 
 [dependencies]
+libc = { workspace = true }
 pim-core = { workspace = true }
 pim-protocol = { workspace = true }
 tokio = { workspace = true }

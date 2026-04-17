@@ -1,11 +1,12 @@
 use std::collections::HashMap;
-use std::net::SocketAddr;
+use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddrV6};
+use std::os::fd::AsRawFd;
 use std::sync::Arc;
 
 use async_trait::async_trait;
 use bytes::BytesMut;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::{TcpListener, TcpStream};
+use tokio::net::{TcpListener, TcpSocket, TcpStream};
 use tokio::sync::{mpsc, Mutex, RwLock};
 use tracing::{debug, error, info, warn};
 
@@ -49,8 +50,11 @@ impl TcpTransport {
         let (incoming_tx, incoming_rx) = mpsc::channel(256);
 
         // Bind first so we know the actual address (important for port 0)
-        let listener = TcpListener::bind(listen_addr).await?;
-        let actual_addr = listener.local_addr()?;
+        let listeners = bind_listeners(listen_addr).await?;
+        let actual_addr = listeners
+            .first()
+            .and_then(|listener| listener.local_addr().ok())
+            .ok_or_else(|| TransportError::ConnectionFailed("no TCP listeners bound".into()))?;
 
         let transport = Arc::new(Self {
             peers: Arc::new(RwLock::new(HashMap::new())),
@@ -63,25 +67,28 @@ impl TcpTransport {
         info!(listen_addr = %actual_addr, "transport listening");
 
         let t = transport.clone();
-        tokio::spawn(async move {
-            loop {
-                match listener.accept().await {
-                    Ok((stream, addr)) => {
-                        debug!(%addr, "accepted connection");
-                        let t2 = t.clone();
-                        tokio::spawn(async move {
-                            if let Err(e) = t2.handle_incoming(stream).await {
-                                warn!(%addr, "incoming connection failed: {e}");
-                            }
-                        });
-                    }
-                    Err(e) => {
-                        error!("listener accept failed: {e}");
-                        break;
+        for listener in listeners {
+            let t = t.clone();
+            tokio::spawn(async move {
+                loop {
+                    match listener.accept().await {
+                        Ok((stream, addr)) => {
+                            debug!(%addr, "accepted connection");
+                            let t2 = t.clone();
+                            tokio::spawn(async move {
+                                if let Err(e) = t2.handle_incoming(stream).await {
+                                    warn!(%addr, "incoming connection failed: {e}");
+                                }
+                            });
+                        }
+                        Err(e) => {
+                            error!("listener accept failed: {e}");
+                            break;
+                        }
                     }
                 }
-            }
-        });
+            });
+        }
 
         Ok(transport)
     }
@@ -205,6 +212,67 @@ impl TcpTransport {
             peers.insert(new_id, writer);
             debug!(%old_id, %new_id, "peer renamed in transport");
         }
+    }
+}
+
+async fn bind_listeners(listen_addr: SocketAddr) -> Result<Vec<TcpListener>, TransportError> {
+    let primary = TcpListener::bind(listen_addr).await?;
+    let actual_addr = primary.local_addr()?;
+    let mut listeners = vec![primary];
+
+    if let Some(secondary_addr) = dual_stack_secondary_addr(actual_addr) {
+        match bind_secondary_listener(secondary_addr) {
+            Ok(listener) => listeners.push(listener),
+            Err(err) => warn!(listen_addr = %secondary_addr, "secondary IPv6 listener unavailable: {err}"),
+        }
+    }
+
+    Ok(listeners)
+}
+
+fn dual_stack_secondary_addr(bound_addr: SocketAddr) -> Option<SocketAddr> {
+    match bound_addr {
+        SocketAddr::V4(addr) if addr.ip().is_unspecified() => Some(SocketAddr::V6(
+            SocketAddrV6::new(Ipv6Addr::UNSPECIFIED, addr.port(), 0, 0),
+        )),
+        SocketAddr::V6(addr) if addr.ip().is_unspecified() => Some(SocketAddr::V4(
+            SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, addr.port()),
+        )),
+        _ => None,
+    }
+}
+
+fn bind_secondary_listener(addr: SocketAddr) -> Result<TcpListener, std::io::Error> {
+    match addr {
+        SocketAddr::V6(addr) => {
+            let socket = TcpSocket::new_v6()?;
+            set_ipv6_only(&socket)?;
+            socket.bind(SocketAddr::V6(addr))?;
+            socket.listen(1024)
+        }
+        SocketAddr::V4(addr) => {
+            let socket = TcpSocket::new_v4()?;
+            socket.bind(SocketAddr::V4(addr))?;
+            socket.listen(1024)
+        }
+    }
+}
+
+fn set_ipv6_only(socket: &TcpSocket) -> Result<(), std::io::Error> {
+    let enabled: libc::c_int = 1;
+    let rc = unsafe {
+        libc::setsockopt(
+            socket.as_raw_fd(),
+            libc::IPPROTO_IPV6,
+            libc::IPV6_V6ONLY,
+            &enabled as *const _ as *const libc::c_void,
+            std::mem::size_of_val(&enabled) as libc::socklen_t,
+        )
+    };
+    if rc == 0 {
+        Ok(())
+    } else {
+        Err(std::io::Error::last_os_error())
     }
 }
 
