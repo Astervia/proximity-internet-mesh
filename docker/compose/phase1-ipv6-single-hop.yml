@@ -26,9 +26,11 @@ services:
         networks:
             pim-net:
                 ipv4_address: 172.45.0.10
+                priority: 100
             uplink-v6:
                 ipv4_address: 172.46.0.10
                 ipv6_address: 2001:db8:1::10
+                priority: 1000
         healthcheck:
             test:
                 [
