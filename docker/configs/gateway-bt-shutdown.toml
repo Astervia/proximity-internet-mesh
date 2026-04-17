@@ -1,0 +1,51 @@
+# Config used by docker/tests/test-bluetooth-shutdown.sh to verify that
+# SIGTERM to pim-daemon releases the TCP listening port, deletes `br-bt`,
+# and removes the MASQUERADE rule installed by the Bluetooth subsystem.
+#
+# This config is only valid inside the bluetooth-shutdown.yml seam: the
+# fake `bt-network` binary exits immediately, so the NAP server state
+# doesn't matter — we only care about the teardown path.
+
+[node]
+name = "gw-bt-shutdown"
+data_dir = "/var/lib/pim"
+
+[interface]
+mesh_ip = "10.77.0.1/24"
+mtu = 1400
+
+[discovery]
+enabled = false
+
+[transport]
+listen_port = 9100
+
+[security]
+key_file = "/var/lib/pim/node.key"
+
+[gateway]
+enabled = true
+# `eth0` is the container's outbound interface inside the docker network.
+nat_interface = "eth0"
+
+[bluetooth]
+enabled = true
+interface = "bnep0"
+radio_discovery_enabled = false
+# We don't need outbound connections — serve_nap is enough to create the bridge.
+serve_nap = true
+nap_bridge = "br-bt"
+nap_bridge_addr = "192.168.44.1/24"
+# dnsmasq isn't installed in the runtime image; skip the DHCP server.
+dhcp_enabled = false
+# Gateway doesn't need a DHCP lease itself.
+request_dhcp = false
+connect_pan = false
+auto_discover_peers = false
+local_alias = "PIM-gw-bt-shutdown"
+poll_interval_ms = 500
+scan_interval_ms = 500
+peer_discovery_interval_ms = 500
+bluetoothctl_timeout_s = 2
+discoverable_timeout_s = 60
+startup_timeout_ms = 3000

@@ -8,6 +8,7 @@ libc = { workspace = true }
 pim-core = { workspace = true }
 pim-protocol = { workspace = true }
 tokio = { workspace = true }
+tokio-util = { workspace = true }
 async-trait = { workspace = true }
 tracing = { workspace = true }
 thiserror = { workspace = true }
