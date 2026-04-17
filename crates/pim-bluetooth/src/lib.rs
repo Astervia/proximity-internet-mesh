@@ -1162,7 +1162,11 @@ fn resolve_macos_pan_interface_hint(interface: &str) -> &str {
 }
 
 #[cfg(any(test, target_os = "linux"))]
-fn parse_neighbor_output(output: &str, listen_port: u16, ipv6_scope_id: Option<u32>) -> Vec<SocketAddr> {
+fn parse_neighbor_output(
+    output: &str,
+    listen_port: u16,
+    ipv6_scope_id: Option<u32>,
+) -> Vec<SocketAddr> {
     let mut addrs = Vec::new();
     let mut seen = HashSet::new();
 
@@ -1178,15 +1182,13 @@ fn parse_neighbor_output(output: &str, listen_port: u16, ipv6_scope_id: Option<u
         let Ok(ip) = first.parse::<IpAddr>() else {
             continue;
         };
-        let addr = match ip {
-            IpAddr::V6(ipv6) if ipv6.is_unicast_link_local() => SocketAddr::V6(SocketAddrV6::new(
-                ipv6,
-                listen_port,
-                0,
-                ipv6_scope_id.unwrap_or(0),
-            )),
-            _ => SocketAddr::new(ip, listen_port),
-        };
+        let addr =
+            match ip {
+                IpAddr::V6(ipv6) if ipv6.is_unicast_link_local() => SocketAddr::V6(
+                    SocketAddrV6::new(ipv6, listen_port, 0, ipv6_scope_id.unwrap_or(0)),
+                ),
+                _ => SocketAddr::new(ip, listen_port),
+            };
         if seen.insert(addr) {
             addrs.push(addr);
         }
