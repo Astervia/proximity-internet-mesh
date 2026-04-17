@@ -245,6 +245,12 @@ type SessionMap = Arc<RwLock<HashMap<NodeId, Arc<Session>>>>;
 /// Pending handshakes: maps peer_id → channel for routing incoming HS frames
 type HsChannels = Arc<Mutex<HashMap<NodeId, mpsc::Sender<HandshakeWireFrame>>>>;
 
+#[derive(Debug, Clone, Copy)]
+struct PendingOutbound {
+    transport_key: NodeId,
+    target: ConnectTarget,
+}
+
 struct DaemonState {
     node_name: String,
     self_id: NodeId,
@@ -263,6 +269,8 @@ struct DaemonState {
     own_x25519_pub: [u8; 32],
     sessions: SessionMap,
     hs_channels: HsChannels,
+    pending_outbound: Arc<Mutex<HashMap<IpAddr, PendingOutbound>>>,
+    cancelled_outbounds: Arc<Mutex<HashSet<NodeId>>>,
     routing: Arc<Mutex<RoutingTable>>,
     /// Per-source reassembly buffers (keyed by sender NodeId).
     reassemblers: Arc<Mutex<HashMap<NodeId, Reassembler>>>,
@@ -311,6 +319,60 @@ impl DaemonState {
     fn next_frag_id(&self) -> u32 {
         self.frag_id.fetch_add(1, Ordering::Relaxed)
     }
+}
+
+async fn register_pending_outbound(
+    state: &Arc<DaemonState>,
+    target: ConnectTarget,
+    transport_key: NodeId,
+) {
+    state.pending_outbound.lock().await.insert(
+        target.addr().ip(),
+        PendingOutbound {
+            transport_key,
+            target,
+        },
+    );
+}
+
+async fn clear_pending_outbound(
+    state: &Arc<DaemonState>,
+    target: ConnectTarget,
+    transport_key: NodeId,
+) {
+    let mut pending = state.pending_outbound.lock().await;
+    if pending
+        .get(&target.addr().ip())
+        .is_some_and(|entry| entry.transport_key == transport_key)
+    {
+        pending.remove(&target.addr().ip());
+    }
+}
+
+async fn cancel_pending_outbound_for_ip(
+    state: &Arc<DaemonState>,
+    remote_ip: IpAddr,
+) -> Option<PendingOutbound> {
+    let entry = state.pending_outbound.lock().await.remove(&remote_ip);
+    let entry = entry?;
+
+    state
+        .cancelled_outbounds
+        .lock()
+        .await
+        .insert(entry.transport_key);
+    state.hs_channels.lock().await.remove(&entry.transport_key);
+    state.transport.disconnect(&entry.transport_key).await.ok();
+    state.reconnect.end_reconnect(entry.target).await;
+    Some(entry)
+}
+
+async fn take_cancelled_outbound(state: &Arc<DaemonState>, transport_key: NodeId) -> bool {
+    state
+        .cancelled_outbounds
+        .lock()
+        .await
+        .remove(&transport_key)
 }
 
 #[cfg(target_os = "linux")]
@@ -1513,6 +1575,7 @@ async fn run_reconnect_task(state: Arc<DaemonState>, target: ConnectTarget) {
 
         // Use a unique random placeholder so concurrent reconnects don't collide.
         let transport_key = NodeId::from_bytes(rand::random::<[u8; 16]>());
+        register_pending_outbound(&state, target, transport_key).await;
 
         if let Err(e) = state
             .transport
@@ -1522,6 +1585,7 @@ async fn run_reconnect_task(state: Arc<DaemonState>, target: ConnectTarget) {
             })
             .await
         {
+            clear_pending_outbound(&state, target, transport_key).await;
             warn!(%addr, mechanism = target.mechanism_name(), attempt, "reconnect TCP connect failed: {e}");
             attempt += 1;
             continue;
@@ -1533,6 +1597,7 @@ async fn run_reconnect_task(state: Arc<DaemonState>, target: ConnectTarget) {
 
         match handshake_initiator(&state, transport_key, rx).await {
             Ok(peer_id) => {
+                clear_pending_outbound(&state, target, transport_key).await;
                 state.reconnect.register(peer_id, target).await;
                 state.hs_channels.lock().await.remove(&transport_key);
                 info!(%peer_id, %addr, mechanism = target.mechanism_name(), "reconnect succeeded (new session key)");
@@ -1540,6 +1605,17 @@ async fn run_reconnect_task(state: Arc<DaemonState>, target: ConnectTarget) {
                 return;
             }
             Err(e) => {
+                clear_pending_outbound(&state, target, transport_key).await;
+                if take_cancelled_outbound(&state, transport_key).await {
+                    info!(
+                        %addr,
+                        mechanism = target.mechanism_name(),
+                        attempt,
+                        "reconnect attempt cancelled after simultaneous inbound handshake"
+                    );
+                    state.reconnect.end_reconnect(target).await;
+                    return;
+                }
                 warn!(%addr, mechanism = target.mechanism_name(), attempt, "reconnect handshake failed: {e}");
                 // rename_peer only happens on success, so transport_key is still valid.
                 state.hs_channels.lock().await.remove(&transport_key);
@@ -2114,6 +2190,47 @@ async fn run_event_loop(state: Arc<DaemonState>) -> Result<()> {
                                 handshake_type: HandshakeFrameType::Init, ..
                             })
                         {
+                            let remote_ip = state.transport.peer_addr(&from_peer).await.map(|addr| addr.ip());
+                            let presented_peer_id = match &wire {
+                                HandshakeWireFrame::InitOrResponse { sender_pub, .. } => {
+                                    NodeId::from_public_key(sender_pub)
+                                }
+                                _ => unreachable!("matched only init frames above"),
+                            };
+
+                            if let Some(remote_ip) = remote_ip {
+                                if let Some(pending) = state
+                                    .pending_outbound
+                                    .lock()
+                                    .await
+                                    .get(&remote_ip)
+                                    .copied()
+                                {
+                                    if pending.transport_key != from_peer {
+                                        if state.self_id.as_bytes() > presented_peer_id.as_bytes() {
+                                            info!(
+                                                %from_peer,
+                                                %presented_peer_id,
+                                                %remote_ip,
+                                                winner = "incoming",
+                                                "simultaneous connect detected; cancelling outbound attempt"
+                                            );
+                                            cancel_pending_outbound_for_ip(&state, remote_ip).await;
+                                        } else {
+                                            info!(
+                                                %from_peer,
+                                                %presented_peer_id,
+                                                %remote_ip,
+                                                winner = "outgoing",
+                                                "simultaneous connect detected; dropping inbound attempt"
+                                            );
+                                            state.transport.disconnect(&from_peer).await.ok();
+                                            continue;
+                                        }
+                                    }
+                                }
+                            }
+
                             // New incoming peer — spawn responder
                             let (tx, rx) = mpsc::channel(8);
                             state.hs_channels.lock().await.insert(from_peer, tx);
@@ -2827,6 +2944,7 @@ async fn initiate_peer_connection(state: Arc<DaemonState>, target: ConnectTarget
     let peer_addr = target.addr();
     // Use a random placeholder so concurrent reconnects don't collide.
     let transport_key = NodeId::from_bytes(rand::random::<[u8; 16]>());
+    register_pending_outbound(&state, target, transport_key).await;
 
     if let Err(e) = state
         .transport
@@ -2836,6 +2954,7 @@ async fn initiate_peer_connection(state: Arc<DaemonState>, target: ConnectTarget
         })
         .await
     {
+        clear_pending_outbound(&state, target, transport_key).await;
         warn!(%peer_addr, mechanism = target.mechanism_name(), "connect failed: {e}; reconnect will retry");
         if state.reconnect.begin_reconnect(target).await {
             let st = state.clone();
@@ -2851,10 +2970,21 @@ async fn initiate_peer_connection(state: Arc<DaemonState>, target: ConnectTarget
     tokio::spawn(async move {
         match handshake_initiator(&st, transport_key, rx).await {
             Ok(peer_id) => {
+                clear_pending_outbound(&st, target, transport_key).await;
                 st.reconnect.register(peer_id, target).await;
                 info!(%peer_id, %peer_addr, mechanism = target.mechanism_name(), "peer connected");
             }
             Err(e) => {
+                clear_pending_outbound(&st, target, transport_key).await;
+                if take_cancelled_outbound(&st, transport_key).await {
+                    info!(
+                        %peer_addr,
+                        mechanism = target.mechanism_name(),
+                        "outbound handshake cancelled after simultaneous inbound handshake"
+                    );
+                    st.hs_channels.lock().await.remove(&transport_key);
+                    return;
+                }
                 warn!(%peer_addr, mechanism = target.mechanism_name(), "handshake failed: {e}; reconnect will retry");
                 st.transport.disconnect(&transport_key).await.ok();
                 if st.reconnect.begin_reconnect(target).await {
@@ -3380,6 +3510,8 @@ async fn main() -> Result<()> {
         own_x25519_pub,
         sessions: Arc::new(RwLock::new(HashMap::new())),
         hs_channels: Arc::new(Mutex::new(HashMap::new())),
+        pending_outbound: Arc::new(Mutex::new(HashMap::new())),
+        cancelled_outbounds: Arc::new(Mutex::new(HashSet::new())),
         routing,
         reassemblers: Arc::new(Mutex::new(HashMap::new())),
         frag_id: Arc::new(AtomicU32::new(1)),

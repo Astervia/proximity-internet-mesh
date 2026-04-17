@@ -35,6 +35,7 @@ pub struct TcpTransport {
 struct PeerWriter {
     tx: mpsc::Sender<bytes::Bytes>,
     current_id: Arc<RwLock<NodeId>>,
+    remote_addr: SocketAddr,
 }
 
 impl TcpTransport {
@@ -76,7 +77,7 @@ impl TcpTransport {
                             debug!(%addr, "accepted connection");
                             let t2 = t.clone();
                             tokio::spawn(async move {
-                                if let Err(e) = t2.handle_incoming(stream).await {
+                                if let Err(e) = t2.handle_incoming(stream, addr).await {
                                     warn!(%addr, "incoming connection failed: {e}");
                                 }
                             });
@@ -98,6 +99,7 @@ impl TcpTransport {
     async fn handle_incoming(
         self: &Arc<Self>,
         mut stream: TcpStream,
+        remote_addr: SocketAddr,
     ) -> Result<(), TransportError> {
         // Read the peer's NodeId (16 bytes)
         let mut id_buf = [0u8; 16];
@@ -106,12 +108,12 @@ impl TcpTransport {
 
         info!(%peer_id, "peer identified on incoming connection");
 
-        self.register_peer(peer_id, stream).await;
+        self.register_peer(peer_id, remote_addr, stream).await;
         Ok(())
     }
 
     /// Register a connected peer: split the stream, spawn read/write tasks.
-    async fn register_peer(&self, peer_id: NodeId, stream: TcpStream) {
+    async fn register_peer(&self, peer_id: NodeId, remote_addr: SocketAddr, stream: TcpStream) {
         let (read_half, write_half) = stream.into_split();
         let current_id = Arc::new(RwLock::new(peer_id));
 
@@ -199,6 +201,7 @@ impl TcpTransport {
             PeerWriter {
                 tx: write_tx,
                 current_id: current_id.clone(),
+                remote_addr,
             },
         );
     }
@@ -213,6 +216,15 @@ impl TcpTransport {
             debug!(%old_id, %new_id, "peer renamed in transport");
         }
     }
+
+    /// Return the remote socket address currently associated with a connected peer.
+    pub async fn peer_addr(&self, peer_id: &NodeId) -> Option<SocketAddr> {
+        self.peers
+            .read()
+            .await
+            .get(peer_id)
+            .map(|peer| peer.remote_addr)
+    }
 }
 
 async fn bind_listeners(listen_addr: SocketAddr) -> Result<Vec<TcpListener>, TransportError> {
@@ -223,7 +235,9 @@ async fn bind_listeners(listen_addr: SocketAddr) -> Result<Vec<TcpListener>, Tra
     if let Some(secondary_addr) = dual_stack_secondary_addr(actual_addr) {
         match bind_secondary_listener(secondary_addr) {
             Ok(listener) => listeners.push(listener),
-            Err(err) => warn!(listen_addr = %secondary_addr, "secondary IPv6 listener unavailable: {err}"),
+            Err(err) => {
+                warn!(listen_addr = %secondary_addr, "secondary IPv6 listener unavailable: {err}")
+            }
         }
     }
 
@@ -317,7 +331,7 @@ impl Transport for TcpTransport {
 
         info!(peer_id = %peer.node_id, addr = %peer.addr, "connected to peer");
 
-        self.register_peer(peer.node_id, stream).await;
+        self.register_peer(peer.node_id, peer.addr, stream).await;
         Ok(())
     }
 
