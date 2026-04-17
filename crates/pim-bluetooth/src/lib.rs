@@ -12,7 +12,7 @@
 #![warn(missing_docs)]
 
 use std::collections::HashSet;
-use std::net::{IpAddr, SocketAddr};
+use std::net::{IpAddr, SocketAddr, SocketAddrV6};
 #[cfg(any(test, target_os = "linux"))]
 use std::path::Path;
 use std::path::PathBuf;
@@ -917,6 +917,7 @@ impl BluetoothDiscovery {
         &self,
         interface: &str,
     ) -> Result<Vec<SocketAddr>, BluetoothError> {
+        let scope_id = interface_index(interface);
         let output = Command::new(&self.ip_command)
             .args(["neigh", "show", "dev", interface])
             .output()
@@ -932,6 +933,7 @@ impl BluetoothDiscovery {
         Ok(parse_neighbor_output(
             &String::from_utf8_lossy(&output.stdout),
             self.listen_port,
+            scope_id,
         ))
     }
 
@@ -1088,7 +1090,7 @@ fn select_pan_interface(
     }
 
     for candidate in candidates {
-        if nap_bridge == Some(candidate.name.as_str()) && candidate_is_ready(candidate) {
+        if nap_bridge == Some(candidate.name.as_str()) {
             return Some(ResolvedPanInterface {
                 name: candidate.name.clone(),
                 source: "nap_bridge",
@@ -1160,7 +1162,7 @@ fn resolve_macos_pan_interface_hint(interface: &str) -> &str {
 }
 
 #[cfg(any(test, target_os = "linux"))]
-fn parse_neighbor_output(output: &str, listen_port: u16) -> Vec<SocketAddr> {
+fn parse_neighbor_output(output: &str, listen_port: u16, ipv6_scope_id: Option<u32>) -> Vec<SocketAddr> {
     let mut addrs = Vec::new();
     let mut seen = HashSet::new();
 
@@ -1176,13 +1178,28 @@ fn parse_neighbor_output(output: &str, listen_port: u16) -> Vec<SocketAddr> {
         let Ok(ip) = first.parse::<IpAddr>() else {
             continue;
         };
-        let addr = SocketAddr::new(ip, listen_port);
+        let addr = match ip {
+            IpAddr::V6(ipv6) if ipv6.is_unicast_link_local() => SocketAddr::V6(SocketAddrV6::new(
+                ipv6,
+                listen_port,
+                0,
+                ipv6_scope_id.unwrap_or(0),
+            )),
+            _ => SocketAddr::new(ip, listen_port),
+        };
         if seen.insert(addr) {
             addrs.push(addr);
         }
     }
 
     addrs
+}
+
+#[cfg(target_os = "linux")]
+fn interface_index(interface: &str) -> Option<u32> {
+    let c_interface = std::ffi::CString::new(interface).ok()?;
+    let index = unsafe { libc::if_nametoindex(c_interface.as_ptr()) };
+    (index != 0).then_some(index)
 }
 
 #[cfg(any(test, target_os = "linux"))]
@@ -1347,10 +1364,13 @@ bridge0: flags=41<UP,RUNNING> mtu 1500\n\
 fe80::1234 dev bnep0 lladdr 02:00:00:00:00:03 router STALE
 192.168.44.3 dev bnep0 FAILED
 ";
-        let parsed = parse_neighbor_output(output, 9100);
+        let parsed = parse_neighbor_output(output, 9100, Some(7));
         assert_eq!(parsed.len(), 2);
         assert_eq!(parsed[0], "192.168.44.2:9100".parse().unwrap());
-        assert_eq!(parsed[1], "[fe80::1234]:9100".parse().unwrap());
+        assert_eq!(
+            parsed[1],
+            SocketAddr::V6(SocketAddrV6::new("fe80::1234".parse().unwrap(), 9100, 0, 7))
+        );
     }
 
     #[test]
@@ -1450,7 +1470,7 @@ address: aa-bb-cc-dd-ee-03, not connected, not favourite, not paired, name: \"PI
         let selected = select_pan_interface(
             &[PanInterfaceCandidate {
                 name: "br-bt".into(),
-                operstate: Some("unknown".into()),
+                operstate: Some("down".into()),
             }],
             None,
             Some("br-bt"),
