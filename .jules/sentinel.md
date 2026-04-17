@@ -12,3 +12,8 @@
 **Vulnerability:** The daemon's PID file (`pid_file`) was written using `std::fs::write`, which falls back to the system's default `umask`. Under a permissive umask (e.g., `0000`), this could leave the PID file world-writable, allowing unprivileged users to spoof the PID.
 **Learning:** Relying on default file permissions when writing non-sensitive system files (like PID files) can still create security risks, such as local DoS or privilege escalation, if the files are used by other system services.
 **Prevention:** Explicitly use `std::fs::OpenOptions` with `OpenOptionsExt::mode(0o644)` on Unix systems to ensure strict file access permissions (owner writable, group/others readable) when writing system files.
+
+## 2024-06-25 - [Prevent TOCTOU symlink attack for config file creation]
+**Vulnerability:** In `crates/pim-cli/src/main.rs`, the default config generation (`pim-cli config generate`) created the configuration file using `.create(true).truncate(true)` which does not set `O_EXCL`. This allows a TOCTOU symlink attack, potentially writing the config file to a malicious target location.
+**Learning:** Using `.create(true).truncate(true)` without `.create_new(true)` is vulnerable to Time-of-Check to Time-of-Use (TOCTOU) symlink attacks.
+**Prevention:** Always use `.create_new(true)` when creating new, sensitive configuration files to ensure that `O_CREAT | O_EXCL` is passed, enforcing that the file must not exist before creation.

@@ -364,7 +364,7 @@ fn cmd_config_generate(
             );
         }
         let mut options = std::fs::OpenOptions::new();
-        options.write(true).create(true).truncate(true);
+        options.write(true).create_new(true);
 
         #[cfg(unix)]
         {
