@@ -4,3 +4,6 @@
 # Agents
 .codex
 .claude/
+
+# Personal
+/debug
