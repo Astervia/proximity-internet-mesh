@@ -265,18 +265,12 @@ impl BluetoothDiscovery {
                 _ = cancel.cancelled() => {
                     #[cfg(target_os = "linux")]
                     {
-                        if let Some(mut child) = nap_server.take() {
-                            let _ = child.kill().await;
-                            let _ = child.wait().await;
-                        }
-                        if let Some(mut child) = dnsmasq_child.take() {
-                            let _ = child.kill().await;
-                            let _ = child.wait().await;
-                        }
-                        if let Some((_, mut child)) = dhclient_child.take() {
-                            let _ = child.kill().await;
-                            let _ = child.wait().await;
-                        }
+                        self.teardown_linux(
+                            &mut nap_server,
+                            &mut dnsmasq_child,
+                            &mut dhclient_child,
+                        )
+                        .await;
                     }
                     debug!("Bluetooth service cancelled");
                     return Ok(());
@@ -671,6 +665,143 @@ impl BluetoothDiscovery {
 
         info!(%subnet, nat_iface, "Bluetooth MASQUERADE installed");
         Ok(())
+    }
+
+    /// Reverse of `install_bluetooth_masquerade`: removes the POSTROUTING
+    /// MASQUERADE and FORWARD ACCEPT rules we installed. Idempotent and
+    /// best-effort; errors are logged, not propagated.
+    #[cfg(target_os = "linux")]
+    async fn uninstall_bluetooth_masquerade(&self) {
+        let Some(nat_iface) = self.nat_interface.as_deref() else {
+            return;
+        };
+        let (gateway, prefix) = match parse_ipv4_cidr(&self.config.nap_bridge_addr) {
+            Ok(v) => v,
+            Err(_) => return,
+        };
+        let (network, _) = subnet_network(gateway, prefix);
+        let subnet = format!("{network}/{prefix}");
+
+        let post_args = [
+            "-t",
+            "nat",
+            "-D",
+            "POSTROUTING",
+            "-s",
+            subnet.as_str(),
+            "-o",
+            nat_iface,
+            "-j",
+            "MASQUERADE",
+        ];
+        self.iptables_delete_while_present(&post_args).await;
+
+        let fwd_args = ["-D", "FORWARD", "-s", subnet.as_str(), "-j", "ACCEPT"];
+        self.iptables_delete_while_present(&fwd_args).await;
+
+        info!(%subnet, nat_iface, "Bluetooth MASQUERADE removed");
+    }
+
+    /// Repeatedly run `iptables -D ...` until it reports the rule is gone.
+    /// `iptables_ensure` uses `-C` before `-A`, so at most one copy should
+    /// exist, but loop defensively up to a small bound in case the daemon
+    /// was restarted without cleanup in the past.
+    #[cfg(target_os = "linux")]
+    async fn iptables_delete_while_present(&self, delete_args: &[&str]) {
+        for _ in 0..8 {
+            let mut check: Vec<&str> = delete_args.to_vec();
+            if let Some(pos) = check.iter().position(|a| *a == "-D") {
+                check[pos] = "-C";
+            }
+            let present = Command::new(&self.iptables_command)
+                .args(&check)
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status()
+                .await
+                .map(|s| s.success())
+                .unwrap_or(false);
+            if !present {
+                return;
+            }
+            let _ = Command::new(&self.iptables_command)
+                .args(delete_args)
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status()
+                .await;
+        }
+    }
+
+    /// Bring the NAP bridge down and delete it, if it exists.
+    /// Best-effort: errors are logged, not propagated.
+    #[cfg(target_os = "linux")]
+    async fn delete_bridge_if_present(&self, bridge: &str) {
+        if bridge.is_empty() {
+            return;
+        }
+        // Best-effort: unconditionally attempt the delete. Bridge existence
+        // cannot be inferred from `sysfs_root` since tests override that to
+        // a fake tree while the real bridge is created via the `ip` command.
+        let down = Command::new(&self.ip_command)
+            .args(["link", "set", bridge, "down"])
+            .output()
+            .await;
+        if let Ok(out) = &down {
+            if !out.status.success() {
+                let msg = String::from_utf8_lossy(&out.stderr).trim().to_string();
+                if !msg.is_empty() && !msg.contains("Cannot find device") {
+                    debug!(bridge, "ip link set down: {msg}");
+                }
+            }
+        }
+        let del = Command::new(&self.ip_command)
+            .args(["link", "delete", bridge])
+            .output()
+            .await;
+        match del {
+            Ok(out) if out.status.success() => {
+                info!(bridge, "Bluetooth NAP bridge deleted");
+            }
+            Ok(out) => {
+                let msg = String::from_utf8_lossy(&out.stderr).trim().to_string();
+                if !msg.contains("Cannot find device") && !msg.contains("does not exist") {
+                    warn!(bridge, "ip link delete failed: {msg}");
+                }
+            }
+            Err(err) => {
+                warn!(bridge, "ip link delete errored: {err}");
+            }
+        }
+    }
+
+    /// Shut down Linux-specific resources in order: child processes first,
+    /// then iptables rules, then the bridge. Safe to call even when some
+    /// resources were never created (e.g. NAP disabled).
+    #[cfg(target_os = "linux")]
+    async fn teardown_linux(
+        &self,
+        nap_server: &mut Option<Child>,
+        dnsmasq_child: &mut Option<Child>,
+        dhclient_child: &mut Option<(String, Child)>,
+    ) {
+        if let Some(mut child) = nap_server.take() {
+            let _ = child.kill().await;
+            let _ = child.wait().await;
+        }
+        if let Some(mut child) = dnsmasq_child.take() {
+            let _ = child.kill().await;
+            let _ = child.wait().await;
+        }
+        if let Some((_, mut child)) = dhclient_child.take() {
+            let _ = child.kill().await;
+            let _ = child.wait().await;
+        }
+        if self.config.serve_nap {
+            self.uninstall_bluetooth_masquerade().await;
+            let bridge = self.config.nap_bridge.trim().to_string();
+            self.delete_bridge_if_present(&bridge).await;
+        }
     }
 
     #[cfg(target_os = "linux")]

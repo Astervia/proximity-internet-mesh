@@ -8,6 +8,8 @@ use bytes::BytesMut;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpSocket, TcpStream};
 use tokio::sync::{mpsc, Mutex, RwLock};
+use tokio::task::JoinHandle;
+use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, warn};
 
 use pim_core::{FrameCodec, NodeId};
@@ -29,6 +31,10 @@ pub struct TcpTransport {
     pub listen_addr: SocketAddr,
     /// Our own node ID (so we can tell peers who we are).
     node_id: NodeId,
+    /// Signals accept loops to exit. Cancelled on `shutdown()` or Drop.
+    cancel: CancellationToken,
+    /// Join handles for each per-listener accept task.
+    listener_tasks: Mutex<Vec<JoinHandle<()>>>,
 }
 
 /// Handle for writing to a peer's TCP stream.
@@ -48,6 +54,19 @@ impl TcpTransport {
         listen_addr: SocketAddr,
         node_id: NodeId,
     ) -> Result<Arc<Self>, TransportError> {
+        Self::new_with_cancel(listen_addr, node_id, CancellationToken::new()).await
+    }
+
+    /// Same as [`TcpTransport::new`] but takes a parent [`CancellationToken`].
+    ///
+    /// When the parent token (or any ancestor) is cancelled, every accept loop
+    /// exits and their listening sockets are dropped, freeing the OS-level
+    /// port binding without waiting for a new connection.
+    pub async fn new_with_cancel(
+        listen_addr: SocketAddr,
+        node_id: NodeId,
+        cancel: CancellationToken,
+    ) -> Result<Arc<Self>, TransportError> {
         let (incoming_tx, incoming_rx) = mpsc::channel(256);
 
         // Bind first so we know the actual address (important for port 0)
@@ -63,35 +82,62 @@ impl TcpTransport {
             incoming_rx: Mutex::new(incoming_rx),
             listen_addr: actual_addr,
             node_id,
+            cancel: cancel.clone(),
+            listener_tasks: Mutex::new(Vec::new()),
         });
 
         info!(listen_addr = %actual_addr, "transport listening");
 
-        let t = transport.clone();
+        let mut handles = Vec::with_capacity(listeners.len());
         for listener in listeners {
-            let t = t.clone();
-            tokio::spawn(async move {
+            let t = transport.clone();
+            let cancel = cancel.clone();
+            let handle = tokio::spawn(async move {
+                let local = listener.local_addr().ok();
                 loop {
-                    match listener.accept().await {
-                        Ok((stream, addr)) => {
-                            debug!(%addr, "accepted connection");
-                            let t2 = t.clone();
-                            tokio::spawn(async move {
-                                if let Err(e) = t2.handle_incoming(stream, addr).await {
-                                    warn!(%addr, "incoming connection failed: {e}");
-                                }
-                            });
-                        }
-                        Err(e) => {
-                            error!("listener accept failed: {e}");
+                    tokio::select! {
+                        biased;
+                        _ = cancel.cancelled() => {
+                            debug!(?local, "listener accept loop cancelled");
                             break;
+                        }
+                        accept = listener.accept() => {
+                            match accept {
+                                Ok((stream, addr)) => {
+                                    debug!(%addr, "accepted connection");
+                                    let t2 = t.clone();
+                                    tokio::spawn(async move {
+                                        if let Err(e) = t2.handle_incoming(stream, addr).await {
+                                            warn!(%addr, "incoming connection failed: {e}");
+                                        }
+                                    });
+                                }
+                                Err(e) => {
+                                    error!("listener accept failed: {e}");
+                                    break;
+                                }
+                            }
                         }
                     }
                 }
+                // Listener is dropped here, releasing the port immediately.
+                drop(listener);
             });
+            handles.push(handle);
         }
+        *transport.listener_tasks.lock().await = handles;
 
         Ok(transport)
+    }
+
+    /// Cancel accept loops, drop the listening sockets, and wait for accept
+    /// tasks to finish. Safe to call multiple times.
+    pub async fn shutdown(&self) {
+        self.cancel.cancel();
+        let handles = std::mem::take(&mut *self.listener_tasks.lock().await);
+        for h in handles {
+            let _ = h.await;
+        }
     }
 
     /// Handle an incoming TCP connection.
@@ -224,6 +270,14 @@ impl TcpTransport {
             .await
             .get(peer_id)
             .map(|peer| peer.remote_addr)
+    }
+}
+
+impl Drop for TcpTransport {
+    fn drop(&mut self) {
+        // Safety net: if shutdown() wasn't called, at least signal accept
+        // loops to exit so they stop polling the listener.
+        self.cancel.cancel();
     }
 }
 
@@ -643,5 +697,53 @@ mod tests {
             let (_, msg) = transport_a.recv().await.unwrap();
             assert_eq!(msg.payload, vec![i]);
         }
+    }
+
+    #[tokio::test]
+    async fn shutdown_releases_listening_port() {
+        // Pick a fixed port so we can verify it is reusable after shutdown.
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        drop(listener);
+
+        let node = NodeId::from_bytes([0xAB; 16]);
+        let transport = TcpTransport::new(addr, node).await.unwrap();
+        assert_eq!(transport.listen_addr, addr);
+
+        transport.shutdown().await;
+
+        // After shutdown, the port must be free to rebind immediately.
+        // Without cancellable accept loops, this bind would fail with
+        // EADDRINUSE until the process exits.
+        let rebound = TcpListener::bind(addr).await;
+        assert!(
+            rebound.is_ok(),
+            "port {addr} should be reusable after shutdown(), got {rebound:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn external_cancel_releases_listening_port() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        drop(listener);
+
+        let node = NodeId::from_bytes([0xCD; 16]);
+        let cancel = CancellationToken::new();
+        let transport = TcpTransport::new_with_cancel(addr, node, cancel.clone())
+            .await
+            .unwrap();
+
+        cancel.cancel();
+        // Give the accept task a tick to observe the cancellation and drop
+        // the listener.
+        for _ in 0..50 {
+            if TcpListener::bind(addr).await.is_ok() {
+                return;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        drop(transport);
+        panic!("port {addr} was not released within 1s after cancel");
     }
 }

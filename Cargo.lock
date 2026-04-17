@@ -875,6 +875,7 @@ dependencies = [
  "pim-protocol",
  "thiserror",
  "tokio",
+ "tokio-util",
  "tracing",
 ]
 
