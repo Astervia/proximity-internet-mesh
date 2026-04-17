@@ -270,7 +270,8 @@ struct DaemonState {
     transport: Arc<TcpTransport>,
     tun: Arc<TunInterface>,
     gw_engine: Option<Arc<GatewayEngine>>,
-    gw_engine_v6: Option<Arc<GatewayEngineV6>>,
+    gw_engine_v6: Arc<RwLock<Option<Arc<GatewayEngineV6>>>>,
+    gateway_nat_interface: Option<String>,
     internet_link: Option<Arc<InternetGatewayLink>>,
     /// IP address pool — gateway only.
     ip_pool: Option<Arc<Mutex<IpPool>>>,
@@ -627,7 +628,7 @@ fn lookup_interface_ipv6(interface: &str) -> Result<Ipv6Addr> {
 
 async fn lookup_interface_ipv6_with_retry(interface: &str) -> Result<Ipv6Addr> {
     let mut last_err = None;
-    for _ in 0..20 {
+    for _ in 0..60 {
         match lookup_interface_ipv6(interface) {
             Ok(ip) => return Ok(ip),
             Err(err) => last_err = Some(err),
@@ -1146,7 +1147,7 @@ async fn run_conntrack_gc(state: Arc<DaemonState>) {
                 );
             }
         }
-        if let Some(gw) = &state.gw_engine_v6 {
+        if let Some(gw) = state.gw_engine_v6.read().await.clone() {
             let before = gw.conntrack_size().await;
             gw.cleanup_expired().await;
             let after = gw.conntrack_size().await;
@@ -1458,6 +1459,34 @@ async fn run_gateway_probes(state: Arc<DaemonState>) {
             debug!(%gw_id, nonce, "sent gateway probe Ping");
         }
     }
+}
+
+async fn ensure_gateway_ipv6_engine(state: &Arc<DaemonState>) -> Option<Arc<GatewayEngineV6>> {
+    if let Some(gw) = state.gw_engine_v6.read().await.clone() {
+        return Some(gw);
+    }
+
+    let iface = state.gateway_nat_interface.as_deref()?;
+    let external_ip = match lookup_interface_ipv6(iface) {
+        Ok(ip) => ip,
+        Err(e) => {
+            debug!(iface = %iface, "IPv6 gateway uplink still unavailable: {e}");
+            return None;
+        }
+    };
+
+    let gw = Arc::new(GatewayEngineV6::new(external_ip, iface));
+    if let Err(e) = gw.setup_masquerade() {
+        warn!("ip6tables setup failed (may need root): {e}");
+    }
+
+    let mut slot = state.gw_engine_v6.write().await;
+    if let Some(existing) = slot.as_ref() {
+        return Some(existing.clone());
+    }
+    info!(iface = %iface, external_ip = %external_ip, "IPv6 gateway uplink became available");
+    *slot = Some(gw.clone());
+    Some(gw)
 }
 
 // ── Reconnect task ────────────────────────────────────────────────────────────
@@ -2184,21 +2213,24 @@ async fn run_event_loop(state: Arc<DaemonState>) -> Result<()> {
                                             }
                                         }
                                     },
-                                    Some(6) => match (&state.gw_engine_v6, &state.internet_link) {
-                                        (Some(gw), Some(link)) => {
-                                            if let Err(e) = gw.translate_outbound(&mut ip_packet, mesh.src_id).await {
-                                                warn!("gateway outbound NAT66 failed: {e}");
+                                    Some(6) => {
+                                        let gw_v6 = ensure_gateway_ipv6_engine(&state).await;
+                                        match (gw_v6, &state.internet_link) {
+                                            (Some(gw), Some(link)) => {
+                                                if let Err(e) = gw.translate_outbound(&mut ip_packet, mesh.src_id).await {
+                                                    warn!("gateway outbound NAT66 failed: {e}");
+                                                    continue;
+                                                }
+                                                if let Err(e) = link.send_packet(&ip_packet).await {
+                                                    warn!("gateway IPv6 internet send failed: {e:#}");
+                                                }
+                                            }
+                                            _ => {
+                                                warn!("IPv6 internet packet received but IPv6 gateway support is unavailable");
                                                 continue;
                                             }
-                                            if let Err(e) = link.send_packet(&ip_packet).await {
-                                                warn!("gateway IPv6 internet send failed: {e:#}");
-                                            }
                                         }
-                                        _ => {
-                                            warn!("IPv6 internet packet received but IPv6 gateway support is unavailable");
-                                            continue;
-                                        }
-                                    },
+                                    }
                                     _ => {
                                         warn!("unsupported internet-bound packet version");
                                         continue;
@@ -2448,7 +2480,7 @@ async fn run_gateway_return(state: Arc<DaemonState>) {
         return;
     };
     let gw = state.gw_engine.as_ref().cloned();
-    let gw_v6 = state.gw_engine_v6.as_ref().cloned();
+    let gw_v6 = state.gw_engine_v6.read().await.clone();
     if gw.is_none() && gw_v6.is_none() {
         return;
     }
@@ -3314,7 +3346,8 @@ async fn main() -> Result<()> {
         transport,
         tun,
         gw_engine,
-        gw_engine_v6,
+        gw_engine_v6: Arc::new(RwLock::new(gw_engine_v6)),
+        gateway_nat_interface: is_gateway.then(|| config.gateway.nat_interface.clone()),
         internet_link,
         ip_pool,
         peer_last_hb: Arc::new(Mutex::new(HashMap::new())),
