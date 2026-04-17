@@ -2577,6 +2577,19 @@ async fn run_event_loop(state: Arc<DaemonState>) -> Result<()> {
                 warn!(%gateway_ipv6, "IPv6 default route cleanup failed: {e}");
             }
         }
+    } else {
+        // Gateway: reverse the iptables/ip6tables rules installed by
+        // `setup_masquerade` so shutting pim down doesn't leave the host
+        // dropping its own reply traffic.
+        if let Some(gw) = state.gw_engine.as_ref() {
+            let mesh_ip = Ipv4Addr::from(state.mesh_ip.load(Ordering::Relaxed));
+            let prefix_len = state.mesh_prefix_len.load(Ordering::Relaxed);
+            let cidr = format!("{mesh_ip}/{prefix_len}");
+            gw.teardown_masquerade(&cidr);
+        }
+        if let Some(gw_v6) = state.gw_engine_v6.read().await.clone() {
+            gw_v6.teardown_masquerade();
+        }
     }
 
     // Clean up

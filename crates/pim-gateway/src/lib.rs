@@ -175,6 +175,10 @@ pub struct GatewayEngine {
     /// Name of the internet-facing interface (e.g. "eth0").
     internet_iface: String,
     inner: Mutex<Inner>,
+    /// Original value of `net.ipv4.ip_local_reserved_ports` before setup,
+    /// so teardown can restore it. `None` until `setup_masquerade` runs.
+    #[cfg(target_os = "linux")]
+    reserved_ports_backup: std::sync::Mutex<Option<String>>,
 }
 
 impl GatewayEngine {
@@ -191,6 +195,8 @@ impl GatewayEngine {
                 reverse: HashMap::new(),
                 ports: PortPool::new(),
             }),
+            #[cfg(target_os = "linux")]
+            reserved_ports_backup: std::sync::Mutex::new(None),
         }
     }
 
@@ -323,6 +329,13 @@ impl GatewayEngine {
                 tracing::warn!("sysctl failed (ignoring): {e}");
             }
 
+            // Reserve the NAT port range from the kernel's ephemeral allocator so the
+            // host's own outbound connections don't pick source ports in 30000-59999.
+            // Without this, the INPUT DROP rule below would black-hole legitimate
+            // reply traffic to host-initiated connections. Shared allocator covers
+            // IPv4 and IPv6, so this one setting is enough.
+            self.reserve_nat_ports_from_kernel();
+
             // Add MASQUERADE rule (check first to avoid duplicates)
             let rule_args = [
                 "-t",
@@ -390,6 +403,112 @@ impl GatewayEngine {
         }
     }
 
+    /// Reverse of `setup_masquerade`: removes the iptables rules and restores
+    /// any sysctl values we changed. Best-effort; errors are logged, not
+    /// propagated.
+    ///
+    /// Safe to call even if `setup_masquerade` was never called — each step is
+    /// guarded by a "rule present?" check.
+    pub fn teardown_masquerade(&self, mesh_cidr: &str) {
+        #[cfg(target_os = "linux")]
+        {
+            // Remove INPUT DROP rules first so the host regains access to the
+            // NAT port range as early as possible.
+            for proto in ["tcp", "udp"] {
+                let drop_args = input_drop_args(proto, &self.internet_iface);
+                iptables_delete_if_present("iptables", &drop_args);
+            }
+
+            let post_args = [
+                "-t",
+                "nat",
+                "-A",
+                "POSTROUTING",
+                "-s",
+                mesh_cidr,
+                "-o",
+                &self.internet_iface,
+                "-j",
+                "MASQUERADE",
+            ];
+            iptables_delete_if_present("iptables", &post_args);
+
+            let fwd_args = ["-A", "FORWARD", "-s", mesh_cidr, "-j", "ACCEPT"];
+            iptables_delete_if_present("iptables", &fwd_args);
+
+            self.restore_nat_ports_from_kernel();
+
+            debug!(mesh_cidr = mesh_cidr, iface = %self.internet_iface, "iptables MASQUERADE removed");
+        }
+
+        #[cfg(target_os = "macos")]
+        {
+            self.teardown_pf_anchor();
+        }
+
+        #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+        {
+            let _ = mesh_cidr;
+        }
+    }
+
+    /// Save the kernel's current `ip_local_reserved_ports` and extend it to
+    /// include our NAT pool. Idempotent: re-entry is a no-op once set.
+    #[cfg(target_os = "linux")]
+    fn reserve_nat_ports_from_kernel(&self) {
+        const PATH: &str = "/proc/sys/net/ipv4/ip_local_reserved_ports";
+        let mut backup = match self.reserved_ports_backup.lock() {
+            Ok(g) => g,
+            Err(p) => p.into_inner(),
+        };
+        if backup.is_some() {
+            return; // already applied
+        }
+        let current = std::fs::read_to_string(PATH)
+            .map(|s| s.trim().to_string())
+            .unwrap_or_default();
+        let our_range = format!("{PORT_MIN}-{PORT_MAX}");
+        let new_value = if current.is_empty() {
+            our_range.clone()
+        } else if current.split(',').any(|e| e.trim() == our_range) {
+            current.clone() // already contains our range verbatim
+        } else {
+            format!("{current},{our_range}")
+        };
+        if new_value != current {
+            if let Err(e) = run_cmd(
+                "sysctl",
+                &["-w", &format!("net.ipv4.ip_local_reserved_ports={new_value}")],
+            ) {
+                tracing::warn!(
+                    "failed to reserve NAT ports from kernel ephemeral range (ignoring): {e}"
+                );
+                return;
+            }
+            debug!(reserved = %new_value, "kernel ephemeral allocator reserved NAT pool");
+        }
+        *backup = Some(current);
+    }
+
+    /// Restore the saved `ip_local_reserved_ports` value, if any.
+    #[cfg(target_os = "linux")]
+    fn restore_nat_ports_from_kernel(&self) {
+        let mut backup = match self.reserved_ports_backup.lock() {
+            Ok(g) => g,
+            Err(p) => p.into_inner(),
+        };
+        let Some(orig) = backup.take() else {
+            return;
+        };
+        // `sysctl -w key=` with an empty RHS is accepted and clears the value.
+        if let Err(e) = run_cmd(
+            "sysctl",
+            &["-w", &format!("net.ipv4.ip_local_reserved_ports={orig}")],
+        ) {
+            tracing::warn!("failed to restore ip_local_reserved_ports (ignoring): {e}");
+        }
+    }
+
     #[cfg(target_os = "macos")]
     fn setup_pf_anchor(&self, mesh_cidr: &str) -> Result<(), GatewayError> {
         const PF_ANCHOR: &str = "com.apple/pim.gateway";
@@ -412,6 +531,17 @@ impl GatewayEngine {
 
         debug!(mesh_cidr = mesh_cidr, iface = %self.internet_iface, anchor = PF_ANCHOR, "pf gateway rules configured");
         Ok(())
+    }
+
+    #[cfg(target_os = "macos")]
+    fn teardown_pf_anchor(&self) {
+        const PF_ANCHOR: &str = "com.apple/pim.gateway";
+        // Flush the anchor's rules. Missing anchors are not an error for pfctl -F.
+        if let Err(e) = run_cmd("pfctl", &["-a", PF_ANCHOR, "-F", "all"]) {
+            tracing::warn!(anchor = PF_ANCHOR, "pfctl anchor flush failed (ignoring): {e}");
+        } else {
+            debug!(anchor = PF_ANCHOR, "pf gateway rules flushed");
+        }
     }
 }
 
@@ -744,6 +874,39 @@ fn check_cmd_quiet(program: &str, args: &[&str]) -> Result<bool, GatewayError> {
         .map_err(|e| GatewayError::CommandFailed(format!("{program}: {e}")))?;
 
     Ok(status.success())
+}
+
+/// Repeatedly run `<program> -D ...` until the matching rule is absent.
+/// `add_args` is the `-A ...` form (or `-t nat -A ...` for NAT rules); we
+/// transform `-A`→`-D` for delete and `-A`→`-C` for presence check. Bounded
+/// to defend against wedged iptables processes and historical duplicates.
+#[cfg(target_os = "linux")]
+pub(crate) fn iptables_delete_if_present(program: &str, add_args: &[&str]) {
+    let replace = |op: &'static str| -> Vec<&str> {
+        let mut v: Vec<&str> = add_args.to_vec();
+        if let Some(pos) = v.iter().position(|a| *a == "-A") {
+            v[pos] = op;
+        }
+        v
+    };
+    for _ in 0..8 {
+        let check = replace("-C");
+        let status = std::process::Command::new(program)
+            .args(&check)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status();
+        let present = matches!(status, Ok(s) if s.success());
+        if !present {
+            return;
+        }
+        let del = replace("-D");
+        let _ = std::process::Command::new(program)
+            .args(&del)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status();
+    }
 }
 
 // ── IP packet builder (test helper) ──────────────────────────────────────────
