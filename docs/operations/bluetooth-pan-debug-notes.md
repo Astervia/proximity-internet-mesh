@@ -147,13 +147,18 @@ Extend `[bluetooth]` with a Linux-only server option, for example:
 enabled = true
 serve_nap = true
 nap_bridge = "br-bt"
+nap_bridge_addr = "192.168.44.1/24"
+dhcp_enabled = true
 ```
 
-Expected behavior:
+Expected behavior (as of the resilient bring-up work):
 
-- on startup, the daemon ensures the bridge exists or validates it
-- starts `bt-network -s nap <bridge>`
-- keeps the server process alive under daemon lifecycle management
+- on startup, the daemon **auto-creates** `nap_bridge` with `ip link add … type bridge` if missing, brings it up, and assigns `nap_bridge_addr`; a missing bridge is no longer silently tolerated
+- starts `bt-network -s nap <bridge>` with `kill_on_drop(true)` so the child is reaped on daemon exit
+- keeps the server process alive under daemon lifecycle management and restarts it if it exits
+- when `gateway.enabled = true`, installs iptables MASQUERADE/FORWARD rules from the Bluetooth subnet (derived from `nap_bridge_addr`) to `gateway.nat_interface`
+- when `dhcp_enabled = true`, supervises a `dnsmasq` instance bound to the bridge so PAN clients get an IP, a default route, and DNS automatically; `dhcp_range` defaults to a safe pool derived from `nap_bridge_addr`, and `dhcp_dns` falls back to the nameservers listed in `/etc/resolv.conf`
+- on PAN clients (`serve_nap = false`, `request_dhcp = true`), the daemon auto-runs `dhclient -d -v <interface>` once the PAN interface appears and restarts it if it dies
 - avoids the need for manual external PAN setup on gateway hosts
 
 ### 2. Resolve the PAN interface dynamically

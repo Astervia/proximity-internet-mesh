@@ -252,6 +252,13 @@ local_alias = "PIM-${node_name}"
 connect_pan = true
 serve_nap = false
 nap_bridge = "br-bt"
+# nap_bridge_addr only matters when serve_nap = true; included for parity with the gateway config.
+nap_bridge_addr = "192.168.44.1/24"
+dhcp_enabled = false
+dhcp_lease_time = "12h"
+# dhcp_dns = "1.1.1.1,8.8.8.8"  # optional; inherited from /etc/resolv.conf when unset.
+# Run dhclient on the PAN interface once the Linux client joins the gateway's NAP.
+request_dhcp = true
 auto_discover_peers = true
 poll_interval_ms = 2000
 scan_interval_ms = 5000
