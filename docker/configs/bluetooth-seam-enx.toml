@@ -27,6 +27,8 @@ local_alias = "PIM-bluetooth-seam-enx"
 connect_pan = true
 serve_nap = false
 nap_bridge = "br-bt"
+# Seam tests don't run a real DHCP client; the fake PAN already has a usable address.
+request_dhcp = false
 auto_discover_peers = true
 poll_interval_ms = 250
 scan_interval_ms = 250

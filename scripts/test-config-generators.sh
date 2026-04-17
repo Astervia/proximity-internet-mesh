@@ -39,6 +39,8 @@ assert_contains "$linux_client" 'interface = "auto"'
 assert_contains "$linux_client" 'connect_pan = true'
 assert_contains "$linux_client" 'serve_nap = false'
 assert_contains "$linux_client" 'nap_bridge = "br-bt"'
+assert_contains "$linux_client" 'request_dhcp = true'
+assert_contains "$linux_client" 'dhcp_enabled = false'
 
 mac_client="$tmpdir/macos-client.toml"
 PIM_HOST_OS=Darwin scripts/generate_client_full_config.sh > "$mac_client"
@@ -53,6 +55,14 @@ assert_contains "$mac_client" 'serve_nap = false'
 assert_not_contains "$mac_client" '#   ip -br link'
 assert_not_contains "$mac_client" '#   iw dev'
 assert_not_contains "$mac_client" '#   bluetoothctl show'
+
+linux_gateway="$tmpdir/linux-gateway.toml"
+PIM_HOST_OS=Linux scripts/generate_gateway_full_config.sh > "$linux_gateway"
+assert_contains "$linux_gateway" 'serve_nap = true'
+assert_contains "$linux_gateway" 'nap_bridge = "br-bt"'
+assert_contains "$linux_gateway" 'nap_bridge_addr = "192.168.44.1/24"'
+assert_contains "$linux_gateway" 'dhcp_enabled = true'
+assert_contains "$linux_gateway" 'request_dhcp = false'
 
 mac_gateway="$tmpdir/macos-gateway.toml"
 PIM_HOST_OS=Darwin scripts/generate_gateway_full_config.sh > "$mac_gateway"
