@@ -206,6 +206,7 @@ wait_all_healthy() {
 start_stack() {
     local file="$1"
     log_info "Starting stack: $file"
+    compose "$file" down -v --remove-orphans >/dev/null 2>&1 || true
     compose "$file" up -d --build
 }
 
