@@ -17,4 +17,4 @@ key_file = "/var/lib/pim/node.key"
 
 [gateway]
 enabled = true
-nat_interface = "eth0"
+nat_interface = "eth1"
