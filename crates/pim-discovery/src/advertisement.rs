@@ -1,6 +1,6 @@
 //! Discovery advertisement: wire format and capabilities.
 
-use aes_gcm::aead::{Aead, KeyInit};
+use aes_gcm::aead::KeyInit;
 use aes_gcm::{Aes256Gcm, Nonce};
 use pim_core::NodeId;
 use rand::rngs::OsRng;
@@ -92,19 +92,24 @@ impl DiscoveryAdvertisement {
 
     /// Serialize to the encrypted wire format.
     pub fn serialize_encrypted(&self, key: &[u8; 32]) -> [u8; ENCRYPTED_PACKET_SIZE] {
+        use aes_gcm::aead::AeadInPlace;
+
         let cipher = Aes256Gcm::new_from_slice(key).expect("32-byte key is valid for AES-256");
         let mut nonce_bytes = [0u8; 12];
         OsRng.fill_bytes(&mut nonce_bytes);
         let nonce = Nonce::from_slice(&nonce_bytes);
-        let ciphertext = cipher
-            .encrypt(nonce, self.plaintext_bytes().as_ref())
-            .expect("discovery advertisement encryption should succeed");
 
         let mut buf = [0u8; ENCRYPTED_PACKET_SIZE];
         buf[0..4].copy_from_slice(&MAGIC);
         buf[4] = ENCRYPTED_VERSION;
         buf[5..17].copy_from_slice(&nonce_bytes);
-        buf[17..].copy_from_slice(&ciphertext);
+        buf[17..17 + PACKET_SIZE].copy_from_slice(&self.plaintext_bytes());
+
+        let tag = cipher
+            .encrypt_in_place_detached(nonce, b"", &mut buf[17..17 + PACKET_SIZE])
+            .expect("discovery advertisement encryption should succeed");
+
+        buf[17 + PACKET_SIZE..].copy_from_slice(&tag);
         buf
     }
 
@@ -137,6 +142,8 @@ impl DiscoveryAdvertisement {
 
     /// Decrypt and deserialize from a byte slice using the shared discovery key.
     pub fn deserialize_encrypted(buf: &[u8], key: &[u8; 32]) -> Option<Self> {
+        use aes_gcm::aead::{AeadInPlace, Tag};
+
         if buf.len() < ENCRYPTED_PACKET_SIZE {
             return None;
         }
@@ -151,7 +158,13 @@ impl DiscoveryAdvertisement {
         nonce_bytes.copy_from_slice(&buf[5..17]);
         let nonce = Nonce::from_slice(&nonce_bytes);
         let cipher = Aes256Gcm::new_from_slice(key).ok()?;
-        let plaintext = cipher.decrypt(nonce, &buf[17..]).ok()?;
+
+        let mut plaintext = [0u8; PACKET_SIZE];
+        plaintext.copy_from_slice(&buf[17..17 + PACKET_SIZE]);
+        let tag = Tag::<Aes256Gcm>::from_slice(&buf[17 + PACKET_SIZE..17 + PACKET_SIZE + 16]);
+
+        cipher.decrypt_in_place_detached(nonce, b"", &mut plaintext, tag).ok()?;
+
         Self::deserialize_plaintext_payload(&plaintext)
     }
 
