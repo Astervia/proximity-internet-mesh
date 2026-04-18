@@ -689,8 +689,13 @@ fn lookup_interface_ipv6(interface: &str) -> Result<Ipv6Addr> {
 }
 
 async fn lookup_interface_ipv6_with_retry(interface: &str) -> Result<Ipv6Addr> {
+    // Short retry budget: a statically-addressed container has IPv6 immediately,
+    // and a SLAAC'd interface finishes within ~2s. On IPv4-only containers this
+    // path would otherwise block the whole startup (and thus the event loop)
+    // until all retries are exhausted — see the p1/p2 single-hop tests where
+    // the gateway has no IPv6 at all.
     let mut last_err = None;
-    for _ in 0..60 {
+    for _ in 0..8 {
         match lookup_interface_ipv6(interface) {
             Ok(ip) => return Ok(ip),
             Err(err) => last_err = Some(err),
@@ -2048,12 +2053,12 @@ async fn run_heartbeats(state: Arc<DaemonState>) {
 
 async fn run_event_loop(state: Arc<DaemonState>) -> Result<()> {
     let mut tun_buf = vec![0u8; 65536];
-    // Gateway X25519 public key — learned from heartbeats (clients) or own key (gateway).
-    let mut known_gw_x25519: Option<[u8; 32]> = if state.is_gateway {
-        Some(state.own_x25519_pub)
-    } else {
-        None
-    };
+    // Per-gateway X25519 public keys — learned from each gateway's direct heartbeat.
+    // For a gateway node, pre-populate with own key so loopback internet flows encrypt correctly.
+    let mut gw_x25519_by_id: HashMap<NodeId, [u8; 32]> = HashMap::new();
+    if state.is_gateway {
+        gw_x25519_by_id.insert(state.self_id, state.own_x25519_pub);
+    }
 
     info!(self_id = %state.self_id, is_gateway = state.is_gateway, "event loop started");
 
@@ -2072,6 +2077,7 @@ async fn run_event_loop(state: Arc<DaemonState>) -> Result<()> {
                     debug!(bytes = n, "empty packet from TUN; dropping");
                     continue;
                 };
+                debug!(bytes = n, ip_version, "TUN pkt: before routing lookup");
                 let (dst_id, next_hop_id, mut flags) = if ip_version == 4 {
                     if n < 20 {
                         debug!(bytes = n, "short IPv4 packet from TUN; dropping");
@@ -2084,10 +2090,15 @@ async fn run_event_loop(state: Arc<DaemonState>) -> Result<()> {
                         continue;
                     }
 
-                    match state.routing.lock().await.lookup_mesh_ip(dest_ip) {
+                    debug!(%dest_ip, "TUN pkt: acquiring routing lock (v4)");
+                    let mesh_lookup = state.routing.lock().await.lookup_mesh_ip(dest_ip);
+                    debug!(%dest_ip, found = mesh_lookup.is_some(), "TUN pkt: routing lookup done (v4)");
+                    match mesh_lookup {
                         Some((dst_id, next_hop)) => (dst_id, next_hop, DataFlags::empty()),
                         None => {
+                            debug!(%dest_ip, "TUN pkt: acquiring routing lock for gw_route (v4)");
                             let gw_route = state.routing.lock().await.nearest_gateway_route();
+                            debug!(%dest_ip, has_gw = gw_route.is_some(), "TUN pkt: gw_route done (v4)");
                             match gw_route {
                                 Some((gw_id, next_hop)) => (gw_id, next_hop, DataFlags::IS_INTERNET),
                                 None => {
@@ -2102,7 +2113,9 @@ async fn run_event_loop(state: Arc<DaemonState>) -> Result<()> {
                         }
                     }
                 } else if ip_version == 6 {
+                    debug!("TUN pkt: acquiring routing lock (v6)");
                     let gw_route = state.routing.lock().await.nearest_gateway_route();
+                    debug!(has_gw = gw_route.is_some(), "TUN pkt: gw_route done (v6)");
                     match gw_route {
                         Some((gw_id, next_hop)) => (gw_id, next_hop, DataFlags::IS_INTERNET),
                         None => {
@@ -2119,7 +2132,9 @@ async fn run_event_loop(state: Arc<DaemonState>) -> Result<()> {
                     continue;
                 };
 
+                debug!(%next_hop_id, "TUN pkt: routed; acquiring sessions lock");
                 let session = state.sessions.read().await.get(&next_hop_id).cloned();
+                debug!(%next_hop_id, has_session = session.is_some(), "TUN pkt: sessions lookup done");
                 let Some(session) = session else {
                     debug!(%next_hop_id, "no session for next hop; dropping");
                     continue;
@@ -2127,10 +2142,12 @@ async fn run_event_loop(state: Arc<DaemonState>) -> Result<()> {
 
                 let payload: Vec<u8>;
 
-                // E2E-encrypt if we have the gateway's X25519 public key and
-                // this packet is internet-bound.
+                // E2E-encrypt if we have the destination gateway's X25519 public key
+                // and this packet is internet-bound. Must use the key of the *selected*
+                // gateway (dst_id) — not some other gateway — or the gateway will fail
+                // to decrypt.
                 if flags.contains(DataFlags::IS_INTERNET) {
-                    if let Some(gw_pub) = known_gw_x25519 {
+                    if let Some(gw_pub) = gw_x25519_by_id.get(&dst_id).copied() {
                         match e2e_encrypt(packet, &gw_pub) {
                             Ok(enc) => {
                                 flags |= DataFlags::IS_E2E;
@@ -2148,6 +2165,7 @@ async fn run_event_loop(state: Arc<DaemonState>) -> Result<()> {
                     payload = packet.to_vec();
                 }
 
+                debug!(%dst_id, %next_hop_id, ?flags, bytes = payload.len(), "dispatching TUN packet to mesh");
                 send_mesh_data(
                     &state,
                     &session,
@@ -2158,6 +2176,7 @@ async fn run_event_loop(state: Arc<DaemonState>) -> Result<()> {
                     &payload,
                 )
                 .await;
+                debug!(%dst_id, "dispatched TUN packet");
                 state.packets_forwarded.fetch_add(1, Ordering::Relaxed);
                 state.bytes_forwarded.fetch_add(n as u64, Ordering::Relaxed);
             }
@@ -2449,8 +2468,8 @@ async fn run_event_loop(state: Arc<DaemonState>) -> Result<()> {
                                 // Direct gateway heartbeat: learn X25519 key and record load
                                 if hb.gateway_hops == 0 {
                                     if hb.gw_x25519_pub != [0u8; 32] {
-                                        known_gw_x25519 = Some(hb.gw_x25519_pub);
-                                        debug!("learned gateway X25519 pub key");
+                                        gw_x25519_by_id.insert(from_peer, hb.gw_x25519_pub);
+                                        debug!(%from_peer, "learned gateway X25519 pub key");
                                     }
                                     state.routing.lock().await.update_gateway_load(from_peer, hb.load);
                                 }

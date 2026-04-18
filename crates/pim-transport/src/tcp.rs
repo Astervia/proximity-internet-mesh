@@ -169,11 +169,14 @@ impl TcpTransport {
         tokio::spawn(async move {
             let mut writer = write_half;
             while let Some(data) = write_rx.recv().await {
+                let len = data.len();
                 if let Err(e) = writer.write_all(&data).await {
                     let id = *write_id.read().await;
                     warn!(write_peer_id = %id, "write failed: {e}");
                     break;
                 }
+                let id = *write_id.read().await;
+                debug!(write_peer_id = %id, bytes = len, "wrote frame to socket");
             }
             let id = *write_id.read().await;
             debug!(write_peer_id = %id, "write task ended");
@@ -360,14 +363,22 @@ impl Transport for TcpTransport {
         let mut wire_buf = BytesMut::new();
         LengthDelimitedCodec::encode(&frame_buf, &mut wire_buf);
 
+        let wire_len = wire_buf.len();
+        let ft = frame.frame_type;
+
         // Non-blocking: return Congested instead of blocking when the write
         // queue is full.  Callers apply priority-based drop policy.
-        writer.tx.try_send(wire_buf.freeze()).map_err(|e| match e {
+        let result = writer.tx.try_send(wire_buf.freeze()).map_err(|e| match e {
             tokio::sync::mpsc::error::TrySendError::Full(_) => TransportError::Congested(*peer),
             tokio::sync::mpsc::error::TrySendError::Closed(_) => {
                 TransportError::SendFailed("write channel closed".into())
             }
-        })
+        });
+        match &result {
+            Ok(()) => debug!(%peer, ?ft, bytes = wire_len, "queued frame to peer"),
+            Err(e) => debug!(%peer, ?ft, "send failed: {e}"),
+        }
+        result
     }
 
     async fn recv(&self) -> Result<(NodeId, TransportFrame), TransportError> {
