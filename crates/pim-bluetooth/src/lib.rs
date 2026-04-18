@@ -12,6 +12,8 @@
 #![warn(missing_docs)]
 
 use std::collections::HashSet;
+#[cfg(target_os = "linux")]
+use std::collections::HashMap;
 use std::net::{IpAddr, SocketAddr, SocketAddrV6};
 #[cfg(any(test, target_os = "linux"))]
 use std::path::Path;
@@ -244,6 +246,8 @@ impl BluetoothDiscovery {
         let mut dnsmasq_child: Option<Child> = None;
         #[cfg(target_os = "linux")]
         let mut dhclient_child: Option<(String, Child)> = None;
+        #[cfg(target_os = "linux")]
+        let mut pan_clients: HashMap<String, Child> = HashMap::new();
 
         let mut active_interface: Option<ResolvedPanInterface> = None;
         let startup_deadline =
@@ -269,6 +273,7 @@ impl BluetoothDiscovery {
                             &mut nap_server,
                             &mut dnsmasq_child,
                             &mut dhclient_child,
+                            &mut pan_clients,
                         )
                         .await;
                     }
@@ -279,10 +284,13 @@ impl BluetoothDiscovery {
                     #[cfg(target_os = "linux")]
                     {
                         self.ensure_nap_server_running(&mut nap_server).await?;
-                        if self.config.serve_nap && self.config.dhcp_enabled {
+                        if self.config.serve_nap {
                             let bridge = self.config.nap_bridge.trim().to_string();
                             if !bridge.is_empty() {
-                                self.ensure_dnsmasq_running(&bridge, &mut dnsmasq_child).await?;
+                                self.attach_bnep_to_bridge(&bridge).await?;
+                                if self.config.dhcp_enabled {
+                                    self.ensure_dnsmasq_running(&bridge, &mut dnsmasq_child).await?;
+                                }
                             }
                         }
                     }
@@ -311,8 +319,17 @@ impl BluetoothDiscovery {
                             && self.config.connect_pan
                             && !self.config.serve_nap
                         {
-                            self.ensure_dhclient_running(&interface.name, &mut dhclient_child)
-                                .await?;
+                            if let Err(err) = self
+                                .ensure_dhclient_running(&interface.name, &mut dhclient_child)
+                                .await
+                            {
+                                warn!(
+                                    interface = %interface.name,
+                                    dhclient = %self.dhclient_command.display(),
+                                    %err,
+                                    "Bluetooth DHCP client unavailable; continuing without DHCP (peer discovery still works via IPv6 link-local)"
+                                );
+                            }
                         }
                     }
 
@@ -337,6 +354,23 @@ impl BluetoothDiscovery {
                     }
                 }
                 _ = scan_interval.tick(), if self.config.radio_discovery_enabled && self.config.connect_pan => {
+                    #[cfg(target_os = "linux")]
+                    {
+                        pan_clients.retain(|mac, child| match child.try_wait() {
+                            Ok(Some(status)) => {
+                                warn!(%mac, ?status, "Bluetooth PAN client (bt-network) exited; will retry on next scan");
+                                seen_macs.remove(mac);
+                                false
+                            }
+                            Ok(None) => true,
+                            Err(err) => {
+                                warn!(%mac, %err, "failed to poll bt-network child; dropping handle");
+                                seen_macs.remove(mac);
+                                false
+                            }
+                        });
+                    }
+
                     let devices = self.discover_devices().await?;
                     for device in devices {
                         if seen_macs.contains(&device.mac) {
@@ -344,8 +378,24 @@ impl BluetoothDiscovery {
                         }
                         match self.pair_and_request_pan(&device).await {
                             Ok(()) => {
-                                info!(mac = %device.mac, name = %device.name, "Bluetooth radio-discovered peer prepared");
-                                seen_macs.insert(device.mac);
+                                #[cfg(target_os = "linux")]
+                                {
+                                    match self.start_pan_client(&device.mac).await {
+                                        Ok(child) => {
+                                            info!(mac = %device.mac, name = %device.name, "Bluetooth radio-discovered peer prepared");
+                                            pan_clients.insert(device.mac.clone(), child);
+                                            seen_macs.insert(device.mac);
+                                        }
+                                        Err(err) => {
+                                            warn!(mac = %device.mac, name = %device.name, "Bluetooth bt-network spawn failed: {err}");
+                                        }
+                                    }
+                                }
+                                #[cfg(not(target_os = "linux"))]
+                                {
+                                    info!(mac = %device.mac, name = %device.name, "Bluetooth radio-discovered peer prepared");
+                                    seen_macs.insert(device.mac);
+                                }
                             }
                             Err(err) => {
                                 warn!(mac = %device.mac, name = %device.name, "Bluetooth radio discovery failed: {err}");
@@ -437,18 +487,14 @@ impl BluetoothDiscovery {
     }
 
     #[cfg(target_os = "linux")]
-    async fn run_bt_network(&self, mac: &str) -> Result<(), BluetoothError> {
-        let output = Command::new(&self.bt_network_command)
+    async fn start_pan_client(&self, mac: &str) -> Result<Child, BluetoothError> {
+        let child = Command::new(&self.bt_network_command)
             .args(["-c", mac, "nap"])
-            .output()
-            .await?;
-        if !output.status.success() {
-            return Err(BluetoothError::CommandFailed {
-                command: "bt-network",
-                message: String::from_utf8_lossy(&output.stderr).trim().to_string(),
-            });
-        }
-        Ok(())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .kill_on_drop(true)
+            .spawn()?;
+        Ok(child)
     }
 
     #[cfg(target_os = "linux")]
@@ -516,7 +562,6 @@ impl BluetoothDiscovery {
         self.run_bluetoothctl(["pair", &device.mac]).await?;
         self.run_bluetoothctl(["trust", &device.mac]).await?;
         self.run_bluetoothctl(["connect", &device.mac]).await?;
-        self.run_bt_network(&device.mac).await?;
         Ok(())
     }
 
@@ -616,6 +661,60 @@ impl BluetoothDiscovery {
             }
         }
 
+        Ok(())
+    }
+
+    /// Walk `/sys/class/net` and add any BNEP (DEVTYPE=bluetooth) interface
+    /// that is not already enslaved to a bridge to the NAP bridge, then bring
+    /// it up. Works around BlueZ's `bt-network -s nap` failing to auto-bridge
+    /// incoming PAN connections on some distros.
+    #[cfg(target_os = "linux")]
+    async fn attach_bnep_to_bridge(&self, bridge: &str) -> Result<(), BluetoothError> {
+        if bridge.is_empty() {
+            return Ok(());
+        }
+        let mut entries = match tokio::fs::read_dir(&self.sysfs_root).await {
+            Ok(entries) => entries,
+            Err(err) => {
+                debug!(sysfs = %self.sysfs_root.display(), %err, "cannot enumerate sysfs net dir");
+                return Ok(());
+            }
+        };
+        while let Some(entry) = entries.next_entry().await? {
+            let name = entry.file_name().to_string_lossy().to_string();
+            if name == bridge {
+                continue;
+            }
+            let uevent = match tokio::fs::read_to_string(entry.path().join("uevent")).await {
+                Ok(contents) => contents,
+                Err(_) => continue,
+            };
+            if !uevent.lines().any(|l| l.trim() == "DEVTYPE=bluetooth") {
+                continue;
+            }
+            if entry.path().join("master").exists() {
+                continue;
+            }
+            let set_master = Command::new(&self.ip_command)
+                .args(["link", "set", &name, "master", bridge])
+                .output()
+                .await?;
+            if !set_master.status.success() {
+                let msg = String::from_utf8_lossy(&set_master.stderr).trim().to_string();
+                warn!(iface = %name, bridge, "failed to attach BNEP to bridge: {msg}");
+                continue;
+            }
+            let set_up = Command::new(&self.ip_command)
+                .args(["link", "set", &name, "up"])
+                .output()
+                .await?;
+            if !set_up.status.success() {
+                let msg = String::from_utf8_lossy(&set_up.stderr).trim().to_string();
+                warn!(iface = %name, "failed to bring BNEP interface up: {msg}");
+                continue;
+            }
+            info!(iface = %name, bridge, "Bluetooth BNEP interface attached to NAP bridge");
+        }
         Ok(())
     }
 
@@ -784,6 +883,7 @@ impl BluetoothDiscovery {
         nap_server: &mut Option<Child>,
         dnsmasq_child: &mut Option<Child>,
         dhclient_child: &mut Option<(String, Child)>,
+        pan_clients: &mut HashMap<String, Child>,
     ) {
         if let Some(mut child) = nap_server.take() {
             let _ = child.kill().await;
@@ -794,6 +894,10 @@ impl BluetoothDiscovery {
             let _ = child.wait().await;
         }
         if let Some((_, mut child)) = dhclient_child.take() {
+            let _ = child.kill().await;
+            let _ = child.wait().await;
+        }
+        for (_, mut child) in pan_clients.drain() {
             let _ = child.kill().await;
             let _ = child.wait().await;
         }
