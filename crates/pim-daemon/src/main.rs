@@ -651,6 +651,42 @@ fn lookup_interface_ipv4(interface: &str) -> Result<Ipv4Addr> {
         .with_context(|| format!("no IPv4 address found on interface {interface}"))
 }
 
+/// Scan all interfaces (except the mesh TUN) for any global IPv6 address. Used
+/// as a fallback when the configured `nat_interface` has no global IPv6 —
+/// common in Docker test environments where interface→network mapping
+/// (eth0 vs eth1) is non-deterministic even though the YAML declares an order.
+#[cfg(target_os = "linux")]
+fn find_any_ipv6_uplink(exclude: &[&str]) -> Option<(String, Ipv6Addr)> {
+    let output = Command::new("ip")
+        .args(["-6", "-o", "addr", "show", "scope", "global"])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let stdout = String::from_utf8(output.stdout).ok()?;
+    for line in stdout.lines() {
+        let mut it = line.split_whitespace();
+        let _idx = it.next();
+        let iface = it.next()?;
+        if exclude.iter().any(|e| *e == iface) {
+            continue;
+        }
+        let _fam = it.next();
+        let addr_cidr = it.next()?;
+        let ip_str = addr_cidr.split('/').next()?;
+        if let Ok(ip) = ip_str.parse::<Ipv6Addr>() {
+            return Some((iface.to_string(), ip));
+        }
+    }
+    None
+}
+
+#[cfg(not(target_os = "linux"))]
+fn find_any_ipv6_uplink(_exclude: &[&str]) -> Option<(String, Ipv6Addr)> {
+    None
+}
+
 fn lookup_interface_ipv6(interface: &str) -> Result<Ipv6Addr> {
     #[cfg(target_os = "linux")]
     let output = Command::new("ip")
@@ -1533,16 +1569,31 @@ async fn ensure_gateway_ipv6_engine(state: &Arc<DaemonState>) -> Option<Arc<Gate
         return Some(gw);
     }
 
-    let iface = state.gateway_nat_interface.as_deref()?;
-    let external_ip = match lookup_interface_ipv6(iface) {
-        Ok(ip) => ip,
+    let configured = state.gateway_nat_interface.as_deref()?;
+    let (iface, external_ip) = match lookup_interface_ipv6(configured) {
+        Ok(ip) => (configured.to_string(), ip),
         Err(e) => {
-            debug!(iface = %iface, "IPv6 gateway uplink still unavailable: {e}");
-            return None;
+            // Fall back to scanning other interfaces. Docker Compose sometimes
+            // maps the uplink network to a different eth index than the config
+            // expects (see find_any_ipv6_uplink).
+            match find_any_ipv6_uplink(&[configured, "pim0", "lo"]) {
+                Some((iface, ip)) => {
+                    info!(
+                        configured = %configured,
+                        detected = %iface,
+                        "configured nat_interface has no IPv6; using auto-detected uplink"
+                    );
+                    (iface, ip)
+                }
+                None => {
+                    debug!(iface = %configured, "IPv6 gateway uplink still unavailable: {e}");
+                    return None;
+                }
+            }
         }
     };
 
-    let gw = Arc::new(GatewayEngineV6::new(external_ip, iface));
+    let gw = Arc::new(GatewayEngineV6::new(external_ip, &iface));
     if let Err(e) = gw.setup_masquerade() {
         warn!("ip6tables setup failed (may need root): {e}");
     }
@@ -3409,11 +3460,23 @@ async fn main() -> Result<()> {
         match lookup_interface_ipv6_with_retry(&config.gateway.nat_interface).await {
             Ok(ip) => Some(ip),
             Err(e) => {
-                warn!(
-                    iface = %config.gateway.nat_interface,
-                    "IPv6 gateway uplink unavailable: {e}"
-                );
-                None
+                match find_any_ipv6_uplink(&[&config.gateway.nat_interface, "pim0", "lo"]) {
+                    Some((iface, ip)) => {
+                        info!(
+                            configured = %config.gateway.nat_interface,
+                            detected = %iface,
+                            "configured nat_interface has no IPv6; using auto-detected uplink"
+                        );
+                        Some(ip)
+                    }
+                    None => {
+                        warn!(
+                            iface = %config.gateway.nat_interface,
+                            "IPv6 gateway uplink unavailable: {e}"
+                        );
+                        None
+                    }
+                }
             }
         }
     } else {
