@@ -478,7 +478,10 @@ impl GatewayEngine {
         if new_value != current {
             if let Err(e) = run_cmd(
                 "sysctl",
-                &["-w", &format!("net.ipv4.ip_local_reserved_ports={new_value}")],
+                &[
+                    "-w",
+                    &format!("net.ipv4.ip_local_reserved_ports={new_value}"),
+                ],
             ) {
                 tracing::warn!(
                     "failed to reserve NAT ports from kernel ephemeral range (ignoring): {e}"
@@ -538,7 +541,10 @@ impl GatewayEngine {
         const PF_ANCHOR: &str = "com.apple/pim.gateway";
         // Flush the anchor's rules. Missing anchors are not an error for pfctl -F.
         if let Err(e) = run_cmd("pfctl", &["-a", PF_ANCHOR, "-F", "all"]) {
-            tracing::warn!(anchor = PF_ANCHOR, "pfctl anchor flush failed (ignoring): {e}");
+            tracing::warn!(
+                anchor = PF_ANCHOR,
+                "pfctl anchor flush failed (ignoring): {e}"
+            );
         } else {
             debug!(anchor = PF_ANCHOR, "pf gateway rules flushed");
         }
