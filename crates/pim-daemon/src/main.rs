@@ -669,7 +669,7 @@ fn find_any_ipv6_uplink(exclude: &[&str]) -> Option<(String, Ipv6Addr)> {
         let mut it = line.split_whitespace();
         let _idx = it.next();
         let iface = it.next()?;
-        if exclude.iter().any(|e| *e == iface) {
+        if exclude.contains(&iface) {
             continue;
         }
         let _fam = it.next();
@@ -3459,25 +3459,23 @@ async fn main() -> Result<()> {
     let gateway_external_ipv6 = if is_gateway {
         match lookup_interface_ipv6_with_retry(&config.gateway.nat_interface).await {
             Ok(ip) => Some(ip),
-            Err(e) => {
-                match find_any_ipv6_uplink(&[&config.gateway.nat_interface, "pim0", "lo"]) {
-                    Some((iface, ip)) => {
-                        info!(
-                            configured = %config.gateway.nat_interface,
-                            detected = %iface,
-                            "configured nat_interface has no IPv6; using auto-detected uplink"
-                        );
-                        Some(ip)
-                    }
-                    None => {
-                        warn!(
-                            iface = %config.gateway.nat_interface,
-                            "IPv6 gateway uplink unavailable: {e}"
-                        );
-                        None
-                    }
+            Err(e) => match find_any_ipv6_uplink(&[&config.gateway.nat_interface, "pim0", "lo"]) {
+                Some((iface, ip)) => {
+                    info!(
+                        configured = %config.gateway.nat_interface,
+                        detected = %iface,
+                        "configured nat_interface has no IPv6; using auto-detected uplink"
+                    );
+                    Some(ip)
                 }
-            }
+                None => {
+                    warn!(
+                        iface = %config.gateway.nat_interface,
+                        "IPv6 gateway uplink unavailable: {e}"
+                    );
+                    None
+                }
+            },
         }
     } else {
         None
