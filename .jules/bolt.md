@@ -22,3 +22,8 @@
 
 **Learning:** Transport write queues were creating unnecessary memory allocations in the hot path. Serializing frames via `BytesMut` then converting them using `.to_vec()` caused extra allocations on every outgoing packet. Using `freeze()` transforms `BytesMut` into `Bytes` with zero copying.
 **Action:** Use `Bytes::freeze()` rather than `.to_vec()` to pass buffers between async tasks without unnecessary memory allocations.
+
+## 2024-05-17 - Discovery advertisement encryption zero-copy allocation optimization
+
+**Learning:** Discovery advertisement serialization/deserialization for encrypted format used standard `.encrypt` and `.decrypt` from the AEAD cipher, resulting in repeated allocation of `Vec<u8>`. For a system that handles heavy network I/O, these continuous runtime allocations can introduce bottlenecks.
+**Action:** Use `AeadInPlace::encrypt_in_place_detached` and `decrypt_in_place_detached` operating directly on stack buffers, preserving zero-copy operations across the codebase.
