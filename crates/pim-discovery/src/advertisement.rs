@@ -163,7 +163,9 @@ impl DiscoveryAdvertisement {
         plaintext.copy_from_slice(&buf[17..17 + PACKET_SIZE]);
         let tag = Tag::<Aes256Gcm>::from_slice(&buf[17 + PACKET_SIZE..17 + PACKET_SIZE + 16]);
 
-        cipher.decrypt_in_place_detached(nonce, b"", &mut plaintext, tag).ok()?;
+        cipher
+            .decrypt_in_place_detached(nonce, b"", &mut plaintext, tag)
+            .ok()?;
 
         Self::deserialize_plaintext_payload(&plaintext)
     }
