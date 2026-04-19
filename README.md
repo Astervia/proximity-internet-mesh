@@ -14,17 +14,17 @@ The codebase is currently centered on a Linux daemon, a small CLI, and Docker-ba
 
 ## Platform Support Matrix
 
-| Capability | Linux | macOS |
-| --- | --- | --- |
-| Client runtime | Supported | Supported |
-| Relay runtime | Supported | Supported |
-| Gateway runtime and NAT | Supported | Supported |
-| Wi-Fi Direct backend | Supported | Supported |
-| Bluetooth PAN backend | Supported | Supported |
-| `pim config generate client` | Supported | Supported |
-| `pim config generate relay` | Supported | Supported |
-| `pim config generate gateway` | Supported | Supported |
-| Docker integration labs | Supported | Not supported |
+| Capability                    | Linux     | macOS         |
+| ----------------------------- | --------- | ------------- |
+| Client runtime                | Supported | Supported     |
+| Relay runtime                 | Supported | Supported     |
+| Gateway runtime and NAT       | Supported | Supported     |
+| Wi-Fi Direct backend          | Supported | Supported     |
+| Bluetooth PAN backend         | Supported | Supported     |
+| `pim config generate client`  | Supported | Supported     |
+| `pim config generate relay`   | Supported | Supported     |
+| `pim config generate gateway` | Supported | Supported     |
+| Docker integration labs       | Supported | Not supported |
 
 On macOS, use a `utunN` interface such as `utun0` for the mesh TUN and set `gateway.nat_interface` to the internet-facing host interface such as `en0`. The Wi-Fi Direct backend uses Bonjour peer-to-peer discovery on macOS rather than Linux `wpa_cli` group formation, so Linux-specific tuning fields in `[wifi_direct]` are ignored there.
 
