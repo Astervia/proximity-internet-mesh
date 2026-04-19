@@ -10,7 +10,7 @@
 #   ip -br link
 
 [node]
-name = "kufluid"
+name = "gatewaybtonly"
 data_dir = "/var/lib/pim"
 
 [interface]
@@ -65,7 +65,7 @@ interface = "auto"
 # - also scan/connect outward as a PAN client when peers are discovered
 radio_discovery_enabled = true
 device_name_prefix = "PIM-"
-local_alias = "PIM-kufluid"
+local_alias = "PIM-gatewaybtonly"
 connect_pan = false # Use true to test simultaneous PAN client/AP
 serve_nap = true
 nap_bridge = "br-bt"
