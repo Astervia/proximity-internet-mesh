@@ -371,7 +371,17 @@ impl BluetoothDiscovery {
                         });
                     }
 
+                    info!(
+                        prefix = %self.config.device_name_prefix,
+                        active_connections = seen_macs.len(),
+                        "Bluetooth radio scan started"
+                    );
                     let devices = self.discover_devices().await?;
+                    info!(
+                        found = devices.len(),
+                        new = devices.iter().filter(|d| !seen_macs.contains(&d.mac)).count(),
+                        "Bluetooth radio scan complete"
+                    );
                     for device in devices {
                         if seen_macs.contains(&device.mac) {
                             continue;
@@ -695,6 +705,7 @@ impl BluetoothDiscovery {
             if entry.path().join("master").exists() {
                 continue;
             }
+            info!(iface = %name, bridge, "Bluetooth PAN client connecting; attaching BNEP interface to NAP bridge");
             let set_master = Command::new(&self.ip_command)
                 .args(["link", "set", &name, "master", bridge])
                 .output()
