@@ -191,14 +191,17 @@ impl TcpTransport {
             let mut reader = read_half;
             let mut buf = BytesMut::with_capacity(4096);
 
-            loop {
+            // Read until EOF/error; capture the peer id at the moment of
+            // disconnection.  Re-reading after the loop would race with
+            // rename_peer updating current_id for a new connection.
+            let id = 'read: loop {
                 // Read more data from socket
                 let mut tmp = [0u8; 4096];
                 match reader.read(&mut tmp).await {
                     Ok(0) => {
                         let id = *read_id.read().await;
                         info!(read_peer_id = %id, "peer disconnected");
-                        break;
+                        break 'read id;
                     }
                     Ok(n) => {
                         buf.extend_from_slice(&tmp[..n]);
@@ -206,7 +209,7 @@ impl TcpTransport {
                     Err(e) => {
                         let id = *read_id.read().await;
                         warn!(read_peer_id = %id, "read error: {e}");
-                        break;
+                        break 'read id;
                     }
                 }
 
@@ -236,12 +239,24 @@ impl TcpTransport {
                         }
                     }
                 }
-            }
+            };
 
-            // Cleanup: remove peer from map using its current id
-            let id = *read_id.read().await;
-            peers.write().await.remove(&id);
-            info!(read_peer_id = %id, "peer removed");
+            // Cleanup: only remove the map entry if this read task still owns it.
+            // rename_peer reuses the same current_id Arc, so ptr_eq distinguishes
+            // a stale read task (old connection) from the live one (new connection).
+            let mut peers_guard = peers.write().await;
+            match peers_guard.get(&id) {
+                Some(writer) if std::sync::Arc::ptr_eq(&read_id, &writer.current_id) => {
+                    peers_guard.remove(&id);
+                    info!(read_peer_id = %id, "peer removed");
+                }
+                Some(_) => {
+                    debug!(read_peer_id = %id, "read task exit: slot taken by newer connection");
+                }
+                None => {
+                    debug!(read_peer_id = %id, "read task exit: peer already removed");
+                }
+            }
         });
 
         // Store the writer
