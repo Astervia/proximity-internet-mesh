@@ -8,10 +8,12 @@
 //!   pim config generate <roles...>          Generate a commented config template
 
 use std::collections::BTreeSet;
+use std::io::{BufRead, BufReader};
 use std::net::{Ipv4Addr, Ipv6Addr};
 use std::path::PathBuf;
 use std::process;
 use std::str::FromStr;
+use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand, ValueEnum};
@@ -19,6 +21,7 @@ use pim_core::{DebugSnapshot, NodeId};
 
 const DEFAULT_CONFIG: &str = "/etc/pim/pim.toml";
 const DEFAULT_PID_FILE: &str = "/run/pim.pid";
+const DEFAULT_LOG_FILE: &str = "/run/pim.log";
 const DEFAULT_DEBUG_SNAPSHOT: &str = "/run/pim-debug.json";
 const DAEMON_BIN: &str = "pim-daemon";
 
@@ -44,9 +47,61 @@ enum Commands {
         #[arg(long, default_value = DEFAULT_PID_FILE)]
         pid_file: PathBuf,
 
-        /// Run the daemon in the background (detach from terminal)
-        #[arg(short, long)]
-        daemon: bool,
+        /// Run the daemon in the background; logs are written to --log-file
+        #[arg(short = 'd', long = "detach", alias = "daemon")]
+        detach: bool,
+
+        /// Log file path used when running detached (follow with `pim logs`)
+        #[arg(long, default_value = DEFAULT_LOG_FILE)]
+        log_file: PathBuf,
+    },
+
+    /// Stream live daemon logs.
+    ///
+    /// RUST_LOG controls what the daemon records — set it before starting:
+    ///
+    ///   RUST_LOG=info,pim_bluetooth=debug  pim up --detach
+    ///   RUST_LOG=debug                     pim up --detach
+    ///
+    /// Then stream with:
+    ///
+    ///   pim logs                        # live tail (Ctrl-C to stop)
+    ///   pim logs -n 50                  # last 50 lines, then follow
+    ///   pim logs --no-follow            # print existing lines and exit
+    ///   pim logs --since 5m             # lines from the last 5 minutes
+    ///   pim logs --since 1h --until 30m # window between 1 h ago and 30 min ago
+    Logs {
+        /// Path to the daemon log file
+        #[arg(long, default_value = DEFAULT_LOG_FILE)]
+        log_file: PathBuf,
+
+        /// Print existing lines and exit; do not follow new output
+        #[arg(long = "no-follow")]
+        no_follow: bool,
+
+        /// Follow by file name — reopen the log if it is rotated or recreated
+        #[arg(short = 'F', long = "follow-name")]
+        follow_name: bool,
+
+        /// Wait for the log file to appear if it does not exist yet
+        #[arg(long)]
+        retry: bool,
+
+        /// Show only the last N lines before following (0 = all)
+        #[arg(short = 'n', long = "lines", default_value_t = 0)]
+        lines: usize,
+
+        /// Strip the timestamp prefix from each log line
+        #[arg(long)]
+        no_timestamp: bool,
+
+        /// Only show lines at or after this time (RFC3339 or relative: 5m, 1h30m, 2d)
+        #[arg(long)]
+        since: Option<String>,
+
+        /// Stop at this time and exit (RFC3339 or relative); implies --no-follow
+        #[arg(long)]
+        until: Option<String>,
     },
 
     /// Stop the running daemon
@@ -198,8 +253,29 @@ fn main() -> Result<()> {
         Commands::Up {
             config,
             pid_file,
-            daemon,
-        } => cmd_up(config, pid_file, daemon),
+            detach,
+            log_file,
+        } => cmd_up(config, pid_file, detach, log_file),
+
+        Commands::Logs {
+            log_file,
+            no_follow,
+            follow_name,
+            retry,
+            lines,
+            no_timestamp,
+            since,
+            until,
+        } => cmd_logs(
+            log_file,
+            no_follow,
+            follow_name,
+            retry,
+            lines,
+            no_timestamp,
+            since,
+            until,
+        ),
 
         Commands::Down { pid_file } => cmd_down(pid_file),
 
@@ -236,7 +312,7 @@ fn main() -> Result<()> {
 
 // ── `pim up` ──────────────────────────────────────────────────────────────────
 
-fn cmd_up(config: PathBuf, pid_file: PathBuf, daemonize: bool) -> Result<()> {
+fn cmd_up(config: PathBuf, pid_file: PathBuf, detach: bool, log_file: PathBuf) -> Result<()> {
     // Validate config exists
     if !config.exists() {
         bail!("config file not found: {}", config.display());
@@ -245,18 +321,27 @@ fn cmd_up(config: PathBuf, pid_file: PathBuf, daemonize: bool) -> Result<()> {
     // Check that the daemon binary is available
     let daemon_bin = find_daemon_binary()?;
 
-    if daemonize {
-        // Spawn pim-daemon in background, redirecting stdio
+    if detach {
+        let log = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&log_file)
+            .with_context(|| format!("failed to open log file: {}", log_file.display()))?;
+
         let child = process::Command::new(&daemon_bin)
             .arg(config.to_str().unwrap_or(DEFAULT_CONFIG))
             .arg(pid_file.to_str().unwrap_or(DEFAULT_PID_FILE))
             .stdin(process::Stdio::null())
             .stdout(process::Stdio::null())
-            .stderr(process::Stdio::null())
+            .stderr(log)
             .spawn()
             .with_context(|| format!("failed to spawn {daemon_bin:?}"))?;
 
-        println!("pim daemon started (pid {})", child.id());
+        println!(
+            "pim daemon started (pid {}), logs → {}",
+            child.id(),
+            log_file.display()
+        );
     } else {
         // Run in foreground — replace this process with pim-daemon
         // On Unix we could use exec(), but for portability we use spawn + wait
@@ -272,6 +357,247 @@ fn cmd_up(config: PathBuf, pid_file: PathBuf, daemonize: bool) -> Result<()> {
     }
 
     Ok(())
+}
+
+// ── `pim logs` ───────────────────────────────────────────────────────────────
+
+#[allow(clippy::too_many_arguments)]
+fn cmd_logs(
+    log_file: PathBuf,
+    no_follow: bool,
+    follow_name: bool,
+    retry: bool,
+    lines: usize,
+    no_timestamp: bool,
+    since: Option<String>,
+    until: Option<String>,
+) -> Result<()> {
+    let since_prefix = since.as_deref().map(parse_time_spec).transpose()?;
+    let until_prefix = until.as_deref().map(parse_time_spec).transpose()?;
+    let follow = !no_follow && until_prefix.is_none();
+
+    // Wait for the file if --retry
+    if !log_file.exists() {
+        if retry {
+            eprintln!("pim logs: waiting for {}", log_file.display());
+            loop {
+                std::thread::sleep(Duration::from_millis(250));
+                if log_file.exists() {
+                    break;
+                }
+            }
+        } else {
+            bail!(
+                "log file not found: {} (start with `pim up --detach`, or pass --retry to wait)",
+                log_file.display()
+            );
+        }
+    }
+
+    let file = std::fs::File::open(&log_file)
+        .with_context(|| format!("cannot open log file: {}", log_file.display()))?;
+    let mut file_inode = inode_of(&file);
+    let mut reader = BufReader::new(file);
+
+    // Collect existing lines so we can honour -n (last N)
+    let mut existing: Vec<String> = Vec::new();
+    let mut line = String::new();
+    loop {
+        line.clear();
+        if reader.read_line(&mut line)? == 0 {
+            break;
+        }
+        existing.push(line.clone());
+    }
+
+    let start = if lines == 0 {
+        0
+    } else {
+        existing.len().saturating_sub(lines)
+    };
+
+    let mut stop = false;
+    for l in &existing[start..] {
+        stop = emit_line(l, &since_prefix, &until_prefix, no_timestamp);
+        if stop {
+            break;
+        }
+    }
+
+    if !follow || stop {
+        return Ok(());
+    }
+
+    loop {
+        line.clear();
+        let n = reader.read_line(&mut line)?;
+        if n == 0 {
+            if follow_name {
+                // Check whether the file has been rotated (inode changed or gone)
+                let new_inode = log_file.metadata().ok().map(|m| inode_from_meta(&m));
+                if new_inode != file_inode {
+                    // Reopen — wait briefly if the new file isn't there yet
+                    std::thread::sleep(Duration::from_millis(100));
+                    if let Ok(new_file) = std::fs::File::open(&log_file) {
+                        file_inode = inode_of(&new_file);
+                        reader = BufReader::new(new_file);
+                    }
+                    continue;
+                }
+            }
+            std::thread::sleep(Duration::from_millis(100));
+            continue;
+        }
+
+        if emit_line(&line, &since_prefix, &until_prefix, no_timestamp) {
+            break;
+        }
+    }
+
+    Ok(())
+}
+
+/// Print a log line after applying time filters and optional timestamp stripping.
+/// Returns `true` when the `--until` boundary has been crossed (caller should stop).
+fn emit_line(
+    line: &str,
+    since_prefix: &Option<String>,
+    until_prefix: &Option<String>,
+    no_timestamp: bool,
+) -> bool {
+    let ts = line_timestamp(line);
+
+    if let Some(ref s) = since_prefix {
+        if ts.as_deref() < Some(s.as_str()) {
+            return false;
+        }
+    }
+    if let Some(ref u) = until_prefix {
+        if ts.as_deref() > Some(u.as_str()) {
+            return true;
+        }
+    }
+
+    if no_timestamp {
+        // Skip past the timestamp token and one run of whitespace
+        let body = line
+            .find(|c: char| c.is_ascii_whitespace())
+            .map(|i| line[i..].trim_start())
+            .unwrap_or(line);
+        print!("{body}");
+        if !body.ends_with('\n') {
+            println!();
+        }
+    } else {
+        print!("{line}");
+    }
+
+    false
+}
+
+/// Extract the first 19 chars of the RFC3339 timestamp at the start of a tracing log line.
+/// Tracing format: `2026-04-18T23:42:22.570856Z  INFO target: message`
+fn line_timestamp(line: &str) -> Option<String> {
+    let ts = line.split_ascii_whitespace().next()?;
+    if ts.len() >= 19 && ts.contains('T') {
+        Some(ts[..19].to_string())
+    } else {
+        None
+    }
+}
+
+/// Parse a time spec into a comparable RFC3339 prefix (first 19 chars, UTC).
+/// Accepts RFC3339 strings or relative durations: 30s, 5m, 2h, 1d, 1h30m.
+fn parse_time_spec(spec: &str) -> Result<String> {
+    if let Some(offset_secs) = parse_relative_duration(spec) {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::SystemTime::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        return Ok(unix_secs_to_datetime_prefix(
+            now.saturating_sub(offset_secs),
+        ));
+    }
+    if spec.len() >= 19 && spec.contains('T') {
+        return Ok(spec[..19].to_string());
+    }
+    bail!(
+        "invalid time spec {:?} — use RFC3339 (2026-04-18T23:00:00) or relative (5m, 1h30m, 2d)",
+        spec
+    )
+}
+
+/// Parse a relative duration string like `5m`, `1h30m`, `2d` into seconds.
+fn parse_relative_duration(s: &str) -> Option<u64> {
+    if s.is_empty() {
+        return None;
+    }
+    let mut total = 0u64;
+    let mut num = String::new();
+    for c in s.chars() {
+        if c.is_ascii_digit() {
+            num.push(c);
+        } else {
+            let n: u64 = num.parse().ok()?;
+            num.clear();
+            total += match c {
+                's' => n,
+                'm' => n * 60,
+                'h' => n * 3600,
+                'd' => n * 86400,
+                _ => return None,
+            };
+        }
+    }
+    if !num.is_empty() {
+        return None; // trailing digits without a unit
+    }
+    (total > 0).then_some(total)
+}
+
+/// Convert a Unix timestamp (seconds) to a `YYYY-MM-DDTHH:MM:SS` string for comparison.
+fn unix_secs_to_datetime_prefix(secs: u64) -> String {
+    let time_of_day = secs % 86400;
+    let days = secs / 86400;
+    let h = time_of_day / 3600;
+    let m = (time_of_day % 3600) / 60;
+    let s = time_of_day % 60;
+
+    // Gregorian calendar from days-since-epoch (algorithm by Howard Hinnant)
+    let z = days as i64 + 719_468;
+    let era = (if z >= 0 { z } else { z - 146_096 }) / 146_097;
+    let doe = (z - era * 146_097) as u64;
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146_096) / 365;
+    let y = yoe as i64 + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let mo = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = if mo <= 2 { y + 1 } else { y };
+
+    format!("{y:04}-{mo:02}-{d:02}T{h:02}:{m:02}:{s:02}")
+}
+
+#[cfg(unix)]
+fn inode_of(file: &std::fs::File) -> Option<u64> {
+    use std::os::unix::fs::MetadataExt;
+    file.metadata().ok().map(|m| m.ino())
+}
+
+#[cfg(not(unix))]
+fn inode_of(_file: &std::fs::File) -> Option<u64> {
+    None
+}
+
+#[cfg(unix)]
+fn inode_from_meta(meta: &std::fs::Metadata) -> u64 {
+    use std::os::unix::fs::MetadataExt;
+    meta.ino()
+}
+
+#[cfg(not(unix))]
+fn inode_from_meta(_meta: &std::fs::Metadata) -> u64 {
+    0
 }
 
 // ── `pim down` ────────────────────────────────────────────────────────────────
