@@ -168,7 +168,12 @@ generated_at="$(date -u +'%Y-%m-%dT%H:%M:%SZ' 2>/dev/null || printf '%s' unknown
 detect_note_wifi="$(shell_quote_comment "${wifi_interface}")"
 detect_note_bt="$(shell_quote_comment "${bt_interface}")"
 interface_name="pim0"
-review_commands=$'#   ip -br link\n#   iw dev\n#   bluetoothctl show'
+review_commands="$(cat <<'EOF'
+#   ip -br link
+#   iw dev
+#   bluetoothctl show
+EOF
+)"
 wifi_enabled="true"
 bt_enabled="true"
 wifi_mac_comment=""
@@ -176,7 +181,12 @@ bt_mac_comment=""
 
 if is_macos; then
     interface_name="utun0"
-    review_commands=$'#   ifconfig -l\n#   blueutil --power\n#   arp -an -i bridge0'
+    review_commands="$(cat <<'EOF'
+#   ifconfig -l
+#   blueutil --power
+#   arp -an -i bridge0
+EOF
+)"
     if [[ -z "${wifi_interface}" ]]; then
         wifi_interface="en0"
     fi
@@ -257,7 +267,7 @@ nap_bridge_addr = "192.168.44.1/24"
 dhcp_enabled = false
 dhcp_lease_time = "12h"
 # dhcp_dns = "1.1.1.1,8.8.8.8"  # optional; inherited from /etc/resolv.conf when unset.
-# Run dhclient on the PAN interface once the Linux client joins the gateway's NAP.
+# Run dhclient on the PAN interface once the Linux client joins the gateway NAP.
 request_dhcp = true
 auto_discover_peers = true
 poll_interval_ms = 2000
