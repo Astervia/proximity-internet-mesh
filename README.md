@@ -47,8 +47,34 @@ For local development and manual runs:
 - Linux or macOS
 - Rust toolchain new enough to build the workspace when installing from source
 - privileges to create a TUN interface and update routes, typically `root` or `CAP_NET_ADMIN`
-- Linux gateways additionally require `/dev/net/tun`, `iproute2`, and `iptables`
-- macOS gateways additionally require `pfctl` plus privileges to enable `net.inet.ip.forwarding`
+
+Optional host requirements by feature:
+
+- Base client or relay runtime
+    - Linux: `/dev/net/tun` plus `iproute2`
+    - macOS: privileges to create and manage a `utunN` interface
+- Gateway NAT
+    - Linux: `iptables` plus privileges to enable IPv4 forwarding
+    - macOS: `pfctl` plus privileges to enable `net.inet.ip.forwarding`
+- Bluetooth PAN features
+    - Linux: a BlueZ-based host with `bluetoothctl` and `bt-network`
+    - macOS: `blueutil` for radio discovery and host Bluetooth PAN support
+- Bluetooth NAP serving on Linux
+    - `iproute2` to create and manage the NAP bridge such as `br-bt`
+    - `iptables` for MASQUERADE and FORWARD rules from the Bluetooth subnet
+- DHCP on a Bluetooth NAP bridge
+    - Linux only
+    - `dnsmasq` when `[bluetooth].dhcp_enabled = true`
+- DHCP client on a Bluetooth PAN link
+    - Linux only
+    - `dhclient` when `[bluetooth].request_dhcp = true`
+- Wi-Fi Direct
+    - Linux: `wpa_supplicant` compiled with `CONFIG_P2P=y`, `wpa_cli`, and permission to talk to the `wpa_supplicant` control socket
+    - Linux: `iproute2` so the daemon can inspect the resulting P2P group interface
+    - macOS: no `wpa_cli` setup is required; the host must allow Bonjour peer-to-peer Wi-Fi advertisement and browsing
+- Docker-based integration labs
+    - Linux host with Docker Engine and Docker Compose v2
+    - outbound internet access from the host so gateway containers can NAT traffic
 
 For Docker-based integration testing:
 
@@ -347,12 +373,15 @@ make down-p1
 
 ## Documentation
 
-Start with [docs/README.md](/home/rfluid/development/proximity-internet-mesh/docs/README.md). The docs are grouped by topic:
+Start with [docs/README.md](/home/rfluid/development/Astervia/proximity-internet-mesh/docs/README.md). The docs are grouped by topic:
 
 - Getting started: install, configure, and operate a node
 - Architecture: system model, packet flow, routing, protocol, and security
 - Operations: test strategy and Docker-based validation
+- Troubleshooting: operator-oriented recovery commands and known cleanup procedures
 - Project: workspace internals, roadmap, and implementation checklist
+
+For runtime debugging and operator recovery steps, see [TROUBLESHOOTING.md](/home/rfluid/development/Astervia/proximity-internet-mesh/TROUBLESHOOTING.md).
 
 ## Notes On Current Behavior
 
