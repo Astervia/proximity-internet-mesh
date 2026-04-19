@@ -34,6 +34,7 @@ tools rather than in the default core guidance.
 Current examples:
 
 - `skills/add-connection-mechanism/SKILL.md` — workflow for adding a new peer connectivity mechanism
+- `skills/prepare-release/SKILL.md` — workflow for workspace release versions and lockfile updates
 - `skills/secure-code-sentinel/SKILL.md` — workflow for security fixes and logging learnings
 - `skills/write-docker-tests/SKILL.md` — workflow for adding or extending Docker-based tests
 - `prompts/implement-connectivity-mechanism.md` — targeted prompt for transport or discovery work
