@@ -30,10 +30,14 @@ If no other service should own `br-bt`, remove the stale bridge and restart the 
 
 ```bash
 sudo pkill -TERM -x pim-daemon
+pgrep -ax pim-daemon || echo "pim-daemon has exited"
 sudo ip link set br-bt down 2>/dev/null || true
 sudo ip link delete br-bt 2>/dev/null || true
 sudo pim up --config /etc/pim/pim.toml
 ```
+
+If `pgrep` still shows a running `pim-daemon`, wait a few more seconds and
+re-run it before deleting `br-bt`.
 
 If the daemon had installed Bluetooth gateway NAT rules previously, review the cleanup steps in [../operations/bluetooth-gateway-shutdown.md](../operations/bluetooth-gateway-shutdown.md) before restarting.
 
