@@ -93,7 +93,7 @@ sudo ip link delete br-bt
 
 has three properties that can leave your terminal in a weird state:
 
-1. **`sudo fuser -k 9100/tcp`** sends SIGKILL to *every* process holding
+1. **`sudo fuser -k 9100/tcp`** sends SIGKILL to _every_ process holding
    TCP port 9100 in any way (listeners, established connections,
    anything in `TIME_WAIT` attached to a live fd). In practice this is
    almost always just pim-daemon, but it will also kill any other
@@ -213,7 +213,7 @@ operator needs to be aware of.
   rule. Existing connections therefore die; new ones never start.
   No other NAT rules are affected.
 - Packet forwarding itself is NOT disabled by this — `net.ipv4.ip_forward`
-  stays at whatever it was set to. The daemon only *enables* forwarding
+  stays at whatever it was set to. The daemon only _enables_ forwarding
   (via `sysctl -w net.ipv4.ip_forward=1`); it doesn't restore the
   previous value on shutdown. If you need strict cleanup, set it
   yourself: `sudo sysctl -w net.ipv4.ip_forward=0`.
@@ -241,7 +241,7 @@ operator needs to be aware of.
 
 ### `ip route del default dev pim0`
 
-- Removes the default route the daemon installed *before* deleting
+- Removes the default route the daemon installed _before_ deleting
   `pim0` itself. Doing it in this order means you get back a working
   default route immediately (usually via Wi-Fi or Ethernet), without
   waiting for NetworkManager / systemd-networkd to notice the TUN is
@@ -251,7 +251,7 @@ operator needs to be aware of.
   `curl`, package managers — will hang until a usable default route
   exists again.
 
-### `fuser -k 9100/tcp` *(not recommended)*
+### `fuser -k 9100/tcp` _(not recommended)_
 
 - SIGKILL to every process holding port 9100 in any capacity.
 - Unrelated to the Bluetooth subsystem; only matters because the
@@ -263,7 +263,7 @@ operator needs to be aware of.
   without warning. Prefer `pkill -x pim-daemon`, which targets only
   the daemon.
 
-### `sysctl -w net.ipv4.ip_forward=0` *(optional)*
+### `sysctl -w net.ipv4.ip_forward=0` _(optional)_
 
 - Returns IP forwarding to its previous state. The daemon enables it
   but does not disable it on shutdown. If nothing else on your host
@@ -283,7 +283,7 @@ pristine host state, do them manually:
 - Bluetooth controller state: `discoverable`, `pairable`, `alias`.
   The daemon changes these via `bluetoothctl` at startup and does
   not reset them. Run `bluetoothctl discoverable off; pairable off;
-  system-alias ""` if you need them back.
+system-alias ""` if you need them back.
 - Kernel conntrack entries for masqueraded flows. These expire
   naturally on timeout; `sudo conntrack -F` flushes them immediately
   if you have `conntrack-tools` installed.
@@ -305,5 +305,5 @@ terminal after running the old snippet is:
 
 The replacement script avoids this by (a) giving SIGTERM a chance
 to clean up properly, and (b) if SIGKILL is needed, removing the
-default route *and* the TUN device before returning control to
+default route _and_ the TUN device before returning control to
 the shell.
