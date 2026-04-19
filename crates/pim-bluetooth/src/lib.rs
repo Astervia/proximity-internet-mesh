@@ -339,7 +339,13 @@ impl BluetoothDiscovery {
                             timeout_ms = self.config.startup_timeout_ms,
                             "Bluetooth PAN interface did not become ready before timeout"
                         );
-                        return Ok(());
+                        if !(self.config.radio_discovery_enabled && self.config.connect_pan) {
+                            warn!(
+                                interface = %self.config.interface,
+                                "Bluetooth PAN discovery exiting: interface never ready and radio scan is disabled"
+                            );
+                            return Ok(());
+                        }
                     }
 
                     if active_interface.is_some() && !emitted_static {
