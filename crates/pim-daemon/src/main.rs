@@ -217,6 +217,16 @@ impl ReconnectManager {
     async fn end_reconnect(&self, target: ConnectTarget) {
         self.reconnecting.lock().await.remove(&target);
     }
+
+    /// Find the peer ID most recently associated with `target` via a successful
+    /// handshake, if any.  Used to detect whether a session is already live.
+    async fn peer_id_for_target(&self, target: &ConnectTarget) -> Option<NodeId> {
+        let by_peer = self.target_by_peer.lock().await;
+        by_peer
+            .iter()
+            .find(|(_, t)| *t == target)
+            .map(|(id, _)| *id)
+    }
 }
 
 // ── Backoff ───────────────────────────────────────────────────────────────────
@@ -1211,6 +1221,11 @@ async fn run_buffer_flush(state: Arc<DaemonState>) {
                         congested = true;
                         re_queue.push(frame);
                     }
+                    Err(TransportError::PeerNotConnected(_)) => {
+                        // Session entry exists but transport connection is transiently
+                        // gone (e.g. mid-reconnect); re-buffer so the frame survives.
+                        re_queue.push(frame);
+                    }
                     Err(e) => warn!(%peer_id, "flush send failed: {e}"),
                 }
             }
@@ -1628,6 +1643,21 @@ async fn run_reconnect_task(state: Arc<DaemonState>, target: ConnectTarget) {
         }
 
         info!(%addr, mechanism = target.mechanism_name(), attempt, "attempting reconnect");
+
+        // If discovery already established a session while we were sleeping, there
+        // is nothing left to do.  This prevents a stale reconnect loop from
+        // tearing down a working discovery-initiated session.
+        if let Some(peer_id) = state.reconnect.peer_id_for_target(&target).await {
+            if state.sessions.read().await.contains_key(&peer_id) {
+                info!(
+                    %addr, %peer_id,
+                    mechanism = target.mechanism_name(),
+                    "reconnect cancelled: session already active"
+                );
+                state.reconnect.end_reconnect(target).await;
+                return;
+            }
+        }
 
         // Use a unique random placeholder so concurrent reconnects don't collide.
         let transport_key = NodeId::from_bytes(rand::random::<[u8; 16]>());
