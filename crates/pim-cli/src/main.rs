@@ -683,14 +683,20 @@ fn cmd_config_generate(
     let rendered = render_config_template(&roles, name.as_deref());
 
     if let Some(path) = output {
-        if path.exists() && !force {
-            bail!(
-                "refusing to overwrite existing file: {} (use --force to overwrite)",
-                path.display()
-            );
-        }
         let mut options = std::fs::OpenOptions::new();
-        options.write(true).create(true).truncate(true);
+        options.write(true);
+
+        if force {
+            options.create(true).truncate(true);
+        } else {
+            if path.exists() {
+                bail!(
+                    "refusing to overwrite existing file: {} (use --force to overwrite)",
+                    path.display()
+                );
+            }
+            options.create_new(true);
+        }
 
         #[cfg(unix)]
         {
