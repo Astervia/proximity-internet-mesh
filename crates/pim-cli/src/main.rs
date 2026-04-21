@@ -707,7 +707,8 @@ fn cmd_config_generate(
                 );
             }
             Err(e) => {
-                return Err(e).with_context(|| format!("failed to open config file {}", path.display()));
+                return Err(e)
+                    .with_context(|| format!("failed to open config file {}", path.display()));
             }
         };
 
