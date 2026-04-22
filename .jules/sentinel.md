@@ -12,3 +12,8 @@
 **Vulnerability:** The daemon's PID file (`pid_file`) was written using `std::fs::write`, which falls back to the system's default `umask`. Under a permissive umask (e.g., `0000`), this could leave the PID file world-writable, allowing unprivileged users to spoof the PID.
 **Learning:** Relying on default file permissions when writing non-sensitive system files (like PID files) can still create security risks, such as local DoS or privilege escalation, if the files are used by other system services.
 **Prevention:** Explicitly use `std::fs::OpenOptions` with `OpenOptionsExt::mode(0o644)` on Unix systems to ensure strict file access permissions (owner writable, group/others readable) when writing system files.
+
+## 2026-04-22 - [Fix TOCTOU Vulnerability in File Creation]
+**Vulnerability:** The configuration generator used `path.exists()` to check if a file existed before conditionally creating it with `std::fs::OpenOptions` and `create(true).truncate(true)`.
+**Learning:** Checking for file existence before creating a file creates a Time-of-Check to Time-of-Use (TOCTOU) race condition. An attacker could replace the intended path with a symlink between the check and the creation, causing the application to unknowingly overwrite an arbitrary file.
+**Prevention:** Avoid checking for file existence prior to creating new sensitive files (e.g., configurations). Use `std::fs::OpenOptions::new().create_new(true)` to rely on atomic OS-level protections (`O_CREAT | O_EXCL`) that fail if the file already exists, thus closing the TOCTOU gap. Avoid applying this blindly to files that legitimately need to overwrite existing content (like PID files or rotating logs).
