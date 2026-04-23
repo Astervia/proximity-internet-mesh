@@ -35,12 +35,22 @@ impl Identity {
 
     /// Save the private key to a file (raw 32-byte seed).
     pub fn save(&self, path: &Path) -> Result<(), std::io::Error> {
+        self.save_internal(path, true)
+    }
+
+    /// Save the private key to a file, taking an overwrite parameter.
+    fn save_internal(&self, path: &Path, overwrite: bool) -> Result<(), std::io::Error> {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
 
         let mut options = std::fs::OpenOptions::new();
-        options.write(true).create(true).truncate(true);
+        options.write(true);
+        if overwrite {
+            options.create(true).truncate(true);
+        } else {
+            options.create_new(true);
+        }
 
         #[cfg(unix)]
         {
@@ -70,12 +80,20 @@ impl Identity {
 
     /// Load an existing identity or generate a new one.
     pub fn load_or_generate(path: &Path) -> Result<Self, std::io::Error> {
-        if path.exists() {
-            Self::load(path)
-        } else {
-            let identity = Self::generate();
-            identity.save(path)?;
-            Ok(identity)
+        match Self::load(path) {
+            Ok(identity) => Ok(identity),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                let identity = Self::generate();
+                match identity.save_internal(path, false) {
+                    Ok(()) => Ok(identity),
+                    Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                        // Another process created it between our load and save attempts
+                        Self::load(path)
+                    }
+                    Err(e) => Err(e),
+                }
+            }
+            Err(e) => Err(e),
         }
     }
 

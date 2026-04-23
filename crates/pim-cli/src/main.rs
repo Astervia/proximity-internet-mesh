@@ -699,7 +699,7 @@ fn cmd_config_generate(
 
         use std::io::Write;
         let mut file = match options.open(&path) {
-            Ok(f) => f,
+            Ok(file) => file,
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists && !force => {
                 bail!(
                     "refusing to overwrite existing file: {} (use --force to overwrite)",
@@ -708,9 +708,10 @@ fn cmd_config_generate(
             }
             Err(e) => {
                 return Err(anyhow::Error::new(e)
-                    .context(format!("failed to open config file {}", path.display())))
+                    .context(format!("failed to open config file {}", path.display())));
             }
         };
+
         file.write_all(rendered.as_bytes())
             .with_context(|| format!("failed to write config template to {}", path.display()))?;
 
