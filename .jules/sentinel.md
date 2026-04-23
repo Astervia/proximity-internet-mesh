@@ -17,3 +17,7 @@
 **Vulnerability:** The CLI's configuration initialization logic used a non-atomic `path.exists()` check before creating the `config.toml` file with `create(true).truncate(true)`. This creates a Time-of-Check to Time-of-Use (TOCTOU) vulnerability where an attacker could place a symlink at the target path between the check and the file creation.
 **Learning:** Checking for file existence before creation using separate operations is prone to race conditions and symlink attacks.
 **Prevention:** Use atomic operations like `OpenOptions::new().create_new(true)` when creating sensitive files that shouldn't be overwritten, and handle the resulting `ErrorKind::AlreadyExists` to provide safe, race-free user warnings.
+## 2026-04-23 - [Prevent TOCTOU via Atomic File Creation]
+**Vulnerability:** The daemon's config generation (`pim-cli/src/main.rs`) and identity key generation (`pim-crypto/src/identity.rs`) checked `path.exists()` before calling `create(true).truncate(true)`. This creates a Time-of-Check to Time-of-Use (TOCTOU) race condition where an attacker could replace the file with a symlink between the check and the use, potentially leading to arbitrary file overwrites or key theft.
+**Learning:** Checking for file existence before creating a sensitive file is inherently racy and insecure.
+**Prevention:** Always rely on the filesystem to enforce exclusivity. Use `OpenOptions::new().create_new(true)` to atomically create a file only if it does not already exist, and handle `ErrorKind::AlreadyExists` errors gracefully.
