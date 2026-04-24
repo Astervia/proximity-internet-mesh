@@ -189,10 +189,7 @@ impl IpPool {
     }
 
     /// Allocate (or renew) an IP and return the full client-facing lease config.
-    pub fn allocate_assignment(
-        &mut self,
-        node_id: [u8; 16],
-    ) -> Result<IpAssignment, IpPoolError> {
+    pub fn allocate_assignment(&mut self, node_id: [u8; 16]) -> Result<IpAssignment, IpPoolError> {
         let (assigned_ip, lease_seconds) = self.allocate(node_id)?;
         Ok(IpAssignment {
             assigned_ip,
