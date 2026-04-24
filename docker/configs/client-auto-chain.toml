@@ -11,6 +11,10 @@ mtu = 1400
 
 [transport]
 listen_port = 9100
+connect_timeout_ms = 3000
+
+[discovery]
+enabled = false
 
 [security]
 key_file = "/var/lib/pim/node.key"

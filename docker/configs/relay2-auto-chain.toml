@@ -14,6 +14,10 @@ enabled = true
 
 [transport]
 listen_port = 9100
+connect_timeout_ms = 3000
+
+[discovery]
+enabled = false
 
 [security]
 key_file = "/var/lib/pim/node.key"
@@ -22,8 +26,3 @@ key_file = "/var/lib/pim/node.key"
 mechanism = "tcp"
 address = "172.37.0.20:9100"
 label = "relay1"
-
-[[peers]]
-mechanism = "tcp"
-address = "172.37.0.30:9100"
-label = "client"

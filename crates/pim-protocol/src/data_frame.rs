@@ -22,6 +22,8 @@ bitflags! {
         /// Payload is ECIES-encrypted (E2E) to the final destination gateway.
         /// Relay nodes must forward as-is; only the gateway decrypts.
         const IS_E2E           = 0b0010_0000;
+        /// Payload carries a mesh-routed control-plane message.
+        const IS_CONTROL       = 0b0100_0000;
     }
 }
 

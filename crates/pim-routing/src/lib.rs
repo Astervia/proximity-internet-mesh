@@ -326,6 +326,7 @@ impl RoutingTable {
 
                     if better_path || newer_seq {
                         let old_hops = existing.hops;
+                        let gateway_flag_flipped = existing.is_gateway != is_gw;
                         // Preserve load/rtt when refreshing an existing gateway entry
                         let (prev_load, prev_rtt, prev_mesh_ip) =
                             if existing.is_gateway && !better_path {
@@ -333,7 +334,8 @@ impl RoutingTable {
                             } else {
                                 (0, None, None)
                             };
-                        let mesh_ip = decode_mesh_ip(advertised.mesh_ip).or(prev_mesh_ip);
+                        let new_mesh_ip = decode_mesh_ip(advertised.mesh_ip).or(prev_mesh_ip);
+                        let mesh_ip_changed = existing.mesh_ip != new_mesh_ip;
                         self.insert_route(
                             dst,
                             RouteTableEntry {
@@ -345,11 +347,19 @@ impl RoutingTable {
                                 sequence: update.sequence,
                                 gateway_load: prev_load,
                                 rtt_ms: prev_rtt,
-                                mesh_ip,
+                                mesh_ip: new_mesh_ip,
                             },
                         );
                         if better_path {
                             debug!(%dst, old = old_hops, new = new_hops, "route improved");
+                            changed = true;
+                        }
+                        if gateway_flag_flipped || mesh_ip_changed {
+                            debug!(
+                                %dst, via = %from_peer,
+                                gateway_flag_flipped, mesh_ip_changed,
+                                "route attributes changed"
+                            );
                             changed = true;
                         }
                     }
@@ -1368,5 +1378,22 @@ mod tests {
         // In our impl: same seq + same peer → no update
         let upd2 = advertisement(b, 1, vec![(c, 1, false)]);
         assert_eq!(rt.apply_update(&upd2, b), UpdateResult::Unchanged);
+    }
+
+    #[test]
+    fn gateway_flag_flip_marks_update_changed() {
+        // Regression: a direct peer flipping from non-gateway to gateway
+        // (same hop count, newer sequence) must report Changed so the
+        // daemon can react (e.g. request a dynamic IP).
+        let a = id(1);
+        let b = id(2);
+
+        let mut rt = RoutingTable::new(a, false);
+        rt.add_peer(b);
+        assert!(!rt.routes[&b].is_gateway);
+
+        let upd = advertisement(b, 1, vec![(b, 0, true)]);
+        assert_eq!(rt.apply_update(&upd, b), UpdateResult::Changed);
+        assert!(rt.routes[&b].is_gateway);
     }
 }
