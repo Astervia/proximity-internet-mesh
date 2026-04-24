@@ -14,9 +14,9 @@
 #[cfg(target_os = "linux")]
 use std::collections::HashMap;
 use std::collections::HashSet;
-use std::net::SocketAddr;
 #[cfg(any(test, target_os = "linux", target_os = "macos"))]
 use std::net::IpAddr;
+use std::net::SocketAddr;
 #[cfg(any(test, target_os = "linux"))]
 use std::net::SocketAddrV6;
 #[cfg(any(test, target_os = "linux"))]
