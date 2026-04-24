@@ -103,7 +103,7 @@ if in_svc "$COMPOSE_FILE" gateway1 tc qdisc show >/dev/null 2>&1; then
 
     # Gateway probes run every 10 s, so two cycles should be enough.
     STATS=$(in_svc "$COMPOSE_FILE" relay pim status --verbose 2>/dev/null || echo "")
-    if echo "$STATS" | grep -qE "routes=[1-9]"; then
+    if echo "$STATS" | grep -qE "routes:[[:space:]]+[1-9]"; then
         log_ok "relay routing table updated after RTT change (routes present)"
     else
         log_skip "RTT-aware selection (could not confirm routing table update)"
@@ -125,7 +125,7 @@ in_svc "$COMPOSE_FILE" client bash -c \
 sleep 15
 
 STATS=$(in_svc "$COMPOSE_FILE" relay pim status --verbose 2>/dev/null || echo "")
-if echo "$STATS" | grep -qE "packets_forwarded=[1-9]"; then
+if echo "$STATS" | grep -qE "packets_forwarded:[[:space:]]+[1-9]"; then
     log_ok "relay forwarded packets observed during load test"
 else
     log_skip "load-aware selection (forwarded packet counter not visible in status)"
