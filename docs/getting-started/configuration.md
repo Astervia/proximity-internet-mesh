@@ -48,6 +48,7 @@ Notes:
 
 - `type`: backend name, currently `tcp`
 - `listen_port`: local inbound port, default `9100`
+- `max_reconnect_attempts`: reconnect cap per peer, default `20`
 
 ### `[routing]`
 
@@ -86,6 +87,7 @@ mtu = 1400
 [transport]
 type = "tcp"
 listen_port = 9100
+max_reconnect_attempts = 20
 
 [security]
 key_file = "/var/lib/pim/node.key"
@@ -112,6 +114,7 @@ mtu = 1400
 [transport]
 type = "tcp"
 listen_port = 9100
+max_reconnect_attempts = 20
 
 [gateway]
 enabled = true
@@ -138,6 +141,7 @@ mtu = 1400
 [transport]
 type = "tcp"
 listen_port = 9100
+max_reconnect_attempts = 20
 
 [security]
 key_file = "/var/lib/pim/node.key"

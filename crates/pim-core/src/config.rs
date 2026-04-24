@@ -115,6 +115,9 @@ pub struct TransportConfig {
     /// Local port the transport listens on for inbound peer connections.
     #[serde(default = "default_listen_port")]
     pub listen_port: u16,
+    /// Maximum reconnect attempts per peer before giving up.
+    #[serde(default = "default_max_reconnect_attempts")]
+    pub max_reconnect_attempts: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -337,6 +340,10 @@ fn default_listen_port() -> u16 {
     9100
 }
 
+fn default_max_reconnect_attempts() -> u32 {
+    20
+}
+
 fn default_max_hops() -> u8 {
     10
 }
@@ -491,6 +498,7 @@ impl Default for TransportConfig {
         Self {
             r#type: default_transport_type(),
             listen_port: default_listen_port(),
+            max_reconnect_attempts: default_max_reconnect_attempts(),
         }
     }
 }
@@ -656,6 +664,7 @@ enabled = false
 [transport]
 type = "tcp"
 listen_port = 9100
+max_reconnect_attempts = 20
 
 [routing]
 max_hops = 10
@@ -726,6 +735,7 @@ startup_timeout_ms = 15000
         assert!(config.gateway.enabled);
         assert_eq!(config.gateway.nat_interface, "wlan0");
         assert_eq!(config.transport.listen_port, 9100);
+        assert_eq!(config.transport.max_reconnect_attempts, 20);
         assert_eq!(
             config.discovery.shared_key.as_deref(),
             Some("00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff")
@@ -796,6 +806,27 @@ port = 19101
         let serialized = config.to_toml_string().unwrap();
         let reparsed = Config::from_toml_str(&serialized).unwrap();
         assert_eq!(reparsed.discovery.port, 19101);
+    }
+
+    #[test]
+    fn transport_reconnect_limit_defaults_to_twenty() {
+        let config = Config::from_toml_str(MINIMAL_CONFIG).unwrap();
+        assert_eq!(config.transport.max_reconnect_attempts, 20);
+    }
+
+    #[test]
+    fn transport_reconnect_limit_round_trips() {
+        let toml = r#"
+[node]
+name = "t"
+[transport]
+max_reconnect_attempts = 7
+"#;
+        let config = Config::from_toml_str(toml).unwrap();
+        assert_eq!(config.transport.max_reconnect_attempts, 7);
+        let serialized = config.to_toml_string().unwrap();
+        let reparsed = Config::from_toml_str(&serialized).unwrap();
+        assert_eq!(reparsed.transport.max_reconnect_attempts, 7);
     }
 
     #[test]
