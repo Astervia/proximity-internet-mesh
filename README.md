@@ -28,6 +28,20 @@ The codebase is currently centered on a Linux daemon, a small CLI, and Docker-ba
 
 On macOS, use a `utunN` interface such as `utun0` for the mesh TUN and set `gateway.nat_interface` to the internet-facing host interface such as `en0`. The Wi-Fi Direct backend uses Bonjour peer-to-peer discovery on macOS rather than Linux `wpa_cli` group formation, so Linux-specific tuning fields in `[wifi_direct]` are ignored there.
 
+## iOS Support (in progress)
+
+iOS support is tracked in [issue #70](https://github.com/Astervia/proximity-internet-mesh/issues/70).
+
+Milestone 1 — **iOS target architecture and cross-compile scaffolding** — is resolved on this branch. See [docs/architecture/ios.md](docs/architecture/ios.md) for the decision record. Build locally with:
+
+```bash
+rustup target add aarch64-apple-ios aarch64-apple-ios-sim x86_64-apple-ios
+make ios-check          # cross-compile sanity check (works with CLT)
+make ios-xcframework    # produces target/ios/PimCore.xcframework (needs full Xcode)
+```
+
+The Xcode app and `NEPacketTunnelProvider` extension that consume `PimCore.xcframework`, the packet IO bridging, and relay-mode support all land in follow-up plans — milestones 2–6 of the issue remain open.
+
 ## Repository Layout
 
 ```text
