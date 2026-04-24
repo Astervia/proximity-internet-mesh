@@ -507,9 +507,7 @@ async fn apply_dynamic_ip_assignment(
         warn!("TUN set_ip failed: {e}");
     }
     state.mesh_ip.store(u32::from(ip), Ordering::Relaxed);
-    state
-        .mesh_prefix_len
-        .store(subnet_mask, Ordering::Relaxed);
+    state.mesh_prefix_len.store(subnet_mask, Ordering::Relaxed);
     state.routing.lock().await.set_self_mesh_ip(ip);
     *state.pending_dynamic_ip_gateway.lock().await = None;
 }
