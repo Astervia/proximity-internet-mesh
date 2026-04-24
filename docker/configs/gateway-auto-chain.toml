@@ -1,0 +1,25 @@
+# Auto-IP chain gateway config.
+# Topology anchor for: gateway <-> relay1 <-> relay2 <-> client
+
+[node]
+name = "gateway-auto-chain"
+data_dir = "/var/lib/pim"
+
+[interface]
+mesh_ip = "10.77.0.1/24"
+mtu = 1400
+
+[transport]
+listen_port = 9100
+
+[security]
+key_file = "/var/lib/pim/node.key"
+
+[gateway]
+enabled = true
+nat_interface = "eth0"
+
+[[peers]]
+mechanism = "tcp"
+address = "172.37.0.20:9100"
+label = "relay1"

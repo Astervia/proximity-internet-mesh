@@ -293,6 +293,8 @@ struct DaemonState {
     internet_link: Option<Arc<InternetGatewayLink>>,
     /// IP address pool — gateway only.
     ip_pool: Option<Arc<Mutex<IpPool>>>,
+    /// Requesters currently being serviced for mesh IP assignment.
+    pending_ip_assignments: Arc<Mutex<HashSet<NodeId>>>,
     /// Last heartbeat received per peer, used for liveness detection.
     peer_last_hb: Arc<Mutex<HashMap<NodeId, Instant>>>,
     /// Reconnect manager for configured peers.
@@ -331,6 +333,27 @@ impl DaemonState {
     fn next_frag_id(&self) -> u32 {
         self.frag_id.fetch_add(1, Ordering::Relaxed)
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum IpRequestDisposition {
+    Process,
+    DuplicateInFlight,
+    SpoofedRequester,
+}
+
+fn classify_ip_request(
+    pending: &mut HashSet<NodeId>,
+    requester_id: NodeId,
+    from_peer: NodeId,
+) -> IpRequestDisposition {
+    if requester_id != from_peer {
+        return IpRequestDisposition::SpoofedRequester;
+    }
+    if !pending.insert(requester_id) {
+        return IpRequestDisposition::DuplicateInFlight;
+    }
+    IpRequestDisposition::Process
 }
 
 async fn register_pending_outbound(
@@ -2580,26 +2603,64 @@ async fn run_event_loop(state: Arc<DaemonState>) -> Result<()> {
                                 ControlFrame::IpRequest { requester_id } => {
                                     // Gateway allocates and responds
                                     if let Some(pool) = &state.ip_pool {
-                                        let result = pool.lock().await.allocate(*requester_id.as_bytes());
+                                        let disposition = {
+                                            let mut pending =
+                                                state.pending_ip_assignments.lock().await;
+                                            classify_ip_request(
+                                                &mut pending,
+                                                requester_id,
+                                                from_peer,
+                                            )
+                                        };
+                                        match disposition {
+                                            IpRequestDisposition::SpoofedRequester => {
+                                                warn!(
+                                                    %from_peer,
+                                                    %requester_id,
+                                                    "rejecting IpRequest with mismatched requester_id"
+                                                );
+                                                continue;
+                                            }
+                                            IpRequestDisposition::DuplicateInFlight => {
+                                                debug!(
+                                                    %requester_id,
+                                                    "dropping duplicate in-flight IpRequest"
+                                                );
+                                                continue;
+                                            }
+                                            IpRequestDisposition::Process => {}
+                                        }
+
+                                        let result = pool
+                                            .lock()
+                                            .await
+                                            .allocate_assignment(*requester_id.as_bytes());
                                         match result {
-                                            Ok((ip, lease_secs)) => {
-                                                let gw_ip = pool.lock().await.gateway_ip();
-                                                let prefix = pool.lock().await.prefix_len();
+                                            Ok(assignment) => {
                                                 send_control(
                                                     &state,
                                                     &from_peer,
                                                     ControlFrame::IpAssign {
-                                                        assigned_ip: ip.octets(),
-                                                        subnet_mask: prefix,
-                                                        gateway_ip: gw_ip.octets(),
-                                                        lease_seconds: lease_secs,
+                                                        assigned_ip: assignment.assigned_ip.octets(),
+                                                        subnet_mask: assignment.subnet_mask,
+                                                        gateway_ip: assignment.gateway_ip.octets(),
+                                                        lease_seconds: assignment.lease_seconds,
                                                     },
                                                 )
                                                 .await;
-                                                info!(%requester_id, %ip, "assigned IP");
+                                                info!(
+                                                    %requester_id,
+                                                    ip = %assignment.assigned_ip,
+                                                    "assigned IP"
+                                                );
                                             }
                                             Err(e) => warn!(%requester_id, "IP allocation failed: {e}"),
                                         }
+                                        state
+                                            .pending_ip_assignments
+                                            .lock()
+                                            .await
+                                            .remove(&requester_id);
                                     } else {
                                         debug!(%from_peer, "received IpRequest but not a gateway");
                                     }
@@ -3663,6 +3724,7 @@ async fn main() -> Result<()> {
         gateway_nat_interface: is_gateway.then(|| config.gateway.nat_interface.clone()),
         internet_link,
         ip_pool,
+        pending_ip_assignments: Arc::new(Mutex::new(HashSet::new())),
         peer_last_hb: Arc::new(Mutex::new(HashMap::new())),
         reconnect,
         max_reconnect_attempts: config.transport.max_reconnect_attempts,
@@ -3961,6 +4023,39 @@ mod tests {
 
     fn peer_id(b: u8) -> NodeId {
         NodeId::from_bytes([b; 16])
+    }
+
+    #[test]
+    fn ip_request_classifier_accepts_first_request() {
+        let requester = peer_id(70);
+        let mut pending = HashSet::new();
+        assert_eq!(
+            classify_ip_request(&mut pending, requester, requester),
+            IpRequestDisposition::Process
+        );
+        assert!(pending.contains(&requester));
+    }
+
+    #[test]
+    fn ip_request_classifier_drops_duplicate_inflight_request() {
+        let requester = peer_id(71);
+        let mut pending = HashSet::from([requester]);
+        assert_eq!(
+            classify_ip_request(&mut pending, requester, requester),
+            IpRequestDisposition::DuplicateInFlight
+        );
+    }
+
+    #[test]
+    fn ip_request_classifier_rejects_spoofed_requester() {
+        let requester = peer_id(72);
+        let from_peer = peer_id(73);
+        let mut pending = HashSet::new();
+        assert_eq!(
+            classify_ip_request(&mut pending, requester, from_peer),
+            IpRequestDisposition::SpoofedRequester
+        );
+        assert!(pending.is_empty());
     }
 
     fn temp_trust_store_path() -> PathBuf {
