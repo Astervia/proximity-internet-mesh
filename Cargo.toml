@@ -13,6 +13,7 @@ members = [
     "crates/pim-wifidirect",
     "crates/pim-daemon",
     "crates/pim-cli",
+    "crates/pim-ios-ffi",
 ]
 
 [workspace.dependencies]
@@ -67,3 +68,4 @@ pim-gateway = { path = "crates/pim-gateway" }
 pim-discovery = { path = "crates/pim-discovery" }
 pim-routing = { path = "crates/pim-routing" }
 pim-wifidirect = { path = "crates/pim-wifidirect" }
+pim-ios-ffi = { path = "crates/pim-ios-ffi" }

@@ -840,6 +840,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "pim-ios-ffi"
+version = "0.1.0"
+dependencies = [
+ "pim-core",
+ "serde_json",
+ "thiserror",
+ "tracing",
+]
+
+[[package]]
 name = "pim-protocol"
 version = "0.1.0"
 dependencies = [

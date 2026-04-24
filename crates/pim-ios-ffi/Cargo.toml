@@ -1,0 +1,18 @@
+[package]
+name = "pim-ios-ffi"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[lib]
+name = "pim_ios_ffi"
+# `staticlib` is what Xcode links against inside the XCFramework.
+# `rlib` lets the crate be depended on by other Rust code (tests,
+# future runtime wrapper).
+crate-type = ["staticlib", "rlib"]
+
+[dependencies]
+pim-core = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
