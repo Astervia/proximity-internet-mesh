@@ -14,7 +14,11 @@
 #[cfg(target_os = "linux")]
 use std::collections::HashMap;
 use std::collections::HashSet;
-use std::net::{IpAddr, SocketAddr, SocketAddrV6};
+use std::net::SocketAddr;
+#[cfg(any(test, target_os = "linux", target_os = "macos"))]
+use std::net::IpAddr;
+#[cfg(any(test, target_os = "linux"))]
+use std::net::SocketAddrV6;
 #[cfg(any(test, target_os = "linux"))]
 use std::path::Path;
 use std::path::PathBuf;
@@ -103,10 +107,16 @@ struct ResolvedPanInterface {
 #[derive(Debug)]
 pub struct BluetoothDiscovery {
     config: BluetoothConfig,
+    // On iOS the stubs in the impl block return Unavailable without reading
+    // any of these fields. Silence the resulting dead_code warnings rather
+    // than adding cfg gates on each field — Plan 2 may revisit this when
+    // the daemon is refactored into pim-runtime.
+    #[cfg_attr(target_os = "ios", allow(dead_code))]
     listen_port: u16,
     static_targets: Vec<SocketAddr>,
     #[cfg(target_os = "linux")]
     sysfs_root: PathBuf,
+    #[cfg_attr(target_os = "ios", allow(dead_code))]
     ip_command: PathBuf,
     bluetoothctl_command: PathBuf,
     #[cfg(target_os = "linux")]
