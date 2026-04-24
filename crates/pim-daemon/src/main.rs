@@ -295,12 +295,16 @@ struct DaemonState {
     ip_pool: Option<Arc<Mutex<IpPool>>>,
     /// Requesters currently being serviced for mesh IP assignment.
     pending_ip_assignments: Arc<Mutex<HashSet<NodeId>>>,
+    /// Selected gateway for the current outstanding dynamic IP request, if any.
+    pending_dynamic_ip_gateway: Arc<Mutex<Option<NodeId>>>,
     /// Last heartbeat received per peer, used for liveness detection.
     peer_last_hb: Arc<Mutex<HashMap<NodeId, Instant>>>,
     /// Reconnect manager for configured peers.
     reconnect: Arc<ReconnectManager>,
     /// Maximum reconnect attempts per target before giving up.
     max_reconnect_attempts: u32,
+    /// Timeout for outbound TCP connect attempts.
+    outbound_connect_timeout: Duration,
     /// Store-and-forward buffer for temporarily unreachable peers.
     send_buffer: Arc<SendBuffer>,
     /// Total data frames dropped due to peer send-queue congestion.
@@ -382,6 +386,132 @@ async fn clear_pending_outbound(
     {
         pending.remove(&target.addr().ip());
     }
+}
+
+fn has_dynamic_mesh_ip(state: &DaemonState) -> bool {
+    state.mesh_ip.load(Ordering::Relaxed) != 0
+}
+
+fn encode_control_frame(cf: ControlFrame) -> Vec<u8> {
+    let mut buf = BytesMut::new();
+    cf.encode(&mut buf);
+    buf.to_vec()
+}
+
+async fn send_routed_control_via(
+    state: &Arc<DaemonState>,
+    next_hop: NodeId,
+    dst_id: NodeId,
+    cf: ControlFrame,
+) -> bool {
+    let session = state.sessions.read().await.get(&next_hop).cloned();
+    let Some(session) = session else {
+        warn!(%next_hop, %dst_id, "no session for routed control next hop");
+        return false;
+    };
+    let payload = encode_control_frame(cf);
+    send_single_mesh(
+        state,
+        &session,
+        state.self_id,
+        dst_id,
+        8,
+        DataFlags::IS_CONTROL,
+        &payload,
+    )
+    .await;
+    true
+}
+
+async fn send_routed_control(state: &Arc<DaemonState>, dst_id: NodeId, cf: ControlFrame) -> bool {
+    let next_hop = state.routing.lock().await.lookup(dst_id);
+    let Some(next_hop) = next_hop else {
+        warn!(%dst_id, "no route for routed control");
+        return false;
+    };
+    send_routed_control_via(state, next_hop, dst_id, cf).await
+}
+
+async fn maybe_request_dynamic_ip(state: &Arc<DaemonState>) {
+    if !state.request_dynamic_ip || has_dynamic_mesh_ip(state) {
+        return;
+    }
+
+    let Some((gateway_id, next_hop)) = state.routing.lock().await.nearest_gateway_route() else {
+        return;
+    };
+
+    {
+        let pending = state.pending_dynamic_ip_gateway.lock().await;
+        if *pending == Some(gateway_id) {
+            return;
+        }
+    }
+
+    if send_routed_control_via(
+        state,
+        next_hop,
+        gateway_id,
+        ControlFrame::IpRequest {
+            requester_id: state.self_id,
+        },
+    )
+    .await
+    {
+        *state.pending_dynamic_ip_gateway.lock().await = Some(gateway_id);
+        debug!(%gateway_id, via = %next_hop, "sent routed IpRequest");
+    }
+}
+
+async fn request_dynamic_ip_from_peer(state: &Arc<DaemonState>, peer_id: NodeId) {
+    if !state.request_dynamic_ip || has_dynamic_mesh_ip(state) {
+        return;
+    }
+
+    let is_direct_gateway = {
+        let rt = state.routing.lock().await;
+        rt.lookup(peer_id) == Some(peer_id)
+            && rt
+                .all_gateways()
+                .into_iter()
+                .any(|(gateway_id, hops)| gateway_id == peer_id && hops == 1)
+    };
+
+    if is_direct_gateway {
+        send_control(
+            state,
+            &peer_id,
+            ControlFrame::IpRequest {
+                requester_id: state.self_id,
+            },
+        )
+        .await;
+        *state.pending_dynamic_ip_gateway.lock().await = Some(peer_id);
+        debug!(%peer_id, "sent direct IpRequest");
+        return;
+    }
+
+    maybe_request_dynamic_ip(state).await;
+}
+
+async fn apply_dynamic_ip_assignment(
+    state: &Arc<DaemonState>,
+    assigned_ip: [u8; 4],
+    subnet_mask: u8,
+    gateway_ip: [u8; 4],
+) {
+    let ip = Ipv4Addr::from(assigned_ip);
+    let gw = Ipv4Addr::from(gateway_ip);
+    info!(%ip, prefix = subnet_mask, %gw, "received IP assignment");
+    if let Err(e) = state.tun.set_ip(ip, subnet_mask) {
+        warn!("TUN set_ip failed: {e}");
+    }
+    state.mesh_ip.store(u32::from(ip), Ordering::Relaxed);
+    state
+        .mesh_prefix_len
+        .store(subnet_mask, Ordering::Relaxed);
+    state.routing.lock().await.set_self_mesh_ip(ip);
+    *state.pending_dynamic_ip_gateway.lock().await = None;
 }
 
 async fn cancel_pending_outbound_for_ip(
@@ -1700,14 +1830,22 @@ async fn run_reconnect_task(state: Arc<DaemonState>, target: ConnectTarget) {
         let transport_key = NodeId::from_bytes(rand::random::<[u8; 16]>());
         register_pending_outbound(&state, target, transport_key).await;
 
-        if let Err(e) = state
-            .transport
-            .connect(&PeerAddress {
+        let connect_result = tokio::time::timeout(
+            state.outbound_connect_timeout,
+            state.transport.connect(&PeerAddress {
                 node_id: transport_key,
                 addr,
-            })
-            .await
-        {
+            }),
+        )
+        .await;
+
+        if let Err(e) = match connect_result {
+            Ok(result) => result,
+            Err(_) => Err(TransportError::ConnectionFailed(format!(
+                "connect timeout after {}ms",
+                state.outbound_connect_timeout.as_millis()
+            ))),
+        } {
             clear_pending_outbound(&state, target, transport_key).await;
             warn!(%addr, mechanism = target.mechanism_name(), attempt, "reconnect TCP connect failed: {e}");
             attempt += 1;
@@ -1894,17 +2032,7 @@ async fn handshake_initiator(
     flush_send_buffer(state, peer_id).await;
 
     // Non-gateway nodes request an IP address from the peer after connecting.
-    if state.request_dynamic_ip {
-        send_control(
-            state,
-            &peer_id,
-            ControlFrame::IpRequest {
-                requester_id: state.self_id,
-            },
-        )
-        .await;
-        debug!(%peer_id, "sent IpRequest");
-    }
+    request_dynamic_ip_from_peer(state, peer_id).await;
     Ok(peer_id)
 }
 
@@ -1999,6 +2127,9 @@ async fn handshake_responder(
 
     // Flush any frames buffered while this peer was unreachable.
     flush_send_buffer(state, peer_id).await;
+    // Dynamic-IP nodes must also request an address when the peer initiated
+    // the transport connection, otherwise late joins depend on handshake role.
+    request_dynamic_ip_from_peer(state, peer_id).await;
     Ok(())
 }
 
@@ -2400,6 +2531,115 @@ async fn run_event_loop(state: Arc<DaemonState>) -> Result<()> {
                         };
 
                         if mesh.dst_id == state.self_id {
+                            if mesh.flags.contains(DataFlags::IS_CONTROL) {
+                                let mut buf = BytesMut::from(mesh.payload.as_slice());
+                                match ControlFrame::decode(&mut buf) {
+                                    Ok(cf) => match cf {
+                                        ControlFrame::IpRequest { requester_id } => {
+                                            if let Some(pool) = &state.ip_pool {
+                                                let disposition = {
+                                                    let mut pending =
+                                                        state.pending_ip_assignments.lock().await;
+                                                    classify_ip_request(
+                                                        &mut pending,
+                                                        requester_id,
+                                                        mesh.src_id,
+                                                    )
+                                                };
+                                                match disposition {
+                                                    IpRequestDisposition::SpoofedRequester => {
+                                                        warn!(
+                                                            src_id = %mesh.src_id,
+                                                            %requester_id,
+                                                            "rejecting routed IpRequest with mismatched requester_id"
+                                                        );
+                                                        continue;
+                                                    }
+                                                    IpRequestDisposition::DuplicateInFlight => {
+                                                        debug!(
+                                                            %requester_id,
+                                                            "dropping duplicate in-flight routed IpRequest"
+                                                        );
+                                                        continue;
+                                                    }
+                                                    IpRequestDisposition::Process => {}
+                                                }
+
+                                                let result = pool
+                                                    .lock()
+                                                    .await
+                                                    .allocate_assignment(*requester_id.as_bytes());
+                                                match result {
+                                                    Ok(assignment) => {
+                                                        let sent = send_routed_control(
+                                                            &state,
+                                                            requester_id,
+                                                            ControlFrame::IpAssign {
+                                                                assigned_ip: assignment.assigned_ip.octets(),
+                                                                subnet_mask: assignment.subnet_mask,
+                                                                gateway_ip: assignment.gateway_ip.octets(),
+                                                                lease_seconds: assignment.lease_seconds,
+                                                            },
+                                                        )
+                                                        .await;
+                                                        if sent {
+                                                            info!(
+                                                                %requester_id,
+                                                                ip = %assignment.assigned_ip,
+                                                                "assigned IP"
+                                                            );
+                                                        }
+                                                    }
+                                                    Err(e) => {
+                                                        warn!(%requester_id, "IP allocation failed: {e}")
+                                                    }
+                                                }
+                                                state
+                                                    .pending_ip_assignments
+                                                    .lock()
+                                                    .await
+                                                    .remove(&requester_id);
+                                            } else {
+                                                debug!(
+                                                    src_id = %mesh.src_id,
+                                                    "received routed IpRequest but not a gateway"
+                                                );
+                                            }
+                                        }
+                                        ControlFrame::IpAssign {
+                                            assigned_ip,
+                                            subnet_mask,
+                                            gateway_ip,
+                                            ..
+                                        } => {
+                                            if state.request_dynamic_ip {
+                                                apply_dynamic_ip_assignment(
+                                                    &state,
+                                                    assigned_ip,
+                                                    subnet_mask,
+                                                    gateway_ip,
+                                                )
+                                                .await;
+                                            } else {
+                                                debug!(
+                                                    src_id = %mesh.src_id,
+                                                    "ignoring routed IpAssign for statically configured mesh IP"
+                                                );
+                                            }
+                                        }
+                                        other => {
+                                            debug!(
+                                                src_id = %mesh.src_id,
+                                                frame = ?other,
+                                                "ignoring unsupported routed control frame"
+                                            );
+                                        }
+                                    },
+                                    Err(e) => warn!(src_id = %mesh.src_id, "routed control decode: {e}"),
+                                }
+                                continue;
+                            }
+
                             // Destined for us — count inbound data landing at this node
                             state.packets_forwarded.fetch_add(1, Ordering::Relaxed);
                             state.bytes_forwarded.fetch_add(mesh.payload.len() as u64, Ordering::Relaxed);
@@ -2570,6 +2810,9 @@ async fn run_event_loop(state: Arc<DaemonState>) -> Result<()> {
                                         .await
                                         .apply_update(&update, from_peer);
                                     debug!(%from_peer, ?changed, "route update applied");
+                                    if changed == pim_routing::UpdateResult::Changed {
+                                        maybe_request_dynamic_ip(&state).await;
+                                    }
                                 }
                             }
                             Err(e) => warn!(%from_peer, "route frame decode: {e}"),
@@ -2672,17 +2915,13 @@ async fn run_event_loop(state: Arc<DaemonState>) -> Result<()> {
                                     ..
                                 } => {
                                     if state.request_dynamic_ip {
-                                        let ip = Ipv4Addr::from(assigned_ip);
-                                        let gw = Ipv4Addr::from(gateway_ip);
-                                        info!(%ip, prefix = subnet_mask, %gw, "received IP assignment");
-                                        if let Err(e) = state.tun.set_ip(ip, subnet_mask) {
-                                            warn!("TUN set_ip failed: {e}");
-                                        }
-                                        state.mesh_ip.store(u32::from(ip), Ordering::Relaxed);
-                                        state
-                                            .mesh_prefix_len
-                                            .store(subnet_mask, Ordering::Relaxed);
-                                        state.routing.lock().await.set_self_mesh_ip(ip);
+                                        apply_dynamic_ip_assignment(
+                                            &state,
+                                            assigned_ip,
+                                            subnet_mask,
+                                            gateway_ip,
+                                        )
+                                        .await;
                                     } else {
                                         debug!(%from_peer, "ignoring unsolicited IpAssign for statically configured mesh IP");
                                     }
@@ -3136,14 +3375,22 @@ async fn initiate_peer_connection(state: Arc<DaemonState>, target: ConnectTarget
     let transport_key = NodeId::from_bytes(rand::random::<[u8; 16]>());
     register_pending_outbound(&state, target, transport_key).await;
 
-    if let Err(e) = state
-        .transport
-        .connect(&PeerAddress {
+    let connect_result = tokio::time::timeout(
+        state.outbound_connect_timeout,
+        state.transport.connect(&PeerAddress {
             node_id: transport_key,
             addr: peer_addr,
-        })
-        .await
-    {
+        }),
+    )
+    .await;
+
+    if let Err(e) = match connect_result {
+        Ok(result) => result,
+        Err(_) => Err(TransportError::ConnectionFailed(format!(
+            "connect timeout after {}ms",
+            state.outbound_connect_timeout.as_millis()
+        ))),
+    } {
         clear_pending_outbound(&state, target, transport_key).await;
         warn!(%peer_addr, mechanism = target.mechanism_name(), "connect failed: {e}; reconnect will retry");
         if state.reconnect.begin_reconnect(target).await {
@@ -3725,9 +3972,11 @@ async fn main() -> Result<()> {
         internet_link,
         ip_pool,
         pending_ip_assignments: Arc::new(Mutex::new(HashSet::new())),
+        pending_dynamic_ip_gateway: Arc::new(Mutex::new(None)),
         peer_last_hb: Arc::new(Mutex::new(HashMap::new())),
         reconnect,
         max_reconnect_attempts: config.transport.max_reconnect_attempts,
+        outbound_connect_timeout: Duration::from_millis(config.transport.connect_timeout_ms),
         send_buffer: Arc::new(SendBuffer::new(DEFAULT_CAPACITY, DEFAULT_TIMEOUT)),
         congestion_drops: Arc::new(AtomicU64::new(0)),
         packets_forwarded: Arc::new(AtomicU64::new(0)),
