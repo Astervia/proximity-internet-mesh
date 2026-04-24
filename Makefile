@@ -10,7 +10,7 @@ docker-build:
 
 # ── Test phases ───────────────────────────────────────────────────────────────
 
-.PHONY: test-p1 test-ipv6 test-p2 test-p3 test-p4 test-p5 test-p7 test-auth test-debug-cli test-route-cli test-bluetooth test-bluetooth-enx test-all
+.PHONY: test-p1 test-ipv6 test-p2 test-p3 test-p4 test-p5 test-p7 test-p8 test-auth test-debug-cli test-route-cli test-bluetooth test-bluetooth-enx test-all
 
 test-p1: docker-build
 	bash $(TEST_DIR)/test-phase1.sh
@@ -36,6 +36,9 @@ test-p5: docker-build
 
 test-p7: docker-build
 	bash $(TEST_DIR)/test-phase7.sh
+
+test-p8: docker-build
+	bash $(TEST_DIR)/test-phase8.sh
 
 test-auth: docker-build
 	bash $(TEST_DIR)/test-authorization.sh
@@ -67,7 +70,7 @@ test-all: docker-build
 # ── Manual stack management ───────────────────────────────────────────────────
 # Use these for interactive debugging without the test scripts.
 
-.PHONY: up-p1 up-ipv6 up-p2-relay up-p2-routing up-p3 up-p4 up-p4-fc up-p5 up-p7 up-bluetooth up-bluetooth-enx
+.PHONY: up-p1 up-ipv6 up-p2-relay up-p2-routing up-p3 up-p4 up-p4-fc up-p5 up-p7 up-p8 up-bluetooth up-bluetooth-enx
 
 up-p1:
 	docker compose -f $(COMPOSE_DIR)/phase1-single-hop.yml up -d --build
@@ -96,13 +99,16 @@ up-p5:
 up-p7:
 	docker compose -f $(COMPOSE_DIR)/phase7-auto-discovery.yml up -d --build
 
+up-p8:
+	docker compose -f $(COMPOSE_DIR)/phase8-auto-ip-chain.yml up -d --build
+
 up-bluetooth:
 	docker compose -f $(COMPOSE_DIR)/bluetooth-seam.yml up -d --build
 
 up-bluetooth-enx:
 	docker compose -f $(COMPOSE_DIR)/bluetooth-seam-enx.yml up -d --build
 
-.PHONY: down-p1 down-ipv6 down-p2-relay down-p2-routing down-p3 down-p4 down-p4-fc down-p5 down-p7 down-bluetooth down-bluetooth-enx
+.PHONY: down-p1 down-ipv6 down-p2-relay down-p2-routing down-p3 down-p4 down-p4-fc down-p5 down-p7 down-p8 down-bluetooth down-bluetooth-enx
 
 down-p1:
 	docker compose -f $(COMPOSE_DIR)/phase1-single-hop.yml down -v --remove-orphans
@@ -131,6 +137,9 @@ down-p5:
 down-p7:
 	docker compose -f $(COMPOSE_DIR)/phase7-auto-discovery.yml down -v --remove-orphans
 
+down-p8:
+	docker compose -f $(COMPOSE_DIR)/phase8-auto-ip-chain.yml down -v --remove-orphans
+
 down-bluetooth:
 	docker compose -f $(COMPOSE_DIR)/bluetooth-seam.yml down -v --remove-orphans
 
@@ -139,7 +148,7 @@ down-bluetooth-enx:
 
 # ── Log tailing ───────────────────────────────────────────────────────────────
 
-.PHONY: logs-p1 logs-ipv6 logs-p2-relay logs-p2-routing logs-p3 logs-p4 logs-p5 logs-p7 logs-bluetooth logs-bluetooth-enx
+.PHONY: logs-p1 logs-ipv6 logs-p2-relay logs-p2-routing logs-p3 logs-p4 logs-p5 logs-p7 logs-p8 logs-bluetooth logs-bluetooth-enx
 
 logs-p1:
 	docker compose -f $(COMPOSE_DIR)/phase1-single-hop.yml logs -f
@@ -164,6 +173,9 @@ logs-p5:
 
 logs-p7:
 	docker compose -f $(COMPOSE_DIR)/phase7-auto-discovery.yml logs -f
+
+logs-p8:
+	docker compose -f $(COMPOSE_DIR)/phase8-auto-ip-chain.yml logs -f
 
 logs-bluetooth:
 	docker compose -f $(COMPOSE_DIR)/bluetooth-seam.yml logs -f
@@ -206,6 +218,7 @@ docker-clean:
 	    $(COMPOSE_DIR)/phase4-flow-control.yml \
 	    $(COMPOSE_DIR)/phase5-multigateway.yml \
 	    $(COMPOSE_DIR)/phase7-auto-discovery.yml \
+	    $(COMPOSE_DIR)/phase8-auto-ip-chain.yml \
 	    $(COMPOSE_DIR)/auth-allow-all.yml \
 	    $(COMPOSE_DIR)/auth-allow-list.yml \
 	    $(COMPOSE_DIR)/auth-tofu.yml \
@@ -238,6 +251,7 @@ help:
 	@echo "  make test-p4-full       Phase 4: includes 6-min NAT timeout test"
 	@echo "  make test-p5            Phase 5: multi-gateway + failover + load"
 	@echo "  make test-p7            Phase 7: zero-config auto-discovery"
+	@echo "  make test-p8            Phase 8: auto-IP chain + late gateway join"
 	@echo "  make test-auth          Authorization policies + keyed discovery"
 	@echo "  make test-debug-cli     Debug CLI output in multi-gateway and discovery labs"
 	@echo "  make test-route-cli     Split-default route CLI flow in the single-hop Docker lab"

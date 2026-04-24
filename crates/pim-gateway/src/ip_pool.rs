@@ -50,6 +50,19 @@ pub struct Lease {
     pub granted_at: Instant,
 }
 
+/// Snapshot of the network configuration returned to a client for a lease.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct IpAssignment {
+    /// Assigned mesh IPv4 address.
+    pub assigned_ip: Ipv4Addr,
+    /// Mesh IPv4 address of the serving gateway.
+    pub gateway_ip: Ipv4Addr,
+    /// CIDR prefix length for the assigned subnet.
+    pub subnet_mask: u8,
+    /// Lease duration in seconds.
+    pub lease_seconds: u32,
+}
+
 impl Lease {
     /// Return `true` once the lease duration has elapsed.
     pub fn is_expired(&self) -> bool {
@@ -172,6 +185,20 @@ impl IpPool {
         }
         Err(IpPoolError::PoolExhausted {
             prefix_len: self.prefix_len,
+        })
+    }
+
+    /// Allocate (or renew) an IP and return the full client-facing lease config.
+    pub fn allocate_assignment(
+        &mut self,
+        node_id: [u8; 16],
+    ) -> Result<IpAssignment, IpPoolError> {
+        let (assigned_ip, lease_seconds) = self.allocate(node_id)?;
+        Ok(IpAssignment {
+            assigned_ip,
+            gateway_ip: self.gateway_ip(),
+            subnet_mask: self.prefix_len(),
+            lease_seconds,
         })
     }
 
@@ -298,6 +325,16 @@ mod tests {
         // Lease immediately expired — should be able to allocate for a different node
         let result = p.allocate([2u8; 16]);
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn allocate_assignment_returns_consistent_network_snapshot() {
+        let mut p = pool();
+        let assignment = p.allocate_assignment([7u8; 16]).unwrap();
+        assert_eq!(assignment.assigned_ip, Ipv4Addr::new(10, 77, 0, 2));
+        assert_eq!(assignment.gateway_ip, Ipv4Addr::new(10, 77, 0, 1));
+        assert_eq!(assignment.subnet_mask, 24);
+        assert_eq!(assignment.lease_seconds, 3600);
     }
 
     #[test]
