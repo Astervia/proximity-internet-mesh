@@ -15,9 +15,14 @@ Accepted — 2026-04-24. Resolves Milestone 1 of [issue #70][issue-70].
 - A user-space process cannot open `/dev/net/tun` or `SYSPROTO_CONTROL`. Packet
   IO is only available to a **Packet Tunnel Provider** extension, via
   `NEPacketTunnelFlow.readPackets` / `writePackets`.
-- The extension process is sandboxed and memory-limited (≈ 50 MB on iOS 15+,
-  with real-world reports of sub-15 MB caps on some iOS 17.x patch versions —
-  the dataplane must be designed for 15 MB).
+- The extension process is sandboxed and memory-limited. Apple documents
+  ≈ 50 MB on iOS 15+ ([Apple Developer Forums thread 106377][ne-mem]), but
+  community reports describe tighter caps on some iOS 17.x patch versions
+  ([Apple Developer Forums thread 747474][ne-mem-17]). Budget for 15 MB
+  rather than 50 MB when the dataplane can afford it.
+
+[ne-mem]: https://developer.apple.com/forums/thread/106377
+[ne-mem-17]: https://developer.apple.com/forums/thread/747474
 - Routing is declared once via `NEPacketTunnelNetworkSettings.IPv4Settings`
   (`includedRoutes` / `excludedRoutes` / `mtu`); there is no runtime
   `ip route` equivalent.

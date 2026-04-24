@@ -30,7 +30,7 @@ pub struct PimHandle {
 
 /// Returns a NUL-terminated UTF-8 string owned by the library describing
 /// the crate version. The caller must not free the returned pointer.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn pim_ffi_version() -> *const c_char {
     // The byte string lives for the lifetime of the library, so the pointer
     // is always valid.
@@ -55,7 +55,7 @@ pub extern "C" fn pim_ffi_version() -> *const c_char {
 ///   valid, readable buffer.
 /// - `err_out` may be null. If non-null, it must point at a writable
 ///   `*mut c_char` slot.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn pim_ffi_start(
     config_json: *const c_char,
     err_out: *mut *mut c_char,
@@ -90,7 +90,7 @@ pub unsafe extern "C" fn pim_ffi_start(
 ///
 /// `handle` must be either null or a pointer returned by
 /// [`pim_ffi_start`] that has not yet been passed to `pim_ffi_stop`.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn pim_ffi_stop(handle: *mut PimHandle) {
     if handle.is_null() {
         return;
@@ -105,7 +105,7 @@ pub unsafe extern "C" fn pim_ffi_stop(handle: *mut PimHandle) {
 ///
 /// `s` must be either null or a pointer previously written to
 /// `*err_out` by [`pim_ffi_start`].
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn pim_ffi_free_string(s: *mut c_char) {
     if s.is_null() {
         return;
@@ -119,10 +119,13 @@ unsafe fn set_error(err_out: *mut *mut c_char, msg: &str) {
     }
     let c = match CString::new(msg) {
         Ok(c) => c,
-        // The only way CString::new fails is an interior NUL in `msg`.
-        // We never pass one, but if we ever did we silently drop the
-        // message rather than writing a half-formed pointer.
-        Err(_) => return,
+        // CString::new only fails on an interior NUL. We never construct
+        // such a message, but if we ever did we write null to *err_out so
+        // callers cannot observe a stale or uninitialized pointer.
+        Err(_) => {
+            *err_out = ptr::null_mut();
+            return;
+        }
     };
     *err_out = c.into_raw();
 }
