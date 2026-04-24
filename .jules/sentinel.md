@@ -12,3 +12,8 @@
 **Vulnerability:** The daemon's PID file (`pid_file`) was written using `std::fs::write`, which falls back to the system's default `umask`. Under a permissive umask (e.g., `0000`), this could leave the PID file world-writable, allowing unprivileged users to spoof the PID.
 **Learning:** Relying on default file permissions when writing non-sensitive system files (like PID files) can still create security risks, such as local DoS or privilege escalation, if the files are used by other system services.
 **Prevention:** Explicitly use `std::fs::OpenOptions` with `OpenOptionsExt::mode(0o644)` on Unix systems to ensure strict file access permissions (owner writable, group/others readable) when writing system files.
+
+## 2024-08-16 - [Secure File Creation for Configs]
+**Vulnerability:** The CLI's configuration initialization logic used a non-atomic `path.exists()` check before creating the `config.toml` file with `create(true).truncate(true)`. This creates a Time-of-Check to Time-of-Use (TOCTOU) vulnerability where an attacker could place a symlink at the target path between the check and the file creation.
+**Learning:** Checking for file existence before creation using separate operations is prone to race conditions and symlink attacks.
+**Prevention:** Use atomic operations like `OpenOptions::new().create_new(true)` when creating sensitive files that shouldn't be overwritten, and handle the resulting `ErrorKind::AlreadyExists` to provide safe, race-free user warnings.
