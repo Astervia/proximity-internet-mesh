@@ -853,7 +853,11 @@ mod platform {
     }
 }
 
-#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+// iOS (and any other non-Linux / non-macOS target) is served by this
+// stub module. A user-space iOS process cannot open /dev/net/tun or
+// SYSPROTO_CONTROL — packet IO on iOS lives inside a Packet Tunnel
+// extension and is bridged via `pim-ios-ffi`. See docs/architecture/ios.md.
+#[cfg(any(target_os = "ios", not(any(target_os = "linux", target_os = "macos"))))]
 mod platform {
     use super::{Ipv4Addr, Ipv6Addr, TunError};
 
@@ -926,5 +930,17 @@ mod tests {
         assert_eq!(prefix_to_mask(30), Ipv4Addr::new(255, 255, 255, 252));
         assert_eq!(prefix_to_mask(0), Ipv4Addr::new(0, 0, 0, 0));
         assert_eq!(prefix_to_mask(32), Ipv4Addr::new(255, 255, 255, 255));
+    }
+
+    // Packet IO on iOS lives inside a NEPacketTunnelProvider extension,
+    // not in the Rust process — so every TunInterface surface must refuse
+    // to touch the host and let `pim-ios-ffi` bridge the Swift extension.
+    #[cfg(target_os = "ios")]
+    #[tokio::test]
+    async fn ios_stub_reports_unavailable_for_all_operations() {
+        assert!(matches!(
+            TunInterface::create("utun0"),
+            Err(TunError::Unavailable)
+        ));
     }
 }
