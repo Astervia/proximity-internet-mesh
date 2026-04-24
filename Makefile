@@ -225,6 +225,24 @@ clean-all: docker-clean
 test-unit:
 	cargo test --workspace
 
+# ── iOS cross-compile (milestone 1 of issue #70) ─────────────────────────────
+
+IOS_TARGETS := aarch64-apple-ios aarch64-apple-ios-sim x86_64-apple-ios
+IOS_LIB_CRATES := pim-core pim-crypto pim-protocol pim-routing pim-transport \
+                  pim-discovery pim-gateway pim-tun pim-bluetooth \
+                  pim-wifidirect pim-ios-ffi
+
+.PHONY: ios-check ios-xcframework
+
+ios-check:
+	@for t in $(IOS_TARGETS); do \
+	  echo "==> cargo check --target $$t"; \
+	  cargo check --target $$t $(addprefix -p ,$(IOS_LIB_CRATES)) || exit 1; \
+	done
+
+ios-xcframework:
+	bash scripts/build-ios.sh
+
 .PHONY: help
 help:
 	@echo "PIM Docker test targets:"
@@ -245,6 +263,9 @@ help:
 	@echo "  make test-bluetooth-enx Bluetooth dynamic enx PAN fallback seam test in Docker"
 	@echo "  make test-all           All phases (slow tests skipped)"
 	@echo "  make test-unit          Rust unit tests (no Docker)"
+	@echo ""
+	@echo "  make ios-check          cargo check all library crates for each iOS triple"
+	@echo "  make ios-xcframework    Build target/ios/PimCore.xcframework (requires Xcode)"
 	@echo ""
 	@echo "  make up-p1              Start phase 1 stack (no tests)"
 	@echo "  make up-ipv6            Start IPv6 single-hop stack"
