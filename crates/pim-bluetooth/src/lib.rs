@@ -42,12 +42,18 @@ pub const DEFAULT_IP_COMMAND: &str = "ip";
 /// Default command used to inspect Bluetooth PAN neighbors.
 #[cfg(target_os = "macos")]
 pub const DEFAULT_IP_COMMAND: &str = "arp";
+/// Placeholder on platforms without Bluetooth PAN support (e.g. iOS).
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+pub const DEFAULT_IP_COMMAND: &str = "";
 /// Default command used for radio discovery and pairing.
 #[cfg(target_os = "linux")]
 pub const DEFAULT_BLUETOOTHCTL_COMMAND: &str = "bluetoothctl";
 /// Default command used for radio discovery and pairing.
 #[cfg(target_os = "macos")]
 pub const DEFAULT_BLUETOOTHCTL_COMMAND: &str = "blueutil";
+/// Placeholder on platforms without Bluetooth PAN support (e.g. iOS).
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+pub const DEFAULT_BLUETOOTHCTL_COMMAND: &str = "";
 /// Default `bt-network` command used to request a PAN/NAP connection.
 pub const DEFAULT_BT_NETWORK_COMMAND: &str = "bt-network";
 /// Default `iptables` command used to install NAT rules for the Bluetooth subnet.
@@ -73,6 +79,9 @@ pub enum BluetoothError {
         /// Human-readable error text from stderr.
         message: String,
     },
+    /// Bluetooth is not available on this platform (e.g. iOS).
+    #[error("Bluetooth is not available on this platform")]
+    Unavailable,
 }
 
 /// A discovered Bluetooth device candidate.
@@ -1213,6 +1222,44 @@ impl BluetoothDiscovery {
             interface,
             self.listen_port,
         ))
+    }
+
+    // iOS cannot reach Bluetooth PAN from a third-party app sandbox, and a
+    // Packet Tunnel extension has no access to bluetoothctl/blueutil/arp/ip.
+    // These stubs keep the crate compilable on iOS — the dispatch trampoline
+    // above is cfg-neutral, so the _impl surface has to exist on every
+    // supported target.
+    #[cfg(target_os = "ios")]
+    async fn prepare_controller_impl(&self) -> Result<(), BluetoothError> {
+        Err(BluetoothError::Unavailable)
+    }
+
+    #[cfg(target_os = "ios")]
+    async fn discover_devices_impl(&self) -> Result<Vec<DiscoveredDevice>, BluetoothError> {
+        Err(BluetoothError::Unavailable)
+    }
+
+    #[cfg(target_os = "ios")]
+    async fn pair_and_request_pan_impl(
+        &self,
+        _device: &DiscoveredDevice,
+    ) -> Result<(), BluetoothError> {
+        Err(BluetoothError::Unavailable)
+    }
+
+    #[cfg(target_os = "ios")]
+    async fn resolve_pan_interface_impl(
+        &self,
+    ) -> Result<Option<ResolvedPanInterface>, BluetoothError> {
+        Err(BluetoothError::Unavailable)
+    }
+
+    #[cfg(target_os = "ios")]
+    async fn discover_neighbor_targets_impl(
+        &self,
+        _interface: &str,
+    ) -> Result<Vec<SocketAddr>, BluetoothError> {
+        Err(BluetoothError::Unavailable)
     }
 }
 
