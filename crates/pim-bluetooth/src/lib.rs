@@ -1826,7 +1826,7 @@ address: aa-bb-cc-dd-ee-03, not connected, not favourite, not paired, name: \"PI
 
         cancel.cancel();
         runner.await.unwrap().unwrap();
-        fs::remove_dir_all(fake_root).unwrap();
+        let _ = fs::remove_dir_all(fake_root);
     }
 
     #[cfg(target_os = "linux")]
@@ -1905,7 +1905,7 @@ address: aa-bb-cc-dd-ee-03, not connected, not favourite, not paired, name: \"PI
 
         cancel.cancel();
         runner.await.unwrap().unwrap();
-        fs::remove_dir_all(fake_root).unwrap();
+        let _ = fs::remove_dir_all(fake_root);
     }
 
     #[cfg(target_os = "linux")]
@@ -1995,7 +1995,7 @@ address: aa-bb-cc-dd-ee-03, not connected, not favourite, not paired, name: \"PI
             "expected address assignment in ip log: {ip_log}"
         );
 
-        fs::remove_dir_all(fake_root).unwrap();
+        let _ = fs::remove_dir_all(fake_root);
     }
 
     #[cfg(target_os = "linux")]
@@ -2057,7 +2057,7 @@ address: aa-bb-cc-dd-ee-03, not connected, not favourite, not paired, name: \"PI
             other => panic!("expected CommandFailed, got {other:?}"),
         }
 
-        fs::remove_dir_all(fake_root).unwrap();
+        let _ = fs::remove_dir_all(fake_root);
     }
 
     #[test]
