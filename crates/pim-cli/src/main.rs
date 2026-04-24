@@ -706,7 +706,10 @@ fn cmd_config_generate(
                     path.display()
                 );
             }
-            Err(e) => return Err(anyhow::Error::new(e).context(format!("failed to open config file {}", path.display()))),
+            Err(e) => {
+                return Err(anyhow::Error::new(e)
+                    .context(format!("failed to open config file {}", path.display())))
+            }
         };
         file.write_all(rendered.as_bytes())
             .with_context(|| format!("failed to write config template to {}", path.display()))?;
