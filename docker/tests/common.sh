@@ -78,7 +78,10 @@ assert_logs_contain() {
     local output
     while [ $elapsed -lt $max ]; do
         output=$(docker compose -f "$COMPOSE_DIR/$file" logs --no-color "$svc" 2>&1) || true
-        if echo "$output" | grep -Fq "$expected"; then
+        # Avoid piping a large string into `grep -q` — grep exits on first match,
+        # triggers SIGPIPE on the left side, and `pipefail` surfaces that as a
+        # failed pipeline even though the match was found.
+        if [[ "$output" == *"$expected"* ]]; then
             log_ok "$desc"
             return 0
         fi
