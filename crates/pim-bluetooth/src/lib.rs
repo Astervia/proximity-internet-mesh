@@ -75,6 +75,17 @@ pub enum BluetoothError {
     },
 }
 
+impl BluetoothError {
+    fn is_missing_device_error(&self) -> bool {
+        match self {
+            Self::CommandFailed { command, message } if *command == "ip" => {
+                message.contains("Cannot find device") || message.contains("does not exist")
+            }
+            _ => false,
+        }
+    }
+}
+
 /// A discovered Bluetooth device candidate.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DiscoveredDevice {
@@ -245,11 +256,11 @@ impl BluetoothDiscovery {
         #[cfg(target_os = "linux")]
         let mut dnsmasq_child: Option<Child> = None;
         #[cfg(target_os = "linux")]
-        let mut dhclient_child: Option<(String, Child)> = None;
+        let mut dhclient_children: HashMap<String, Child> = HashMap::new();
         #[cfg(target_os = "linux")]
         let mut pan_clients: HashMap<String, Child> = HashMap::new();
 
-        let mut active_interface: Option<ResolvedPanInterface> = None;
+        let mut active_interfaces: Vec<ResolvedPanInterface> = Vec::new();
         let startup_deadline =
             Instant::now() + Duration::from_millis(self.config.startup_timeout_ms);
         let mut emitted_static = false;
@@ -272,7 +283,7 @@ impl BluetoothDiscovery {
                         self.teardown_linux(
                             &mut nap_server,
                             &mut dnsmasq_child,
-                            &mut dhclient_child,
+                            &mut dhclient_children,
                             &mut pan_clients,
                         )
                         .await;
@@ -295,32 +306,46 @@ impl BluetoothDiscovery {
                         }
                     }
 
-                    let resolved = self.resolve_pan_interface().await?;
-                    if active_interface != resolved {
-                        match (&active_interface, &resolved) {
-                            (_, Some(interface)) => info!(
-                                configured_interface = %self.config.interface,
-                                resolved_interface = %interface.name,
-                                source = interface.source,
-                                "Bluetooth PAN interface selected"
-                            ),
-                            (Some(previous), None) => warn!(
-                                previous_interface = %previous.name,
-                                "Bluetooth PAN interface disappeared; waiting for a new PAN interface"
-                            ),
-                            (None, None) => {}
+                    let resolved = self.resolve_pan_interfaces().await?;
+                    if active_interfaces != resolved {
+                        let previous: HashSet<&str> =
+                            active_interfaces.iter().map(|iface| iface.name.as_str()).collect();
+                        let current: HashSet<&str> =
+                            resolved.iter().map(|iface| iface.name.as_str()).collect();
+
+                        for interface in &resolved {
+                            if !previous.contains(interface.name.as_str()) {
+                                info!(
+                                    configured_interface = %self.config.interface,
+                                    resolved_interface = %interface.name,
+                                    source = interface.source,
+                                    "Bluetooth PAN interface selected"
+                                );
+                            }
                         }
-                        active_interface = resolved;
+
+                        for previous_interface in &active_interfaces {
+                            if !current.contains(previous_interface.name.as_str()) {
+                                warn!(
+                                    previous_interface = %previous_interface.name,
+                                    "Bluetooth PAN interface disappeared; waiting for it to return"
+                                );
+                            }
+                        }
+
+                        active_interfaces = resolved;
                     }
 
                     #[cfg(target_os = "linux")]
-                    if let Some(interface) = active_interface.as_ref() {
-                        if self.config.request_dhcp
-                            && self.config.connect_pan
-                            && !self.config.serve_nap
-                        {
+                    if self.config.request_dhcp
+                        && self.config.connect_pan
+                        && !self.config.serve_nap
+                    {
+                        self.prune_dhclient_children(&active_interfaces, &mut dhclient_children)
+                            .await;
+                        for interface in &active_interfaces {
                             if let Err(err) = self
-                                .ensure_dhclient_running(&interface.name, &mut dhclient_child)
+                                .ensure_dhclient_running(&interface.name, &mut dhclient_children)
                                 .await
                             {
                                 warn!(
@@ -333,7 +358,7 @@ impl BluetoothDiscovery {
                         }
                     }
 
-                    if active_interface.is_none() && Instant::now() >= startup_deadline {
+                    if active_interfaces.is_empty() && Instant::now() >= startup_deadline {
                         warn!(
                             interface = %self.config.interface,
                             timeout_ms = self.config.startup_timeout_ms,
@@ -348,7 +373,7 @@ impl BluetoothDiscovery {
                         }
                     }
 
-                    if active_interface.is_some() && !emitted_static {
+                    if !active_interfaces.is_empty() && !emitted_static {
                         for addr in &self.static_targets {
                             info!(%addr, "Bluetooth PAN static peer ready");
                             if self.peer_tx.send(*addr).await.is_err() {
@@ -419,25 +444,43 @@ impl BluetoothDiscovery {
                         }
                     }
                 }
-                _ = peer_interval.tick(), if active_interface.is_some() && self.config.auto_discover_peers => {
-                    let interface = active_interface
-                        .as_ref()
-                        .expect("peer discovery tick requires active interface");
-                    let discovered = self.discover_neighbor_targets(&interface.name).await?;
-                    let discovered_set: HashSet<SocketAddr> = discovered.iter().copied().collect();
+                _ = peer_interval.tick(), if !active_interfaces.is_empty() && self.config.auto_discover_peers => {
+                    let mut discovered_all: HashSet<SocketAddr> = HashSet::new();
+                    let mut missing_interfaces: HashSet<String> = HashSet::new();
 
-                    for addr in discovered {
-                        if seen_addrs.insert(addr) {
-                            info!(%addr, interface = %interface.name, "Bluetooth PAN discovered peer addr");
-                            if self.peer_tx.send(addr).await.is_err() {
-                                return Ok(());
+                    for interface in &active_interfaces {
+                        let discovered = match self.discover_neighbor_targets(&interface.name).await {
+                            Ok(discovered) => discovered,
+                            Err(err) if err.is_missing_device_error() => {
+                                warn!(
+                                    interface = %interface.name,
+                                    "Bluetooth PAN interface disappeared during neighbor scan; waiting for it to return"
+                                );
+                                missing_interfaces.insert(interface.name.clone());
+                                continue;
+                            }
+                            Err(err) => return Err(err),
+                        };
+
+                        for addr in discovered {
+                            discovered_all.insert(addr);
+                            if seen_addrs.insert(addr) {
+                                info!(%addr, interface = %interface.name, "Bluetooth PAN discovered peer addr");
+                                if self.peer_tx.send(addr).await.is_err() {
+                                    return Ok(());
+                                }
                             }
                         }
                     }
 
                     seen_addrs.retain(|addr| {
-                        self.static_targets.contains(addr) || discovered_set.contains(addr)
+                        self.static_targets.contains(addr) || discovered_all.contains(addr)
                     });
+
+                    if !missing_interfaces.is_empty() {
+                        active_interfaces
+                            .retain(|interface| !missing_interfaces.contains(&interface.name));
+                    }
                 }
             }
         }
@@ -455,8 +498,8 @@ impl BluetoothDiscovery {
         self.pair_and_request_pan_impl(device).await
     }
 
-    async fn resolve_pan_interface(&self) -> Result<Option<ResolvedPanInterface>, BluetoothError> {
-        self.resolve_pan_interface_impl().await
+    async fn resolve_pan_interfaces(&self) -> Result<Vec<ResolvedPanInterface>, BluetoothError> {
+        self.resolve_pan_interfaces_impl().await
     }
 
     async fn discover_neighbor_targets(
@@ -901,7 +944,7 @@ impl BluetoothDiscovery {
         &self,
         nap_server: &mut Option<Child>,
         dnsmasq_child: &mut Option<Child>,
-        dhclient_child: &mut Option<(String, Child)>,
+        dhclient_children: &mut HashMap<String, Child>,
         pan_clients: &mut HashMap<String, Child>,
     ) {
         if let Some(mut child) = nap_server.take() {
@@ -912,7 +955,7 @@ impl BluetoothDiscovery {
             let _ = child.kill().await;
             let _ = child.wait().await;
         }
-        if let Some((_, mut child)) = dhclient_child.take() {
+        for (_, mut child) in dhclient_children.drain() {
             let _ = child.kill().await;
             let _ = child.wait().await;
         }
@@ -1079,32 +1122,54 @@ impl BluetoothDiscovery {
     async fn ensure_dhclient_running(
         &self,
         interface: &str,
-        child: &mut Option<(String, Child)>,
+        children: &mut HashMap<String, Child>,
     ) -> Result<(), BluetoothError> {
-        if let Some((current, existing)) = child.as_mut() {
-            if current != interface {
-                warn!(
-                    previous = %current,
-                    new = %interface,
-                    "Bluetooth DHCP client interface changed; restarting"
-                );
-                let _ = existing.kill().await;
-                let _ = existing.wait().await;
-                *child = None;
-            }
-        }
-        if let Some((_, existing)) = child.as_mut() {
+        let mut should_start = false;
+        if let Some(existing) = children.get_mut(interface) {
             if let Some(status) = existing.try_wait()? {
                 warn!(
                     ?status,
                     interface, "Bluetooth DHCP client exited; restarting"
                 );
-                *child = Some((interface.to_string(), self.start_dhclient(interface).await?));
+                should_start = true;
             }
         } else {
-            *child = Some((interface.to_string(), self.start_dhclient(interface).await?));
+            should_start = true;
         }
+
+        if should_start {
+            if let Some(mut existing) = children.remove(interface) {
+                let _ = existing.kill().await;
+                let _ = existing.wait().await;
+            }
+            children.insert(interface.to_string(), self.start_dhclient(interface).await?);
+        }
+
         Ok(())
+    }
+
+    #[cfg(target_os = "linux")]
+    async fn prune_dhclient_children(
+        &self,
+        active_interfaces: &[ResolvedPanInterface],
+        children: &mut HashMap<String, Child>,
+    ) {
+        let active: HashSet<&str> = active_interfaces
+            .iter()
+            .map(|interface| interface.name.as_str())
+            .collect();
+        let stale: Vec<String> = children
+            .keys()
+            .filter(|name| !active.contains(name.as_str()))
+            .cloned()
+            .collect();
+        for interface in stale {
+            if let Some(mut child) = children.remove(&interface) {
+                warn!(interface = %interface, "Bluetooth DHCP client interface disappeared; stopping");
+                let _ = child.kill().await;
+                let _ = child.wait().await;
+            }
+        }
     }
 
     #[cfg(target_os = "macos")]
@@ -1118,19 +1183,20 @@ impl BluetoothDiscovery {
     }
 
     #[cfg(target_os = "linux")]
-    async fn resolve_pan_interface_impl(
+    async fn resolve_pan_interfaces_impl(
         &self,
-    ) -> Result<Option<ResolvedPanInterface>, BluetoothError> {
+    ) -> Result<Vec<ResolvedPanInterface>, BluetoothError> {
         let candidates = list_pan_candidates(&self.sysfs_root).await?;
 
-        if let Some(interface) = select_pan_interface(
+        let interfaces = select_pan_interfaces(
             &candidates,
             preferred_interface_hint(&self.config.interface),
             self.config
                 .serve_nap
                 .then_some(self.config.nap_bridge.as_str()),
-        ) {
-            return Ok(Some(interface));
+        );
+        if !interfaces.is_empty() {
+            return Ok(interfaces);
         }
 
         if !candidates.is_empty() {
@@ -1140,29 +1206,30 @@ impl BluetoothDiscovery {
                 "Bluetooth PAN interface not ready yet"
             );
         }
-        Ok(None)
+        Ok(Vec::new())
     }
 
     #[cfg(target_os = "macos")]
-    async fn resolve_pan_interface_impl(
+    async fn resolve_pan_interfaces_impl(
         &self,
-    ) -> Result<Option<ResolvedPanInterface>, BluetoothError> {
+    ) -> Result<Vec<ResolvedPanInterface>, BluetoothError> {
         let interface = resolve_macos_pan_interface_hint(&self.config.interface);
         let output = Command::new("ifconfig").arg(interface).output().await?;
         if !output.status.success() {
-            return Ok(None);
+            return Ok(Vec::new());
         }
         Ok(
-            is_ready_ifconfig_output(&String::from_utf8_lossy(&output.stdout)).then(|| {
-                ResolvedPanInterface {
+            is_ready_ifconfig_output(&String::from_utf8_lossy(&output.stdout))
+                .then(|| ResolvedPanInterface {
                     name: interface.to_string(),
                     source: if self.config.interface.trim() == "auto" {
                         "auto-default"
                     } else {
                         "configured"
                     },
-                }
-            }),
+                })
+                .into_iter()
+                .collect(),
         )
     }
 
@@ -1327,25 +1394,29 @@ fn preferred_interface_hint(interface: &str) -> Option<&str> {
 }
 
 #[cfg(any(test, target_os = "linux"))]
-fn select_pan_interface(
+fn select_pan_interfaces(
     candidates: &[PanInterfaceCandidate],
     preferred: Option<&str>,
     nap_bridge: Option<&str>,
-) -> Option<ResolvedPanInterface> {
+) -> Vec<ResolvedPanInterface> {
     let nap_bridge = nap_bridge.and_then(preferred_interface_hint);
 
-    for candidate in candidates {
-        if preferred == Some(candidate.name.as_str()) && candidate_is_ready(candidate) {
-            return Some(ResolvedPanInterface {
-                name: candidate.name.clone(),
-                source: "configured",
-            });
+    if let Some(preferred) = preferred {
+        for candidate in candidates {
+            if preferred == candidate.name.as_str() && candidate_is_ready(candidate) {
+                return vec![ResolvedPanInterface {
+                    name: candidate.name.clone(),
+                    source: "configured",
+                }];
+            }
         }
     }
 
+    let mut selected = Vec::new();
+
     for candidate in candidates {
         if nap_bridge == Some(candidate.name.as_str()) {
-            return Some(ResolvedPanInterface {
+            selected.push(ResolvedPanInterface {
                 name: candidate.name.clone(),
                 source: "nap_bridge",
             });
@@ -1354,23 +1425,19 @@ fn select_pan_interface(
 
     for candidate in candidates {
         if candidate.name.starts_with("bnep") && candidate_is_ready(candidate) {
-            return Some(ResolvedPanInterface {
+            selected.push(ResolvedPanInterface {
                 name: candidate.name.clone(),
                 source: "dynamic-bnep",
             });
-        }
-    }
-
-    for candidate in candidates {
-        if candidate.name.starts_with("enx") && candidate_is_ready(candidate) {
-            return Some(ResolvedPanInterface {
+        } else if candidate.name.starts_with("enx") && candidate_is_ready(candidate) {
+            selected.push(ResolvedPanInterface {
                 name: candidate.name.clone(),
                 source: "dynamic-enx",
             });
         }
     }
 
-    None
+    selected
 }
 
 #[cfg(any(test, target_os = "linux"))]
@@ -1680,8 +1747,8 @@ address: aa-bb-cc-dd-ee-03, not connected, not favourite, not paired, name: \"PI
     }
 
     #[test]
-    fn select_pan_interface_prefers_configured_ready_interface() {
-        let selected = select_pan_interface(
+    fn select_pan_interfaces_prefers_configured_ready_interface() {
+        let selected = select_pan_interfaces(
             &[
                 PanInterfaceCandidate {
                     name: "enx1234".into(),
@@ -1694,15 +1761,15 @@ address: aa-bb-cc-dd-ee-03, not connected, not favourite, not paired, name: \"PI
             ],
             Some("enx1234"),
             None,
-        )
-        .unwrap();
-        assert_eq!(selected.name, "enx1234");
-        assert_eq!(selected.source, "configured");
+        );
+        assert_eq!(selected.len(), 1);
+        assert_eq!(selected[0].name, "enx1234");
+        assert_eq!(selected[0].source, "configured");
     }
 
     #[test]
-    fn select_pan_interface_falls_back_to_dynamic_linux_names() {
-        let selected = select_pan_interface(
+    fn select_pan_interfaces_fall_back_to_dynamic_linux_names() {
+        let selected = select_pan_interfaces(
             &[
                 PanInterfaceCandidate {
                     name: "eth0".into(),
@@ -1715,25 +1782,50 @@ address: aa-bb-cc-dd-ee-03, not connected, not favourite, not paired, name: \"PI
             ],
             Some("bnep0"),
             None,
-        )
-        .unwrap();
-        assert_eq!(selected.name, "enx6432a8144f4b");
-        assert_eq!(selected.source, "dynamic-enx");
+        );
+        assert_eq!(selected.len(), 1);
+        assert_eq!(selected[0].name, "enx6432a8144f4b");
+        assert_eq!(selected[0].source, "dynamic-enx");
     }
 
     #[test]
-    fn select_pan_interface_uses_nap_bridge_when_serving() {
-        let selected = select_pan_interface(
+    fn select_pan_interfaces_use_nap_bridge_when_serving() {
+        let selected = select_pan_interfaces(
             &[PanInterfaceCandidate {
                 name: "br-bt".into(),
                 operstate: Some("down".into()),
             }],
             None,
             Some("br-bt"),
-        )
-        .unwrap();
-        assert_eq!(selected.name, "br-bt");
-        assert_eq!(selected.source, "nap_bridge");
+        );
+        assert_eq!(selected.len(), 1);
+        assert_eq!(selected[0].name, "br-bt");
+        assert_eq!(selected[0].source, "nap_bridge");
+    }
+
+    #[test]
+    fn select_pan_interfaces_include_all_ready_dynamic_pan_links() {
+        let selected = select_pan_interfaces(
+            &[
+                PanInterfaceCandidate {
+                    name: "bnep0".into(),
+                    operstate: Some("up".into()),
+                },
+                PanInterfaceCandidate {
+                    name: "enx6432a8144f4b".into(),
+                    operstate: Some("up".into()),
+                },
+                PanInterfaceCandidate {
+                    name: "eth0".into(),
+                    operstate: Some("up".into()),
+                },
+            ],
+            None,
+            None,
+        );
+        assert_eq!(selected.len(), 2);
+        assert_eq!(selected[0].name, "bnep0");
+        assert_eq!(selected[1].name, "enx6432a8144f4b");
     }
 
     #[cfg(target_os = "linux")]
@@ -1910,6 +2002,94 @@ address: aa-bb-cc-dd-ee-03, not connected, not favourite, not paired, name: \"PI
 
     #[cfg(target_os = "linux")]
     #[tokio::test]
+    async fn run_discovers_neighbors_across_multiple_pan_interfaces() {
+        let fake_root = unique_test_dir("pim-bt-fake-root-multi-pan");
+        fs::create_dir_all(fake_root.join("sysfs/bnep0")).unwrap();
+        fs::create_dir_all(fake_root.join("sysfs/enx6432a8144f4b")).unwrap();
+        fs::write(fake_root.join("sysfs/bnep0/operstate"), "up\n").unwrap();
+        fs::write(fake_root.join("sysfs/enx6432a8144f4b/operstate"), "up\n").unwrap();
+
+        let fake_bluetoothctl = fake_root.join("bluetoothctl");
+        fs::write(&fake_bluetoothctl, "#!/bin/sh\nexit 0\n").unwrap();
+
+        let fake_bt_network = fake_root.join("bt-network");
+        fs::write(&fake_bt_network, "#!/bin/sh\nexit 0\n").unwrap();
+
+        let fake_ip = fake_root.join("ip");
+        fs::write(
+            &fake_ip,
+            "#!/bin/sh\nif [ \"$1\" = \"neigh\" ] && [ \"$2\" = \"show\" ] && [ \"$3\" = \"dev\" ] && [ \"$4\" = \"bnep0\" ]; then\n  printf '192.168.44.2 dev bnep0 lladdr 02:00:00:00:00:02 REACHABLE\\n'\n  exit 0\nfi\nif [ \"$1\" = \"neigh\" ] && [ \"$2\" = \"show\" ] && [ \"$3\" = \"dev\" ] && [ \"$4\" = \"enx6432a8144f4b\" ]; then\n  printf '192.168.44.9 dev enx6432a8144f4b lladdr 02:00:00:00:00:09 REACHABLE\\n'\n  exit 0\nfi\nexit 0\n",
+        )
+        .unwrap();
+        make_executable(&fake_bluetoothctl);
+        make_executable(&fake_bt_network);
+        make_executable(&fake_ip);
+
+        let config = BluetoothConfig {
+            interface: "auto".into(),
+            radio_discovery_enabled: false,
+            local_alias: "PIM-self".into(),
+            poll_interval_ms: 10,
+            peer_discovery_interval_ms: 10,
+            startup_timeout_ms: 500,
+            request_dhcp: false,
+            ..Default::default()
+        };
+
+        let fake_iptables = fake_root.join("iptables");
+        fs::write(&fake_iptables, "#!/bin/sh\nexit 0\n").unwrap();
+        make_executable(&fake_iptables);
+        let fake_dnsmasq = fake_root.join("dnsmasq");
+        fs::write(&fake_dnsmasq, "#!/bin/sh\nexit 0\n").unwrap();
+        make_executable(&fake_dnsmasq);
+        let fake_dhclient = fake_root.join("dhclient");
+        fs::write(&fake_dhclient, "#!/bin/sh\nexit 0\n").unwrap();
+        make_executable(&fake_dhclient);
+        let fake_resolv = fake_root.join("resolv.conf");
+        fs::write(&fake_resolv, "nameserver 1.1.1.1\n").unwrap();
+
+        let (svc, mut rx) = BluetoothDiscovery::new_with_system_paths(
+            config,
+            9100,
+            Vec::new(),
+            fake_root.join("sysfs"),
+            fake_ip,
+            fake_bluetoothctl,
+            fake_bt_network,
+            fake_iptables,
+            fake_dnsmasq,
+            fake_dhclient,
+            fake_resolv,
+            None::<String>,
+        )
+        .unwrap();
+        let cancel = CancellationToken::new();
+
+        let runner = tokio::spawn({
+            let cancel = cancel.clone();
+            async move { svc.run(cancel).await }
+        });
+
+        let addr_a = tokio::time::timeout(Duration::from_millis(300), rx.recv())
+            .await
+            .expect("timed out waiting for first multi-interface Bluetooth address")
+            .expect("channel closed before first address emitted");
+        let addr_b = tokio::time::timeout(Duration::from_millis(300), rx.recv())
+            .await
+            .expect("timed out waiting for second multi-interface Bluetooth address")
+            .expect("channel closed before second address emitted");
+
+        let received: HashSet<SocketAddr> = [addr_a, addr_b].into_iter().collect();
+        assert!(received.contains(&"192.168.44.2:9100".parse().unwrap()));
+        assert!(received.contains(&"192.168.44.9:9100".parse().unwrap()));
+
+        cancel.cancel();
+        runner.await.unwrap().unwrap();
+        fs::remove_dir_all(fake_root).unwrap();
+    }
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
     async fn start_nap_server_auto_creates_bridge_and_invokes_bt_network_with_bridge() {
         let fake_root = unique_test_dir("pim-bt-fake-root-nap-auto");
         fs::create_dir_all(fake_root.join("sysfs")).unwrap();
@@ -2073,6 +2253,21 @@ address: aa-bb-cc-dd-ee-03, not connected, not favourite, not paired, name: \"PI
     fn default_dhcp_range_keeps_gateway_out_of_pool() {
         let range = default_dhcp_range(std::net::Ipv4Addr::new(192, 168, 44, 1), 24).unwrap();
         assert_eq!(range, "192.168.44.10,192.168.44.245");
+    }
+
+    #[test]
+    fn missing_device_ip_error_is_classified_as_transient() {
+        let err = BluetoothError::CommandFailed {
+            command: "ip",
+            message: "Cannot find device \"enx6432a8144f4b\"".into(),
+        };
+        assert!(err.is_missing_device_error());
+
+        let other = BluetoothError::CommandFailed {
+            command: "ip",
+            message: "RTNETLINK answers: File exists".into(),
+        };
+        assert!(!other.is_missing_device_error());
     }
 
     fn unique_test_dir(prefix: &str) -> PathBuf {

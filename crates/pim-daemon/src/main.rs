@@ -297,6 +297,8 @@ struct DaemonState {
     peer_last_hb: Arc<Mutex<HashMap<NodeId, Instant>>>,
     /// Reconnect manager for configured peers.
     reconnect: Arc<ReconnectManager>,
+    /// Maximum reconnect attempts per target before giving up.
+    max_reconnect_attempts: u32,
     /// Store-and-forward buffer for temporarily unreachable peers.
     send_buffer: Arc<SendBuffer>,
     /// Total data frames dropped due to peer send-queue congestion.
@@ -1631,6 +1633,18 @@ async fn run_reconnect_task(state: Arc<DaemonState>, target: ConnectTarget) {
     let addr = target.addr();
     let mut attempt = 0u32;
     loop {
+        if attempt >= state.max_reconnect_attempts {
+            warn!(
+                %addr,
+                mechanism = target.mechanism_name(),
+                attempt,
+                max_reconnect_attempts = state.max_reconnect_attempts,
+                "reconnect stopped: reached configured attempt limit"
+            );
+            state.reconnect.end_reconnect(target).await;
+            return;
+        }
+
         let delay = backoff_duration(attempt);
         info!(%addr, mechanism = target.mechanism_name(), attempt, delay_ms = delay.as_millis(), "reconnect scheduled");
 
@@ -3651,6 +3665,7 @@ async fn main() -> Result<()> {
         ip_pool,
         peer_last_hb: Arc::new(Mutex::new(HashMap::new())),
         reconnect,
+        max_reconnect_attempts: config.transport.max_reconnect_attempts,
         send_buffer: Arc::new(SendBuffer::new(DEFAULT_CAPACITY, DEFAULT_TIMEOUT)),
         congestion_drops: Arc::new(AtomicU64::new(0)),
         packets_forwarded: Arc::new(AtomicU64::new(0)),
@@ -4556,6 +4571,14 @@ en0: flags=8863<UP,BROADCAST,RUNNING,SIMPLEX,MULTICAST> mtu 1500\n\
             Some(target),
             "Bluetooth-discovered peer must be reconnectable"
         );
+    }
+
+    #[test]
+    fn transport_reconnect_limit_parses_from_config() {
+        let config =
+            Config::from_toml_str("[node]\nname=\"t\"\n[transport]\nmax_reconnect_attempts=4\n")
+                .unwrap();
+        assert_eq!(config.transport.max_reconnect_attempts, 4);
     }
 
     #[test]

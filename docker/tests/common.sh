@@ -73,13 +73,20 @@ assert_peer_count() {
 assert_logs_contain() {
     local file="$1" svc="$2" expected="$3"
     local desc="${4:-logs for $svc contain $expected}"
+    local max="${5:-20}"
+    local elapsed=0
     local output
-    output=$(docker compose -f "$COMPOSE_DIR/$file" logs --no-color "$svc" 2>&1) || true
-    if echo "$output" | grep -Fq "$expected"; then
-        log_ok "$desc"
-    else
-        log_fail "$desc (expected '$expected' in logs)"
-    fi
+    while [ $elapsed -lt $max ]; do
+        output=$(docker compose -f "$COMPOSE_DIR/$file" logs --no-color "$svc" 2>&1) || true
+        if echo "$output" | grep -Fq "$expected"; then
+            log_ok "$desc"
+            return 0
+        fi
+        sleep 1
+        elapsed=$((elapsed+1))
+    done
+    log_fail "$desc (expected '$expected' in logs within ${max}s)"
+    return 1
 }
 
 # ── Docker helpers ────────────────────────────────────────────────────────────
