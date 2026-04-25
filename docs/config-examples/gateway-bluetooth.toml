@@ -78,7 +78,7 @@ dhcp_enabled = true
 dhcp_lease_time = "12h"
 # Optional DNS list advertised to DHCP clients. When unset, the daemon inherits
 # upstream resolvers from /etc/resolv.conf at runtime.
-# dhcp_dns = "1.1.1.1,8.8.8.8"
+dhcp_dns = "1.1.1.1,8.8.8.8"
 # Gateway serves DHCP; it doesn't need to request one itself.
 request_dhcp = false
 auto_discover_peers = true
