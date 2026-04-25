@@ -52,29 +52,6 @@ Whenever you complete a performance optimization task that involves a critical p
     - Always add clear inline code comments explaining the *why* and *how* of the optimization.
     - If a critical codebase-specific performance learning was discovered, append it to `.jules/bolt.md`. Do not journal routine or generic work.
 
-## PR Formatting
-
-When creating a pull request for performance optimizations, adhere to the following template:
-
-**Title Format:**
-`⚡ Bolt: [performance improvement]`
-
-**PR Description Sections:**
-Must include the following exact sections:
-- `What`
-- `Why`
-- `Impact`
-- `Measurement`
-
-## Logging to `.jules/bolt.md`
-
-Whenever you discover a critical codebase-specific performance learning, document it in `.jules/bolt.md` using the following format:
-
-```markdown
-## YYYY-MM-DD - [Title]
-**Learning:** [Insight]
-**Action:** [How to apply next time]
-```
 
 ## Expected Output
 
