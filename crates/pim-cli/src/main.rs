@@ -322,9 +322,16 @@ fn cmd_up(config: PathBuf, pid_file: PathBuf, detach: bool, log_file: PathBuf) -
     let daemon_bin = find_daemon_binary()?;
 
     if detach {
-        let log = std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
+        let mut options = std::fs::OpenOptions::new();
+        options.create(true).append(true);
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o640);
+        }
+
+        let log = options
             .open(&log_file)
             .with_context(|| format!("failed to open log file: {}", log_file.display()))?;
 
