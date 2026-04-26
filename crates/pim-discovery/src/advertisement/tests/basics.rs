@@ -88,8 +88,7 @@ fn encrypted_round_trip() {
     let ad = sample_ad();
     let key = test_key(1);
     let decoded =
-        DiscoveryAdvertisement::deserialize_encrypted(&ad.serialize_encrypted(&key), &key)
-            .unwrap();
+        DiscoveryAdvertisement::deserialize_encrypted(&ad.serialize_encrypted(&key), &key).unwrap();
     assert_eq!(ad, decoded);
 }
 
