@@ -547,8 +547,11 @@ pub mod test_util;
 #[cfg(test)]
 mod tests;
 
+#[cfg(target_os = "linux")]
 use firewall::input_drop_args;
+pub(crate) use firewall::run_cmd;
 #[cfg(target_os = "macos")]
 use firewall::run_cmd_with_stdin;
-pub(crate) use firewall::{check_cmd_quiet, iptables_delete_if_present, run_cmd};
+#[cfg(target_os = "linux")]
+pub(crate) use firewall::{check_cmd_quiet, iptables_delete_if_present};
 use packet::{ip_protocol, parse_flow, rewrite_dst, rewrite_src, transport_dst_port};
