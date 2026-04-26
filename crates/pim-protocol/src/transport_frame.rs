@@ -99,7 +99,6 @@ impl FrameCodec for TransportFrame {
         tag.copy_from_slice(&buf[..TAG_SIZE]);
         buf.advance(TAG_SIZE);
 
-
         Ok(TransportFrame {
             frame_type,
             nonce,
