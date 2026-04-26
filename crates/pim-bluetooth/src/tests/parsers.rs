@@ -86,4 +86,3 @@ fn default_dhcp_range_keeps_gateway_out_of_pool() {
     let range = default_dhcp_range(std::net::Ipv4Addr::new(192, 168, 44, 1), 24).unwrap();
     assert_eq!(range, "192.168.44.10,192.168.44.245");
 }
-
