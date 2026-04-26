@@ -104,14 +104,16 @@ impl Session {
         Ok(TransportFrame {
             frame_type: FrameType::Data,
             nonce,
-            payload,
+            payload: bytes::Bytes::from(payload),
             tag,
         })
     }
 
     fn decrypt_frame(&self, mut frame: TransportFrame) -> Result<TransportFrame> {
+        let mut payload = frame.payload.to_vec();
         self.recv
-            .decrypt_in_place_detached(&frame.nonce, &mut frame.payload, &frame.tag)?;
+            .decrypt_in_place_detached(&frame.nonce, &mut payload, &frame.tag)?;
+        frame.payload = bytes::Bytes::from(payload);
         Ok(frame)
     }
 }
@@ -1256,7 +1258,7 @@ async fn send_control(state: &Arc<DaemonState>, peer: &NodeId, cf: ControlFrame)
     let tf = TransportFrame {
         frame_type: FrameType::Control,
         nonce: [0; 12],
-        payload: buf.to_vec(),
+        payload: buf.freeze(),
         tag: [0; 16],
     };
     send_frame_buffered(state, peer, tf).await;
@@ -1285,7 +1287,7 @@ async fn remove_peer(state: &Arc<DaemonState>, peer_id: NodeId) {
             TransportFrame {
                 frame_type: FrameType::RouteUpdate,
                 nonce: [0; 12],
-                payload: buf.to_vec(),
+                payload: buf.freeze(),
                 tag: [0; 16],
             },
         )
@@ -1901,7 +1903,7 @@ async fn send_handshake(
             TransportFrame {
                 frame_type: FrameType::Handshake,
                 nonce: [0; 12],
-                payload: buf.to_vec(),
+                payload: buf.freeze(),
                 tag: [0; 16],
             },
         )
@@ -1913,7 +1915,7 @@ fn decode_handshake_wire(frame: &TransportFrame) -> Result<HandshakeWireFrame> {
     if frame.frame_type != FrameType::Handshake {
         bail!("expected Handshake frame, got {:?}", frame.frame_type);
     }
-    let mut buf = BytesMut::from(frame.payload.as_slice());
+    let mut buf = BytesMut::from(frame.payload.as_ref());
     Ok(HandshakeWireFrame::decode(&mut buf)?)
 }
 
@@ -2172,7 +2174,7 @@ async fn send_single_mesh(
         session_id: 0,
         ttl,
         flags,
-        payload: payload.to_vec(),
+        payload: bytes::Bytes::copy_from_slice(payload),
     }
     .encode(&mut mesh_buf);
 
@@ -2231,7 +2233,7 @@ async fn run_route_advertisements(state: Arc<DaemonState>) {
                 TransportFrame {
                     frame_type: FrameType::RouteUpdate,
                     nonce: [0; 12],
-                    payload: buf.to_vec(),
+                    payload: buf.freeze(),
                     tag: [0; 16],
                 },
             )
@@ -2287,7 +2289,7 @@ async fn run_heartbeats(state: Arc<DaemonState>) {
         let tf = TransportFrame {
             frame_type: FrameType::Heartbeat,
             nonce: [0; 12],
-            payload: buf.to_vec(),
+            payload: buf.freeze(),
             tag: [0; 16],
         };
         for peer in &peers {
@@ -2522,7 +2524,7 @@ async fn run_event_loop(state: Arc<DaemonState>) -> Result<()> {
                             Ok(f) => f,
                             Err(e) => { warn!(%from_peer, "decrypt: {e}"); continue; }
                         };
-                        let mut buf = BytesMut::from(frame.payload.as_slice());
+                        let mut buf = BytesMut::from(frame.payload.as_ref());
                         let mesh = match MeshDataFrame::decode(&mut buf) {
                             Ok(m) => m,
                             Err(e) => { warn!(%from_peer, "mesh decode: {e}"); continue; }
@@ -2530,7 +2532,7 @@ async fn run_event_loop(state: Arc<DaemonState>) -> Result<()> {
 
                         if mesh.dst_id == state.self_id {
                             if mesh.flags.contains(DataFlags::IS_CONTROL) {
-                                let mut buf = BytesMut::from(mesh.payload.as_slice());
+                                let mut buf = BytesMut::from(mesh.payload.as_ref());
                                 match ControlFrame::decode(&mut buf) {
                                     Ok(cf) => match cf {
                                         ControlFrame::IpRequest { requester_id } => {
@@ -2775,7 +2777,7 @@ async fn run_event_loop(state: Arc<DaemonState>) -> Result<()> {
                     }
 
                     FrameType::RouteUpdate => {
-                        let mut buf = BytesMut::from(frame.payload.as_slice());
+                        let mut buf = BytesMut::from(frame.payload.as_ref());
                         match RouteUpdateFrame::decode(&mut buf) {
                             Ok(update) => {
                                 // Verify Ed25519 signature before applying.
@@ -2818,7 +2820,7 @@ async fn run_event_loop(state: Arc<DaemonState>) -> Result<()> {
                     }
 
                     FrameType::Heartbeat => {
-                        let mut buf = BytesMut::from(frame.payload.as_slice());
+                        let mut buf = BytesMut::from(frame.payload.as_ref());
                         match HeartbeatFrame::decode(&mut buf) {
                             Ok(hb) => {
                                 debug!(%from_peer, gw_hops = hb.gateway_hops, load = hb.load, "heartbeat");
@@ -2838,7 +2840,7 @@ async fn run_event_loop(state: Arc<DaemonState>) -> Result<()> {
                     }
 
                     FrameType::Control => {
-                        let mut buf = BytesMut::from(frame.payload.as_slice());
+                        let mut buf = BytesMut::from(frame.payload.as_ref());
                         match ControlFrame::decode(&mut buf) {
                             Ok(cf) => match cf {
                                 ControlFrame::IpRequest { requester_id } => {

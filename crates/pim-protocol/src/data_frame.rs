@@ -43,7 +43,7 @@ pub struct MeshDataFrame {
     /// Delivery and fragmentation flags.
     pub flags: DataFlags,
     /// Encapsulated IP packet bytes or fragment payload.
-    pub payload: Vec<u8>,
+    pub payload: bytes::Bytes,
 }
 
 const HEADER_SIZE: usize = 40;
@@ -88,8 +88,8 @@ impl FrameCodec for MeshDataFrame {
             )));
         }
 
-        let payload = buf[HEADER_SIZE..total].to_vec();
-        buf.advance(total);
+        buf.advance(HEADER_SIZE);
+        let payload = buf.split_to(payload_len).freeze();
 
         Ok(MeshDataFrame {
             src_id,
@@ -113,7 +113,7 @@ mod tests {
             session_id: 42,
             ttl: 10,
             flags: DataFlags::IS_INTERNET,
-            payload: vec![0xCA, 0xFE],
+            payload: bytes::Bytes::from(vec![0xCA, 0xFE]),
         }
     }
 
@@ -159,7 +159,7 @@ mod tests {
     #[test]
     fn empty_payload() {
         let frame = MeshDataFrame {
-            payload: vec![],
+            payload: bytes::Bytes::from(vec![]),
             ..sample_frame()
         };
         let mut buf = BytesMut::new();
