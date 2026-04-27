@@ -100,11 +100,11 @@ impl AuthorizationManager {
 }
 
 fn load_trusted_peers(path: &PathBuf) -> Result<HashSet<NodeId>> {
-    if !path.exists() {
-        return Ok(HashSet::new());
-    }
-    let content = std::fs::read_to_string(path)
-        .with_context(|| format!("read trust store {}", path.display()))?;
+    let content = match std::fs::read_to_string(path) {
+        Ok(c) => c,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(HashSet::new()),
+        Err(e) => return Err(e).with_context(|| format!("read trust store {}", path.display())),
+    };
     let file: TrustedPeersFile = toml::from_str(&content)
         .with_context(|| format!("parse trust store {}", path.display()))?;
     Ok(file.peers.into_iter().collect())

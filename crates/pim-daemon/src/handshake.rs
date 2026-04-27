@@ -128,7 +128,7 @@ pub(crate) async fn handshake_initiator(
     .await?;
     info!(%peer_id, "handshake complete (initiator)");
 
-    let key = *hs.session_key().unwrap().as_bytes();
+    let key = *hs.session_key().context("missing session key")?.as_bytes();
     let session = Arc::new(Session {
         peer_id,
         send: SessionCipher::new(&key, nonce_prefix(&key, true)),
@@ -222,7 +222,7 @@ pub(crate) async fn handshake_responder(
         .context("confirm verification")?;
     info!(%peer_id, "handshake complete (responder)");
 
-    let key = *hs.session_key().unwrap().as_bytes();
+    let key = *hs.session_key().context("missing session key")?.as_bytes();
     let session = Arc::new(Session {
         peer_id,
         send: SessionCipher::new(&key, nonce_prefix(&key, false)),
