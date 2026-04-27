@@ -14,9 +14,7 @@
 #[cfg(target_os = "linux")]
 use std::collections::HashMap;
 use std::collections::HashSet;
-use std::net::{IpAddr, SocketAddr, SocketAddrV6};
-#[cfg(any(test, target_os = "linux"))]
-use std::path::Path;
+use std::net::{IpAddr, SocketAddr};
 use std::path::PathBuf;
 #[cfg(target_os = "linux")]
 use std::process::Stdio;

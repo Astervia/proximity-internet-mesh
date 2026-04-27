@@ -1,4 +1,5 @@
 use super::super::*;
+use std::net::SocketAddrV6;
 
 #[test]
 fn operstate_helper_accepts_up_and_unknown() {
