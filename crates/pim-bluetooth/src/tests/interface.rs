@@ -1,4 +1,5 @@
 use super::super::*;
+use std::path::{Path, PathBuf};
 
 #[test]
 fn macos_auto_interface_hint_defaults_to_bridge0() {

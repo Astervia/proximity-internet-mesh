@@ -2,6 +2,10 @@
 
 use super::*;
 
+#[cfg(any(test, target_os = "linux"))]
+use std::path::{Path, PathBuf};
+
+#[cfg(any(test, target_os = "linux"))]
 pub(super) fn interface_operstate_path(sysfs_root: &Path, interface: &str) -> PathBuf {
     sysfs_root.join(interface).join("operstate")
 }
@@ -223,13 +227,12 @@ pub(super) fn parse_neighbor_output(
         let Ok(ip) = first.parse::<IpAddr>() else {
             continue;
         };
-        let addr =
-            match ip {
-                IpAddr::V6(ipv6) if ipv6.is_unicast_link_local() => SocketAddr::V6(
-                    SocketAddrV6::new(ipv6, listen_port, 0, ipv6_scope_id.unwrap_or(0)),
-                ),
-                _ => SocketAddr::new(ip, listen_port),
-            };
+        let addr = match ip {
+            IpAddr::V6(ipv6) if ipv6.is_unicast_link_local() => SocketAddr::V6(
+                std::net::SocketAddrV6::new(ipv6, listen_port, 0, ipv6_scope_id.unwrap_or(0)),
+            ),
+            _ => SocketAddr::new(ip, listen_port),
+        };
         if seen.insert(addr) {
             addrs.push(addr);
         }
