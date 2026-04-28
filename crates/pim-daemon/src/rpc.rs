@@ -183,6 +183,39 @@ async fn handle_connection(stream: UnixStream, state: Arc<DaemonState>) -> Resul
         }
     });
 
+    // ONE status-event forwarder per connection. Spawned at connect
+    // time and lives for the lifetime of the connection. We do NOT
+    // spawn one per `status.subscribe` call — UIs that subscribe
+    // multiple times (re-mount of components, reseed-after-reconnect,
+    // etc.) used to spawn N forwarders that all receive the same
+    // broadcast and write N duplicates to the socket. With ~50
+    // accumulated forwarders, a single `route.set_split_default`
+    // wrote 50 copies of `status.event` and saturated the IPC; the
+    // pim-ui WebView froze for seconds processing the duplicates.
+    //
+    // status.subscribe / unsubscribe in the dispatch layer now just
+    // hand out / discard subscription_ids without touching the
+    // forwarder. The UI side filters on its end via the per-event
+    // handler set in use-daemon-state.ts.
+    let status_write_tx = write_tx.clone();
+    let mut status_rx = state.status_events_tx.subscribe();
+    let status_forwarder = tokio::spawn(async move {
+        loop {
+            match status_rx.recv().await {
+                Ok(notif) => {
+                    if push_value(&status_write_tx, &notif).is_err() {
+                        break;
+                    }
+                }
+                Err(broadcast::error::RecvError::Lagged(n)) => {
+                    debug!(lagged = n, "status forwarder lagged; resyncing");
+                    continue;
+                }
+                Err(broadcast::error::RecvError::Closed) => break,
+            }
+        }
+    });
+
     let mut lines = BufReader::new(rd).lines();
     let mut handshake_done = false;
 
@@ -247,6 +280,7 @@ async fn handle_connection(stream: UnixStream, state: Arc<DaemonState>) -> Resul
     // Reader closed → drop the sender so the writer task exits, then
     // wait briefly for it to drain its queue.
     drop(write_tx);
+    status_forwarder.abort();
     let _ = writer_handle.await;
     Ok(())
 }
@@ -297,7 +331,10 @@ async fn dispatch(state: &Arc<DaemonState>, req: &RpcRequest, write_tx: &WriteTx
         // role_changed, kill_switch) are TODO — when those daemon-
         // internal hooks gain wiring they push onto the same channel
         // and arrive here automatically.
-        "status.subscribe" => Ok(start_status_subscription(state, write_tx.clone())),
+        // Single forwarder is spawned per connection in handle_connection;
+        // status.subscribe just hands out a subscription_id. UI side
+        // filters incoming notifications via its per-event handler set.
+        "status.subscribe" => Ok(json!({ "subscription_id": new_subscription_id() })),
         "status.unsubscribe" => Ok(Value::Null),
 
         // §5.2 peers
@@ -546,40 +583,6 @@ fn method_hello(params: Option<&Value>) -> RpcResult {
 }
 
 // ── §5.1 status ──────────────────────────────────────────────────────────
-
-/// Allocate a `subscription_id` and spawn a forwarder that pumps every
-/// `status.event` notification from `state.status_events_tx` onto this
-/// connection's writer. Closes when the writer channel closes (peer
-/// hung up); a Lagged subscriber loses missed frames and resyncs via
-/// the next `status` RPC, matching the convention used by
-/// `start_logs_subscription`.
-fn start_status_subscription(state: &Arc<DaemonState>, write_tx: WriteTx) -> Value {
-    let id = new_subscription_id();
-    let mut rx = state.status_events_tx.subscribe();
-    info!(subscription_id = %id, "status.subscribe forwarder spawned");
-    tokio::spawn(async move {
-        loop {
-            match rx.recv().await {
-                Ok(notif) => {
-                    info!(notif = %notif, "status forwarder received broadcast; pushing to socket");
-                    if push_value(&write_tx, &notif).is_err() {
-                        info!("status forwarder write_tx closed; exiting");
-                        break;
-                    }
-                }
-                Err(broadcast::error::RecvError::Lagged(n)) => {
-                    debug!(lagged = n, "status.subscribe receiver lagged; resyncing");
-                    continue;
-                }
-                Err(broadcast::error::RecvError::Closed) => {
-                    info!("status forwarder broadcast channel closed; exiting");
-                    break;
-                }
-            }
-        }
-    });
-    json!({ "subscription_id": id })
-}
 
 async fn build_status(state: &Arc<DaemonState>) -> Value {
     let mesh_ip_u32 = state.mesh_ip.load(Ordering::Relaxed);
