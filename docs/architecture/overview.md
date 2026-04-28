@@ -133,7 +133,7 @@ A single device can act as multiple roles simultaneously.
 ### Routing Engine
 
 - Maintains a routing table: `destination → next_hop`
-- Implements distance-vector or link-state routing (see [networking-and-routing.md](networking-and-routing.md))
+- Implements distance-vector or link-state routing (see [routing.md](routing.md))
 - Selects the best path toward a gateway node for outbound internet traffic
 - Detects and avoids routing loops (TTL + split horizon)
 - Recalculates routes when peers join or leave
