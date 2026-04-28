@@ -11,12 +11,8 @@ use pim_routing::gateway_score;
 use tracing::debug;
 
 use super::fs_util::atomic_write;
+use super::runtime_paths::{debug_snapshot_path, stats_path};
 use super::DaemonState;
-
-/// Path to the runtime stats file read by `pim status --verbose`.
-pub(crate) const STATS_PATH: &str = "/run/pim.stats";
-/// Path to the structured runtime snapshot read by `pim debug`.
-pub(crate) const DEBUG_SNAPSHOT_PATH: &str = "/run/pim-debug.json";
 
 pub(crate) struct StatsSnapshot {
     pub(crate) peers: usize,
@@ -77,13 +73,14 @@ pub(crate) fn format_stats(stats: &StatsSnapshot) -> String {
 }
 
 pub(crate) async fn run_stats_writer(state: Arc<DaemonState>) {
+    let path = stats_path();
     let mut interval = tokio::time::interval(Duration::from_secs(5));
     loop {
         interval.tick().await;
         let stats = collect_stats(&state).await;
         let content = format_stats(&stats);
-        if let Err(e) = atomic_write(STATS_PATH, content.as_bytes()).await {
-            debug!("stats write failed: {e}");
+        if let Err(e) = atomic_write(&path, content.as_bytes()).await {
+            debug!("stats write failed ({}): {e}", path.display());
         }
     }
 }
@@ -230,13 +227,14 @@ async fn build_debug_snapshot(state: &Arc<DaemonState>) -> DebugSnapshot {
 }
 
 pub(crate) async fn run_debug_snapshot_writer(state: Arc<DaemonState>) {
+    let path = debug_snapshot_path();
     let mut interval = tokio::time::interval(Duration::from_secs(2));
     loop {
         interval.tick().await;
         match serde_json::to_vec_pretty(&build_debug_snapshot(&state).await) {
             Ok(content) => {
-                if let Err(e) = atomic_write(DEBUG_SNAPSHOT_PATH, &content).await {
-                    debug!("debug snapshot write failed: {e}");
+                if let Err(e) = atomic_write(&path, &content).await {
+                    debug!("debug snapshot write failed ({}): {e}", path.display());
                 }
             }
             Err(e) => debug!("debug snapshot serialize failed: {e}"),
