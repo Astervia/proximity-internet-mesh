@@ -15,7 +15,7 @@ This map is the default orientation for agent work in this repository.
     - shared dependency versions
 - `docs/project/workspace.md`
     - crate-by-crate responsibilities
-- `docs/project/workspace-layout.md`
+- `docs/project/workspace.md`
     - high-level repository structure
 
 ## Runtime Spine
