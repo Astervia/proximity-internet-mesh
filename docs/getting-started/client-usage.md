@@ -354,5 +354,5 @@ If Bluetooth peers do not appear:
 - [configuration.md](configuration.md)
 - [usage.md](usage.md)
 - [gateway-usage.md](gateway-usage.md)
-- [../architecture/wifi-direct.md](../architecture/wifi-direct.md)
-- [../architecture/bluetooth.md](../architecture/bluetooth.md)
+- [../architecture/transports/wifi-direct.md](../architecture/transports/wifi-direct.md)
+- [../architecture/transports/bluetooth.md](../architecture/transports/bluetooth.md)

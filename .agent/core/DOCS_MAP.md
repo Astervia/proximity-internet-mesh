@@ -26,7 +26,7 @@ duplicating them.
     - peer discovery behavior
 - `docs/architecture/security.md`
     - identity, trust, and crypto model
-- `docs/architecture/wifi-direct.md`
+- `docs/architecture/transports/wifi-direct.md`
     - current connectivity-specific reference design
 
 ## Project Structure
