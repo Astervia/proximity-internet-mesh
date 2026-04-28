@@ -247,8 +247,8 @@ struct DaemonState {
     /// Wiring the forwarder to honour this is a follow-up.
     pub(crate) route_on: AtomicBool,
     /// Broadcast channel for JSON-RPC `status.event` notifications.
-    /// Senders push complete notification objects (with `jsonrpc: "2.0"`
-    /// + `method: "status.event"` + `params: { kind, ... }`); each
+    /// Senders push complete notification objects (with `jsonrpc: "2.0"`,
+    /// `method: "status.event"`, and `params: { kind, ... }`); each
     /// connection's `status.subscribe` forwarder pumps them into the
     /// per-connection writer.
     pub(crate) status_events_tx: tokio::sync::broadcast::Sender<serde_json::Value>,
