@@ -14,13 +14,13 @@ duplicating them.
 
 ## Architecture
 
-- `docs/architecture/system-overview.md`
+- `docs/architecture/overview.md`
     - high-level system model and component relationships
 - `docs/architecture/packet-flow.md`
     - packet path and runtime behavior
 - `docs/architecture/protocol.md`
     - wire protocol framing and message structure
-- `docs/architecture/networking-and-routing.md`
+- `docs/architecture/routing.md`
     - routing behavior and forwarding model
 - `docs/architecture/discovery.md`
     - peer discovery behavior

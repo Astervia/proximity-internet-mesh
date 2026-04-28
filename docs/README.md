@@ -11,9 +11,9 @@ This folder is organized by purpose so operators, contributors, and reviewers ca
 
 ## Architecture
 
-- [system-overview.md](architecture/system-overview.md): high-level runtime model and major components
+- [overview.md](architecture/overview.md): high-level runtime model and major components
 - [packet-flow.md](architecture/packet-flow.md): how packets move through the daemon today
-- [networking-and-routing.md](architecture/networking-and-routing.md): topology and route propagation model
+- [routing.md](architecture/routing.md): topology and route propagation model
 - [protocol.md](architecture/protocol.md): frame layout and wire-level behavior
 - [security.md](architecture/security.md): identities, handshake, transport encryption, and end-to-end protection
 
@@ -48,6 +48,6 @@ If you are new to the project, read in this order:
 2. [installation.md](getting-started/installation.md)
 3. [configuration.md](getting-started/configuration.md)
 4. [usage.md](getting-started/usage.md)
-5. [system-overview.md](architecture/system-overview.md)
+5. [overview.md](architecture/overview.md)
 
 If you are changing code, add [workspace.md](project/workspace.md) and [testing.md](operations/testing.md) next.
