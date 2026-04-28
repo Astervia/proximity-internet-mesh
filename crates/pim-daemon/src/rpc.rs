@@ -41,6 +41,7 @@
 //! a follow-up — the wire format is the same `Notification` JSON-RPC
 //! shape (no `id`, just `method` + `params`).
 
+use std::collections::HashMap;
 use std::net::Ipv4Addr;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -52,8 +53,11 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{UnixListener, UnixStream};
-use tokio::sync::mpsc;
+use tokio::sync::{broadcast, mpsc};
 use tracing::{debug, info, warn};
+
+use pim_core::NodeId;
+use pim_routing::RouteTableEntry;
 
 use super::logs_subscriber;
 use super::DaemonState;
@@ -285,12 +289,15 @@ async fn dispatch(state: &Arc<DaemonState>, req: &RpcRequest, write_tx: &WriteTx
         "status" => Ok(build_status(state).await),
         // status.event per pim-ui rpc-types.ts is a DISCRIMINATED KIND
         // union (interface_up/_down, gateway_selected/_lost, route_on/_off,
-        // role_changed, kill_switch), NOT a Status snapshot. We don't yet
-        // wire those internal lifecycle hooks into the broadcast layer,
-        // so subscribers receive an id and zero events for now — the
-        // UI's switch defaults to no-op for kinds it doesn't recognise,
-        // so silence is the only correct behaviour until events ship.
-        "status.subscribe" => Ok(json!({ "subscription_id": new_subscription_id() })),
+        // role_changed, kill_switch). The forwarder below subscribes to
+        // `state.status_events_tx` and pumps every notification onto
+        // this connection until the writer closes. Today only
+        // `route.set_split_default` emits `route_on`/`route_off`; other
+        // lifecycle events (interface_up/_down, gateway_selected/_lost,
+        // role_changed, kill_switch) are TODO — when those daemon-
+        // internal hooks gain wiring they push onto the same channel
+        // and arrive here automatically.
+        "status.subscribe" => Ok(start_status_subscription(state, write_tx.clone())),
         "status.unsubscribe" => Ok(Value::Null),
 
         // §5.2 peers
@@ -307,10 +314,7 @@ async fn dispatch(state: &Arc<DaemonState>, req: &RpcRequest, write_tx: &WriteTx
         "peers.unsubscribe" => Ok(Value::Null),
 
         // §5.3 routing
-        "route.set_split_default" => Ok(json!({
-            "on": false,
-            "via_gateway_id": null,
-        })),
+        "route.set_split_default" => method_route_set_split_default(state, req.params.as_ref()),
         "route.table" => Ok(build_route_table(state).await),
 
         // §5.4 gateway
@@ -543,6 +547,34 @@ fn method_hello(params: Option<&Value>) -> RpcResult {
 
 // ── §5.1 status ──────────────────────────────────────────────────────────
 
+/// Allocate a `subscription_id` and spawn a forwarder that pumps every
+/// `status.event` notification from `state.status_events_tx` onto this
+/// connection's writer. Closes when the writer channel closes (peer
+/// hung up); a Lagged subscriber loses missed frames and resyncs via
+/// the next `status` RPC, matching the convention used by
+/// `start_logs_subscription`.
+fn start_status_subscription(state: &Arc<DaemonState>, write_tx: WriteTx) -> Value {
+    let id = new_subscription_id();
+    let mut rx = state.status_events_tx.subscribe();
+    tokio::spawn(async move {
+        loop {
+            match rx.recv().await {
+                Ok(notif) => {
+                    if push_value(&write_tx, &notif).is_err() {
+                        break;
+                    }
+                }
+                Err(broadcast::error::RecvError::Lagged(n)) => {
+                    debug!(lagged = n, "status.subscribe receiver lagged; resyncing");
+                    continue;
+                }
+                Err(broadcast::error::RecvError::Closed) => break,
+            }
+        }
+    });
+    json!({ "subscription_id": id })
+}
+
 async fn build_status(state: &Arc<DaemonState>) -> Value {
     let mesh_ip_u32 = state.mesh_ip.load(Ordering::Relaxed);
     let mesh_ip = Ipv4Addr::from(mesh_ip_u32);
@@ -598,7 +630,7 @@ async fn build_status(state: &Arc<DaemonState>) -> Value {
             },
         },
         "uptime_s": uptime_s,
-        "route_on": false,
+        "route_on": state.route_on.load(Ordering::SeqCst),
         "started_at": started_at_iso,
     })
 }
@@ -638,6 +670,15 @@ fn days_to_ymd(days: i64) -> (i32, u32, u32) {
 
 async fn peer_summaries(state: &Arc<DaemonState>) -> Vec<Value> {
     let sessions = state.sessions.read().await;
+
+    // Snapshot the routing table once and index by destination NodeId
+    // so each peer entry can read its current `is_gateway` / `hops` /
+    // `rtt_ms` without holding the routing lock for the whole loop.
+    let routing = state.routing.lock().await;
+    let routes_by_id: HashMap<NodeId, RouteTableEntry> =
+        routing.routes_snapshot().into_iter().collect();
+    drop(routing);
+
     let mut out = Vec::with_capacity(sessions.len());
     for (peer_id, _session) in sessions.iter() {
         let info = state.reconnect.peer_info(peer_id).await;
@@ -652,6 +693,18 @@ async fn peer_summaries(state: &Arc<DaemonState>) -> Vec<Value> {
         };
         let last_hb = state.peer_last_hb.lock().await.get(peer_id).copied();
         let last_seen_s = last_hb.map(|t| t.elapsed().as_secs()).unwrap_or(0);
+
+        // Routing-table lookup: a peer that advertises gateway capability
+        // ends up in our routing table with `is_gateway = true` once the
+        // first RouteUpdate arrives. Direct neighbours always have
+        // hops=1 in the snapshot, but reading from the table is more
+        // honest than hard-coding it (transient updates, etc.) and is
+        // a single HashMap lookup.
+        let route = routes_by_id.get(peer_id);
+        let is_gateway = route.map(|e| e.is_gateway).unwrap_or(false);
+        let route_hops = route.map(|e| e.hops).unwrap_or(1);
+        let latency_ms = route.and_then(|e| e.rtt_ms);
+
         out.push(json!({
             "node_id": peer_id.to_hex(),
             "node_id_short": peer_id.to_string(),
@@ -659,10 +712,10 @@ async fn peer_summaries(state: &Arc<DaemonState>) -> Vec<Value> {
             "mesh_ip": addr,
             "transport": mechanism,
             "state": "active",
-            "route_hops": 1,
+            "route_hops": route_hops,
             "last_seen_s": last_seen_s,
-            "latency_ms": null,
-            "is_gateway": false,
+            "latency_ms": latency_ms,
+            "is_gateway": is_gateway,
             "static": configured,
         }));
     }
@@ -766,6 +819,52 @@ async fn method_peers_remove(_state: &Arc<DaemonState>, params: Option<&Value>) 
 }
 
 // ── §5.3 routing ─────────────────────────────────────────────────────────
+
+#[derive(Debug, Deserialize, Default)]
+struct RouteSetSplitDefaultParams {
+    #[serde(default)]
+    on: bool,
+}
+
+/// Toggle split-default routing. Currently a state-only operation —
+/// the daemon's IP forwarder doesn't yet observe `state.route_on`, so
+/// this RPC's job is to (a) keep an authoritative atomic flag, (b)
+/// broadcast the corresponding `status.event` so subscribed UIs flip
+/// without re-polling, and (c) return the new state to the caller.
+/// Wiring the actual default-route mutation through the forwarder is
+/// a separate follow-up.
+fn method_route_set_split_default(state: &Arc<DaemonState>, params: Option<&Value>) -> RpcResult {
+    let parsed: RouteSetSplitDefaultParams = match params {
+        Some(v) => serde_json::from_value(v.clone()).map_err(|e| {
+            (
+                codes::INVALID_PARAMS,
+                format!("route.set_split_default params: {e}"),
+                None,
+            )
+        })?,
+        None => RouteSetSplitDefaultParams::default(),
+    };
+
+    state
+        .route_on
+        .store(parsed.on, std::sync::atomic::Ordering::SeqCst);
+
+    // Broadcast the discriminated `status.event` per pim-ui's rpc-types
+    // contract. SendError on no-subscribers is fine — UIs that connect
+    // later see the current state via the next `status` RPC.
+    let _ = state.status_events_tx.send(json!({
+        "jsonrpc": "2.0",
+        "method": "status.event",
+        "params": {
+            "kind": if parsed.on { "route_on" } else { "route_off" },
+        },
+    }));
+
+    Ok(json!({
+        "on": parsed.on,
+        "via_gateway_id": null,
+    }))
+}
 
 async fn build_route_table(state: &Arc<DaemonState>) -> Value {
     use pim_routing::gateway_score;
