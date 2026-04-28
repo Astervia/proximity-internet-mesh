@@ -198,6 +198,7 @@ done
 require_tool git
 require_tool rg
 require_tool perl
+require_tool cargo
 
 is_valid_bump_kind "$CHANGED_BUMP_KIND" || die "invalid changed bump kind: $CHANGED_BUMP_KIND"
 is_valid_bump_kind "$MASTER_BUMP_KIND" || die "invalid master bump kind: $MASTER_BUMP_KIND"
@@ -265,6 +266,8 @@ if [[ "$MASTER_CURRENT_VERSION" != "$MASTER_TARGET_VERSION" ]]; then
     set_manifest_version "$MASTER_MANIFEST" "$MASTER_TARGET_VERSION"
 fi
 
+cargo update --workspace
+
 echo "Updated manifests:"
 if [[ ${#changed_manifests[@]} -eq 0 ]]; then
     echo "  no changed crates required a bump"
@@ -278,7 +281,6 @@ fi
 echo "  $MASTER_CRATE: $(crate_version_from_manifest "$MASTER_MANIFEST")"
 echo ""
 echo "Next manual steps:"
-echo "  1. Review manifest changes."
-echo "  2. Update Cargo.lock if needed."
-echo "  3. Commit the version bumps."
-echo "  4. Create and push the release tag manually."
+echo "  1. Review manifest and Cargo.lock changes."
+echo "  2. Commit the version bumps."
+echo "  3. Create and push the release tag manually."
