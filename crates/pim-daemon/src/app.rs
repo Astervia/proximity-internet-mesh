@@ -65,12 +65,12 @@ mod reconnect;
 mod reconnect_task;
 #[path = "reputation.rs"]
 mod reputation;
+#[path = "rpc.rs"]
+mod rpc;
 #[path = "runtime_config.rs"]
 mod runtime_config;
 #[path = "runtime_paths.rs"]
 mod runtime_paths;
-#[path = "rpc.rs"]
-mod rpc;
 #[path = "send_buffer.rs"]
 mod send_buffer;
 #[path = "session.rs"]
