@@ -95,7 +95,7 @@ Three layers of helper visibility, in order of preference:
 
 - **Unit tests** that need access to private items → child `tests` module of that file (`use super::super::*;`). This is the default and what the layout above describes.
 - **Integration tests** that exercise only the public API → crate-level `tests/` directory (`crates/<name>/tests/<scenario>.rs`). None of the crates here use this yet — add one if you're testing across multiple modules through the public surface.
-- **Cross-crate end-to-end tests** → Docker labs under `docker/tests/`. See [docker-testing.md](docker-testing.md).
+- **Cross-crate end-to-end tests** → Docker labs under `docker/tests/`. See [docker-labs.md](docker-labs.md).
 
 ## The `pim-daemon` `#[path]` exception
 

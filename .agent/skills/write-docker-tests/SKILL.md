@@ -11,7 +11,7 @@ existing structure, helper scripts, and docs.
 
 - `Makefile`
 - `docker/tests/common.sh`
-- `docs/operations/docker-testing.md`
+- `docs/operations/docker-labs.md`
 - The closest existing file under `docker/compose/`
 - The closest existing script under `docker/tests/`
 
@@ -38,7 +38,7 @@ existing structure, helper scripts, and docs.
     - Honor `DUMP_LOGS_ON_FAIL=1`
 
 5. Document the new lane.
-    - Update `docs/operations/docker-testing.md`
+    - Update `docs/operations/docker-labs.md`
     - Update `docs/operations/testing.md` if the workflow changed
     - Update `.agent/README.md` or `.agent/skills/README.md` if discoverability matters
 

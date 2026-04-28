@@ -59,7 +59,7 @@ docker/
     test-phase4.sh               — phase 4 test runner
     test-phase5.sh               — phase 5 test runner
 docs/
-  operations/docker-testing.md   — this file
+  operations/docker-labs.md   — this file
 ```
 
 ## Network Topology

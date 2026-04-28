@@ -57,7 +57,7 @@ duplicating them.
 
 - `docs/operations/testing.md`
     - Cargo and Docker validation workflow
-- `docs/operations/docker-testing.md`
+- `docs/operations/docker-labs.md`
     - Docker lab details and usage
 
 ## Usage Guidance
