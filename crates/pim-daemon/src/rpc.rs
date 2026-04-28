@@ -556,11 +556,14 @@ fn method_hello(params: Option<&Value>) -> RpcResult {
 fn start_status_subscription(state: &Arc<DaemonState>, write_tx: WriteTx) -> Value {
     let id = new_subscription_id();
     let mut rx = state.status_events_tx.subscribe();
+    info!(subscription_id = %id, "status.subscribe forwarder spawned");
     tokio::spawn(async move {
         loop {
             match rx.recv().await {
                 Ok(notif) => {
+                    info!(notif = %notif, "status forwarder received broadcast; pushing to socket");
                     if push_value(&write_tx, &notif).is_err() {
+                        info!("status forwarder write_tx closed; exiting");
                         break;
                     }
                 }
@@ -568,7 +571,10 @@ fn start_status_subscription(state: &Arc<DaemonState>, write_tx: WriteTx) -> Val
                     debug!(lagged = n, "status.subscribe receiver lagged; resyncing");
                     continue;
                 }
-                Err(broadcast::error::RecvError::Closed) => break,
+                Err(broadcast::error::RecvError::Closed) => {
+                    info!("status forwarder broadcast channel closed; exiting");
+                    break;
+                }
             }
         }
     });
@@ -834,6 +840,7 @@ struct RouteSetSplitDefaultParams {
 /// Wiring the actual default-route mutation through the forwarder is
 /// a separate follow-up.
 fn method_route_set_split_default(state: &Arc<DaemonState>, params: Option<&Value>) -> RpcResult {
+    info!(?params, "route.set_split_default invoked");
     let parsed: RouteSetSplitDefaultParams = match params {
         Some(v) => serde_json::from_value(v.clone()).map_err(|e| {
             (
@@ -844,6 +851,7 @@ fn method_route_set_split_default(state: &Arc<DaemonState>, params: Option<&Valu
         })?,
         None => RouteSetSplitDefaultParams::default(),
     };
+    info!(on = parsed.on, "route.set_split_default parsed; storing");
 
     state
         .route_on
@@ -852,13 +860,19 @@ fn method_route_set_split_default(state: &Arc<DaemonState>, params: Option<&Valu
     // Broadcast the discriminated `status.event` per pim-ui's rpc-types
     // contract. SendError on no-subscribers is fine — UIs that connect
     // later see the current state via the next `status` RPC.
-    let _ = state.status_events_tx.send(json!({
+    let kind = if parsed.on { "route_on" } else { "route_off" };
+    let send_result = state.status_events_tx.send(json!({
         "jsonrpc": "2.0",
         "method": "status.event",
-        "params": {
-            "kind": if parsed.on { "route_on" } else { "route_off" },
-        },
+        "params": { "kind": kind },
     }));
+    match &send_result {
+        Ok(n) => info!(kind, subscribers = n, "status.event broadcast sent"),
+        Err(_) => warn!(
+            kind,
+            "status.event broadcast had ZERO subscribers — UIs won't see the flip"
+        ),
+    }
 
     Ok(json!({
         "on": parsed.on,
