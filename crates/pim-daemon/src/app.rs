@@ -49,6 +49,8 @@ mod gateway_tasks;
 mod handshake;
 #[path = "ip_control.rs"]
 mod ip_control;
+#[path = "logs_subscriber.rs"]
+mod logs_subscriber;
 #[path = "net.rs"]
 mod net;
 #[path = "observability.rs"]
@@ -65,6 +67,10 @@ mod reconnect_task;
 mod reputation;
 #[path = "runtime_config.rs"]
 mod runtime_config;
+#[path = "runtime_paths.rs"]
+mod runtime_paths;
+#[path = "rpc.rs"]
+mod rpc;
 #[path = "send_buffer.rs"]
 mod send_buffer;
 #[path = "session.rs"]
@@ -229,6 +235,9 @@ struct DaemonState {
     discovery_config: DiscoveryConfig,
     /// Discovery peer table when the discovery service is enabled.
     discovery_peer_table: Option<Arc<Mutex<PeerTable>>>,
+    /// On-disk path of `pim.toml`, retained for the JSON-RPC `config.get`
+    /// / `config.save` surface so callers don't have to pass it back in.
+    config_path: std::path::PathBuf,
 }
 
 impl DaemonState {
@@ -244,16 +253,37 @@ mod event_loop;
 use event_loop::run_event_loop;
 
 pub(crate) async fn run() -> Result<()> {
-    tracing_subscriber::fmt()
-        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+    // Compose two layers:
+    //   - the existing fmt layer keeps stdout/stderr output identical
+    //     to before (developer terminal experience unchanged).
+    //   - logs_subscriber::LogsLayer fans out events to the JSON-RPC
+    //     `logs.event` notification stream so the UI's Logs page
+    //     receives live data.
+    //
+    // Default level is `info` when `RUST_LOG` is unset — without this
+    // the daemon emits only ERROR events, and the UI's Logs view stays
+    // empty on a healthy daemon. Devs can still override with
+    // `RUST_LOG=debug` or `RUST_LOG=trace` for noisier debugging.
+    use tracing_subscriber::layer::SubscriberExt;
+    use tracing_subscriber::util::SubscriberInitExt;
+    let env_filter = tracing_subscriber::EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"));
+    tracing_subscriber::registry()
+        .with(env_filter)
+        .with(tracing_subscriber::fmt::layer())
+        .with(logs_subscriber::init())
         .init();
 
-    let config_path = std::env::args()
-        .nth(1)
-        .unwrap_or_else(|| "/etc/pim/pim.toml".to_string());
-    let pid_file = std::env::args()
-        .nth(2)
-        .unwrap_or_else(|| "/run/pim.pid".to_string());
+    let config_path = std::env::args().nth(1).unwrap_or_else(|| {
+        runtime_paths::default_config_path()
+            .to_string_lossy()
+            .into_owned()
+    });
+    let pid_file = std::env::args().nth(2).unwrap_or_else(|| {
+        runtime_paths::default_pid_file()
+            .to_string_lossy()
+            .into_owned()
+    });
 
     let config =
         Config::load(std::path::Path::new(&config_path)).context("failed to load config")?;
@@ -528,6 +558,7 @@ pub(crate) async fn run() -> Result<()> {
         discovery_peer_table: discovery_runtime
             .as_ref()
             .map(|(discovery_svc, _)| discovery_svc.peer_table()),
+        config_path: std::path::PathBuf::from(&config_path),
     });
 
     // ── Initiate connections to configured peers ───────────────────────────
@@ -651,6 +682,13 @@ pub(crate) async fn run() -> Result<()> {
     tokio::spawn(run_buffer_flush(state.clone()));
     tokio::spawn(run_stats_writer(state.clone()));
     tokio::spawn(run_debug_snapshot_writer(state.clone()));
+    // JSON-RPC 2.0 server (docs/RPC.md). Single tokio task that owns the
+    // Unix listener; spawns one task per accepted connection. Survives
+    // for the lifetime of the daemon.
+    tokio::spawn(rpc::run_rpc_server(
+        state.clone(),
+        runtime_paths::rpc_socket_path(),
+    ));
     tokio::spawn(run_gateway_probes(state.clone()));
     if state.is_gateway {
         tokio::spawn(run_gateway_return(state.clone()));

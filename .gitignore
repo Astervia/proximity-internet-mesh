@@ -5,5 +5,8 @@
 .codex
 .claude/
 
+# macOS
+.DS_Store
+
 # Personal
 /debug
