@@ -27,7 +27,7 @@ This folder is organized by purpose so operators, contributors, and reviewers ca
 
 ## Troubleshooting
 
-- [bluetooth-nap-bridge-address-already-assigned.md](troubleshooting/bluetooth-nap-bridge-address-already-assigned.md): recover when `br-bt` already has the configured Bluetooth NAP bridge address
+- [bluetooth-nap-bridge.md](troubleshooting/bluetooth-nap-bridge.md): recover when `br-bt` already has the configured Bluetooth NAP bridge address
 
 ## Project Internals
 

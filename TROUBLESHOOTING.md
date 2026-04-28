@@ -14,8 +14,8 @@ Use this document to collect:
 ## Current Entries
 
 - [Bluetooth gateway shutdown and cleanup](docs/operations/bluetooth-gateway-shutdown.md): how to stop a Bluetooth gateway cleanly, when to escalate to `SIGKILL`, and which bridge, route, and `iptables` cleanup commands are safe.
-- [Bluetooth NAP bridge address already assigned](docs/troubleshooting/bluetooth-nap-bridge-address-already-assigned.md): what to do when `pim-daemon` cannot assign `nap_bridge_addr` to `br-bt` because the bridge already exists or is already configured.
-- [Bluetooth DHCP client unavailable](docs/troubleshooting/bluetooth-dhcp-client-unavailable.md): repeated `WARN pim_bluetooth: Bluetooth DHCP client unavailable` on a PAN client — `dhclient` is not installed, or `request_dhcp` should be disabled.
+- [Bluetooth NAP bridge address already assigned](docs/troubleshooting/bluetooth-nap-bridge.md): what to do when `pim-daemon` cannot assign `nap_bridge_addr` to `br-bt` because the bridge already exists or is already configured.
+- [Bluetooth DHCP client unavailable](docs/troubleshooting/bluetooth-dhcp-client.md): repeated `WARN pim_bluetooth: Bluetooth DHCP client unavailable` on a PAN client — `dhclient` is not installed, or `request_dhcp` should be disabled.
 
 ## Common First Step: stop the daemon cleanly
 
