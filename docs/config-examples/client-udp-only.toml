@@ -1,0 +1,57 @@
+# Client with LAN (UDP broadcast) discovery — no Bluetooth.
+#
+# Review these values before starting the daemon on a real host:
+#   ip -br link
+
+[node]
+name = "clientudponly"
+data_dir = "/var/lib/pim"
+
+[interface]
+name = "pim0"
+mesh_ip = "auto"
+mtu = 1400
+
+[discovery]
+enabled = true
+port = 9101
+broadcast_interval_ms = 5000
+peer_timeout_ms = 30000
+connect_relays = true
+connect_gateways = true
+
+[transport]
+type = "tcp"
+listen_port = 9100
+
+[routing]
+max_hops = 10
+algorithm = "distance-vector"
+route_expiry_s = 300
+
+[relay]
+enabled = false
+
+[security]
+key_file = "/var/lib/pim/node.key"
+require_encryption = true
+
+[wifi_direct]
+enabled = false
+interface = "wlan0"
+go_intent = 7
+listen_channel = 6
+op_channel = 6
+connect_method = "pbc"
+
+[bluetooth]
+enabled = false
+interface = "auto"
+
+# Optional static peers. Leave these commented if you want to rely entirely on
+# auto-discovery and outbound connection attempts.
+#
+# [[peers]]
+# mechanism = "tcp"
+# address = "192.168.1.20:9100"
+# label = "relay-a"
