@@ -373,7 +373,7 @@ make down-p1
 
 ## Documentation
 
-Start with [docs/README.md](/home/rfluid/development/Astervia/proximity-internet-mesh/docs/README.md). The docs are grouped by topic:
+Start with [docs/README.md](docs/README.md). The docs are grouped by topic:
 
 - Getting started: install, configure, and operate a node
 - Architecture: system model, packet flow, routing, protocol, and security
@@ -381,7 +381,7 @@ Start with [docs/README.md](/home/rfluid/development/Astervia/proximity-internet
 - Troubleshooting: operator-oriented recovery commands and known cleanup procedures
 - Project: workspace internals, roadmap, and implementation checklist
 
-For runtime debugging and operator recovery steps, see [TROUBLESHOOTING.md](/home/rfluid/development/Astervia/proximity-internet-mesh/TROUBLESHOOTING.md).
+For runtime debugging and operator recovery steps, see [TROUBLESHOOTING.md](TROUBLESHOOTING.md).
 
 ## Notes On Current Behavior
 
