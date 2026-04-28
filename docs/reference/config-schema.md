@@ -13,7 +13,7 @@ flag behaviour.
 
 ## Sections
 
-The top-level `Config` struct defines ten sections. Sections marked **required**
+The top-level `Config` struct defines eleven sections. Sections marked **required**
 have no `#[serde(default)]` attribute and must be present in the file;
 everything else has a documented default and may be omitted entirely.
 
