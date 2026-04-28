@@ -33,7 +33,7 @@ This folder is organized by purpose so operators, contributors, and reviewers ca
 
 - [workspace.md](project/workspace.md): crate-by-crate responsibilities, workspace tree, and type signatures
 - [roadmap.md](project/roadmap.md): phased delivery view
-- [history.md](project/history.md): detailed checklist of planned and completed work
+- [history.md](project/history.md): historical phased delivery log of completed work
 
 ## Research
 

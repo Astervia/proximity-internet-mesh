@@ -34,11 +34,9 @@ duplicating them.
 ## Project Structure
 
 - `docs/project/workspace.md`
-    - crate responsibilities and layering
-- `docs/project/workspace.md`
-    - repository layout
+    - crate responsibilities, repository layout, and per-crate type signatures
 - `docs/project/history.md`
-    - phased implementation intent
+    - historical phased delivery log; forward-looking items live in roadmap.md
 - `docs/project/roadmap.md`
     - broader direction and future work
 
