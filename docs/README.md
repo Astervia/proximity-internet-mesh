@@ -32,7 +32,7 @@ This folder is organized by purpose so operators, contributors, and reviewers ca
 ## Project Internals
 
 - [workspace.md](project/workspace.md): crate-by-crate responsibilities
-- [workspace-layout.md](project/workspace-layout.md): workspace structure and source ownership
+- [workspace.md](project/workspace.md): workspace structure and source ownership
 - [roadmap.md](project/roadmap.md): phased delivery view
 - [implementation-plan.md](project/implementation-plan.md): detailed checklist of planned and completed work
 
