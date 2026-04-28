@@ -381,7 +381,7 @@ Start with [docs/README.md](docs/README.md). The docs are grouped by topic:
 - Troubleshooting: operator-oriented recovery commands and known cleanup procedures
 - Project: workspace internals, roadmap, and implementation checklist
 
-For runtime debugging and operator recovery steps, see [TROUBLESHOOTING.md](TROUBLESHOOTING.md).
+For runtime debugging and operator recovery steps, see [docs/troubleshooting/](docs/troubleshooting/README.md).
 
 ## Notes On Current Behavior
 
