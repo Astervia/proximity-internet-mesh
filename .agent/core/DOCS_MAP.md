@@ -35,7 +35,7 @@ duplicating them.
 
 - `docs/project/workspace.md`
     - crate responsibilities and layering
-- `docs/project/workspace-layout.md`
+- `docs/project/workspace.md`
     - repository layout
 - `docs/project/implementation-plan.md`
     - phased implementation intent
