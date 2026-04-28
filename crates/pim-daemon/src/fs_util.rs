@@ -10,7 +10,12 @@ pub(crate) async fn atomic_write<P: AsRef<Path>>(path: P, content: &[u8]) -> io:
     let mut tmp_buf = PathBuf::from(path);
     let tmp_name = match tmp_buf.file_name() {
         Some(n) => format!("{}.tmp", n.to_string_lossy()),
-        None => return Err(io::Error::new(io::ErrorKind::InvalidInput, "path has no file name")),
+        None => {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "path has no file name",
+            ))
+        }
     };
     tmp_buf.set_file_name(tmp_name);
     let tmp = tmp_buf;

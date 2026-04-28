@@ -407,7 +407,7 @@ fn default_wfd_connect_method() -> String {
 fn default_bluetooth_interface() -> String {
     #[cfg(target_os = "macos")]
     {
-        return "bridge0".into();
+        "bridge0".into()
     }
 
     #[cfg(not(target_os = "macos"))]

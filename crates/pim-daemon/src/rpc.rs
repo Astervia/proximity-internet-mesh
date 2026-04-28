@@ -330,7 +330,10 @@ async fn dispatch(state: &Arc<DaemonState>, req: &RpcRequest, write_tx: &WriteTx
         "config.save" => method_config_save(state, req.params.as_ref()).await,
 
         // §5.6 logs
-        "logs.subscribe" => Ok(start_logs_subscription(req.params.as_ref(), write_tx.clone())),
+        "logs.subscribe" => Ok(start_logs_subscription(
+            req.params.as_ref(),
+            write_tx.clone(),
+        )),
         "logs.unsubscribe" => Ok(Value::Null),
 
         unknown => Err((
@@ -526,9 +529,7 @@ fn method_hello(params: Option<&Value>) -> RpcResult {
         if ver != RPC_VERSION {
             return Err((
                 codes::RPC_VERSION_MISMATCH,
-                format!(
-                    "rpc.hello: client wants rpc_version={ver}, daemon speaks {RPC_VERSION}"
-                ),
+                format!("rpc.hello: client wants rpc_version={ver}, daemon speaks {RPC_VERSION}"),
                 None,
             ));
         }
@@ -553,11 +554,7 @@ async fn build_status(state: &Arc<DaemonState>) -> Value {
     let selected_gateway_id = routing.nearest_gateway_route().map(|(gid, _)| gid.to_hex());
     drop(routing);
 
-    let uptime_s = state
-        .start_time
-        .elapsed()
-        .unwrap_or_default()
-        .as_secs();
+    let uptime_s = state.start_time.elapsed().unwrap_or_default().as_secs();
     let started_at_iso = system_time_to_iso8601(state.start_time);
 
     let role = if state.is_gateway {
@@ -654,9 +651,7 @@ async fn peer_summaries(state: &Arc<DaemonState>) -> Vec<Value> {
             None => (String::new(), "tcp".to_string(), false, false),
         };
         let last_hb = state.peer_last_hb.lock().await.get(peer_id).copied();
-        let last_seen_s = last_hb
-            .map(|t| t.elapsed().as_secs())
-            .unwrap_or(0);
+        let last_seen_s = last_hb.map(|t| t.elapsed().as_secs()).unwrap_or(0);
         out.push(json!({
             "node_id": peer_id.to_hex(),
             "node_id_short": peer_id.to_string(),
@@ -707,10 +702,7 @@ struct PeersAddStaticParams {
     label: Option<String>,
 }
 
-async fn method_peers_add_static(
-    _state: &Arc<DaemonState>,
-    params: Option<&Value>,
-) -> RpcResult {
+async fn method_peers_add_static(_state: &Arc<DaemonState>, params: Option<&Value>) -> RpcResult {
     let p: PeersAddStaticParams = match params {
         Some(v) => serde_json::from_value(v.clone()).map_err(|e| {
             (
@@ -744,10 +736,7 @@ struct PeersRemoveParams {
     config_entry_id: Option<String>,
 }
 
-async fn method_peers_remove(
-    _state: &Arc<DaemonState>,
-    params: Option<&Value>,
-) -> RpcResult {
+async fn method_peers_remove(_state: &Arc<DaemonState>, params: Option<&Value>) -> RpcResult {
     let p: PeersRemoveParams = match params {
         Some(v) => serde_json::from_value(v.clone()).map_err(|e| {
             (
