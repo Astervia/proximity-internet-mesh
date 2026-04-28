@@ -36,6 +36,10 @@ This folder is organized by purpose so operators, contributors, and reviewers ca
 - [roadmap.md](project/roadmap.md): phased delivery view
 - [implementation-plan.md](project/implementation-plan.md): detailed checklist of planned and completed work
 
+## Research
+
+- [macos-bluetooth.md](research/macos-bluetooth.md): why the daemon's macOS Bluetooth path is unreachable, every workaround verified dead, and the recommended L2CAP-as-transport replacement. **Read this before doing more macOS Bluetooth work.**
+
 ## Reading Order
 
 If you are new to the project, read in this order:
