@@ -1,7 +1,7 @@
 # Bluetooth Gateway Shutdown & Cleanup
 
 Notes for operators running `pim-daemon` as a Bluetooth gateway (configs
-like `docs/config-examples/gateway-bluetooth.toml`) when they need to
+like `docs/reference/config-examples/gateway-bluetooth.toml`) when they need to
 stop the daemon and bring the host back to a clean state.
 
 ## Normal shutdown: just send SIGTERM
