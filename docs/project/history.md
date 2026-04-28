@@ -1,6 +1,15 @@
-# Implementation Plan
+# Implementation History
 
-Actionable checklist organized by phase. Every item must have corresponding tests before it's considered done. See [../operations/testing.md](../operations/testing.md) for the overall test strategy and [../operations/docker-labs.md](../operations/docker-labs.md) for multi-node testing with Docker.
+> This document is the historical phased delivery log. Items marked `[x]` are
+> shipped; items marked `[ ]` are residual checklist entries that did not graduate
+> into the roadmap. For forward-looking work see [roadmap.md](roadmap.md). For
+> the crate-by-crate inventory see [workspace.md](workspace.md).
+
+Phase-by-phase checklist of work completed during the v0.x cycle. Each phase
+lists deliverables and the tests that gate them. See
+[../operations/testing.md](../operations/testing.md) for the overall test
+strategy and [../operations/docker-labs.md](../operations/docker-labs.md) for
+multi-node Docker testing.
 
 ## Phase 1 — Single-Hop Tunnel
 
@@ -12,7 +21,7 @@ Two containers: one client, one gateway. Client sends IP packets through the mes
 - [x] Create crate skeletons: `pim-core`, `pim-crypto`, `pim-protocol`, `pim-transport`, `pim-tun`, `pim-gateway`, `pim-daemon`
 - [x] Set up workspace dependencies in root `Cargo.toml`
 - [x] Add `tracing` + `tracing-subscriber` logging to all crates
-- [ ] Create `Dockerfile` and `docker-compose.yml` for multi-node testing
+- [x] Create `Dockerfile` and `docker-compose.yml` for multi-node testing
 - [x] **Tests**: workspace compiles, `cargo test --workspace` passes (empty tests)
 
 ### 1.2 Core Types (`pim-core`)
@@ -375,81 +384,81 @@ Wire the fully-implemented `pim-discovery` crate into the running daemon so that
 
 ### 7.1 Discovery Config Extension (`pim-core`)
 
-- [ ] Add `enabled: bool` (default `true`) to `DiscoveryConfig` — skip spawning when `false`
-- [ ] Add `port: u16` (default `9101`) to `DiscoveryConfig` — allows overriding the hardcoded port
-- [ ] Add `connect_relays: bool` (default `true`) to `DiscoveryConfig` — filter out relay-capable peers
-- [ ] Add `connect_gateways: bool` (default `true`) to `DiscoveryConfig` — filter out gateway-capable peers
-- [ ] Update `DiscoveryConfig::default()` to include all five fields
-- [ ] Add new `RelayConfig` struct with `enabled: bool` (default `false`) and `impl Default`
-- [ ] Add `pub relay: RelayConfig` to top-level `Config` with `#[serde(default)]`
-- [ ] Document in comment on `peers` field that `[[peers]]` is now optional (zero-config startup)
-- [ ] **Tests**:
-    - [ ] `discovery_defaults_when_section_absent` — parse minimal config (only `[node]`), assert all five `DiscoveryConfig` fields at their defaults
-    - [ ] `discovery_enabled_false_round_trips` — serialize `enabled = false`, re-parse, assert false survives
-    - [ ] `discovery_custom_port_round_trips` — set `port = 19101`, serialize, re-parse, assert 19101
-    - [ ] `relay_config_defaults_to_disabled` — parse minimal config, assert `relay.enabled == false`
-    - [ ] `relay_enabled_true_parses` — parse TOML with `[relay]\nenabled = true`, assert true
-    - [ ] `peers_section_is_optional` — parse config with no `[[peers]]`, assert `config.peers.is_empty()`
-    - [ ] `config_round_trip_with_all_discovery_fields` — extend `FULL_CONFIG` constant with all new fields, assert round-trip
+- [x] Add `enabled: bool` (default `true`) to `DiscoveryConfig` — skip spawning when `false`
+- [x] Add `port: u16` (default `9101`) to `DiscoveryConfig` — allows overriding the hardcoded port
+- [x] Add `connect_relays: bool` (default `true`) to `DiscoveryConfig` — filter out relay-capable peers
+- [x] Add `connect_gateways: bool` (default `true`) to `DiscoveryConfig` — filter out gateway-capable peers
+- [x] Update `DiscoveryConfig::default()` to include all five fields
+- [x] Add new `RelayConfig` struct with `enabled: bool` (default `false`) and `impl Default`
+- [x] Add `pub relay: RelayConfig` to top-level `Config` with `#[serde(default)]`
+- [x] Document in comment on `peers` field that `[[peers]]` is now optional (zero-config startup)
+- [x] **Tests**:
+    - [x] `discovery_defaults_when_section_absent` — parse minimal config (only `[node]`), assert all five `DiscoveryConfig` fields at their defaults
+    - [x] `discovery_enabled_false_round_trips` — serialize `enabled = false`, re-parse, assert false survives
+    - [x] `discovery_custom_port_round_trips` — set `port = 19101`, serialize, re-parse, assert 19101
+    - [x] `relay_config_defaults_to_disabled` — parse minimal config, assert `relay.enabled == false`
+    - [x] `relay_enabled_true_parses` — parse TOML with `[relay]\nenabled = true`, assert true
+    - [x] `peers_section_is_optional` — parse config with no `[[peers]]`, assert `config.peers.is_empty()`
+    - [x] `config_round_trip_with_all_discovery_fields` — extend `FULL_CONFIG` constant with all new fields, assert round-trip
 
 ### 7.2 Capability Advertisement (`pim-daemon`)
 
-- [ ] Add pure function `node_capabilities(config: &Config) -> NodeCapabilities`:
+- [x] Add pure function `node_capabilities(config: &Config) -> NodeCapabilities`:
     - `gateway.enabled = true` → `CLIENT | RELAY | GATEWAY` (bits `0x07`)
     - `relay.enabled = true` (and not gateway) → `CLIENT | RELAY` (bits `0x03`)
     - else → `CLIENT` (bits `0x01`)
-- [ ] Add `use pim_discovery::{DiscoveryService, NodeCapabilities};` import (crate already in workspace `Cargo.toml`)
-- [ ] **Tests**:
-    - [ ] `gateway_config_yields_gateway_caps` — `gateway.enabled = true` → `is_gateway() && is_relay() && is_client()`
-    - [ ] `relay_config_yields_relay_caps` — `relay.enabled = true`, gateway off → `is_relay() && is_client() && !is_gateway()`
-    - [ ] `client_config_yields_client_caps_only` — both disabled → `is_client() && !is_relay() && !is_gateway()`
-    - [ ] `gateway_caps_bits_are_correct` — gateway config → `caps.bits() == 0x07`
+- [x] Add `use pim_discovery::{DiscoveryService, NodeCapabilities};` import (crate already in workspace `Cargo.toml`)
+- [x] **Tests**:
+    - [x] `gateway_config_yields_gateway_caps` — `gateway.enabled = true` → `is_gateway() && is_relay() && is_client()`
+    - [x] `relay_config_yields_relay_caps` — `relay.enabled = true`, gateway off → `is_relay() && is_client() && !is_gateway()`
+    - [x] `client_config_yields_client_caps_only` — both disabled → `is_client() && !is_relay() && !is_gateway()`
+    - [x] `gateway_caps_bits_are_correct` — gateway config → `caps.bits() == 0x07`
 
 ### 7.3 Daemon Discovery Integration (`pim-daemon`)
 
-- [ ] Extend `ReconnectManager` with `discovered_addrs: Mutex<HashSet<SocketAddr>>` field
-- [ ] Add `ReconnectManager::register_discovered(&self, addr: SocketAddr)` — insert into discovered set
-- [ ] Add `ReconnectManager::is_reconnectable_addr(&self, peer_id: &NodeId) -> Option<SocketAddr>` — checks both configured and discovered sets via `addr_by_peer`
-- [ ] Update `remove_peer()` to use `is_reconnectable_addr` so discovered peers also reconnect with exponential backoff
-- [ ] Add `discovery_config: pim_core::DiscoveryConfig` field to `DaemonState`
-- [ ] Extract peer connection initiation into `async fn initiate_peer_connection(state: Arc<DaemonState>, peer_addr: SocketAddr)` — refactor `main()` static-peer loop to call this
-- [ ] Add `async fn run_discovery_consumer(state: Arc<DaemonState>, mut new_peer_rx: mpsc::Receiver<PeerRecord>)`:
+- [x] Extend `ReconnectManager` with `discovered_addrs: Mutex<HashSet<SocketAddr>>` field
+- [x] Add `ReconnectManager::register_discovered(&self, addr: SocketAddr)` — insert into discovered set
+- [x] Add `ReconnectManager::is_reconnectable_addr(&self, peer_id: &NodeId) -> Option<SocketAddr>` — checks both configured and discovered sets via `addr_by_peer`
+- [x] Update `remove_peer()` to use `is_reconnectable_addr` so discovered peers also reconnect with exponential backoff
+- [x] Add `discovery_config: pim_core::DiscoveryConfig` field to `DaemonState`
+- [x] Extract peer connection initiation into `async fn initiate_peer_connection(state: Arc<DaemonState>, peer_addr: SocketAddr)` — refactor `main()` static-peer loop to call this
+- [x] Add `async fn run_discovery_consumer(state: Arc<DaemonState>, mut new_peer_rx: mpsc::Receiver<PeerRecord>)`:
     - Skip `record.node_id == state.self_id` (own advertisement — defense-in-depth)
     - Skip if `state.sessions.read().await.contains_key(&record.node_id)` (deduplication)
     - Skip CLIENT-only peers (`!is_relay() && !is_gateway()`)
     - Apply `connect_gateways` / `connect_relays` config filters
     - `reconnect.register_discovered(record.listen_addr)`
     - Call `initiate_peer_connection(state.clone(), record.listen_addr)`
-- [ ] In `main()`, when `config.discovery.enabled`:
+- [x] In `main()`, when `config.discovery.enabled`:
     - Derive `pubkey` from `identity.signing_key().verifying_key().to_bytes()`
     - Build `DiscoveryService::new(self_id, pubkey, node_capabilities(&config), listen_port)` with builder overrides from config
     - Spawn `discovery_svc.run(cancel.clone())`
     - Spawn `run_discovery_consumer(state.clone(), new_peer_rx)`
     - Log `info!` on enabled/disabled
-- [ ] **Tests**:
+- [x] **Tests**:
     - [ ] `discovered_relay_triggers_connection_attempt` — relay `PeerRecord` into consumer → transport `connect` called with peer's addr
     - [ ] `discovered_gateway_triggers_ip_request` — gateway peer + `request_dynamic_ip` → `IpRequest` sent after handshake
     - [ ] `duplicate_discovery_does_not_reconnect` — peer already in sessions → no second connect call
-    - [ ] `client_only_peer_is_skipped` — `NodeCapabilities::client()` (bits `0x01`) peer → no connect call
-    - [ ] `self_advertisement_is_ignored` — `node_id == self_id` → no connect call
-    - [ ] `discovery_disabled_in_config_skips_spawning` — `enabled = false` in config → `config.discovery.enabled == false`
+    - [x] `client_only_peer_is_skipped` — `NodeCapabilities::client()` (bits `0x01`) peer → no connect call
+    - [x] `self_advertisement_is_ignored` — `node_id == self_id` → no connect call
+    - [x] `discovery_disabled_in_config_skips_spawning` — `enabled = false` in config → `config.discovery.enabled == false`
 
 ### 7.4 Docker Test: Zero-Config Auto-Discovery
 
-- [ ] New compose `docker/compose/phase7-auto-discovery.yml`: bridge `172.34.0.0/24`, **no `depends_on`** between services
+- [x] New compose `docker/compose/phase7-auto-discovery.yml`: bridge `172.34.0.0/24`, **no `depends_on`** between services
     - `gateway` service: `172.34.0.10`, `gateway-p7.toml`, `NET_ADMIN + NET_RAW`, `ip_forward=1`
     - `relay` service: `172.34.0.20`, `relay-p7.toml`, `NET_ADMIN`
     - `client` service: `172.34.0.30`, `client-p7.toml`, `NET_ADMIN`
-- [ ] `docker/configs/gateway-p7.toml`: `gateway.enabled = true`, `[discovery] enabled = true port = 9101`, **no `[[peers]]`**
-- [ ] `docker/configs/relay-p7.toml`: `[relay] enabled = true`, mesh IP `10.77.0.10/24`, **no `[[peers]]`**
-- [ ] `docker/configs/client-p7.toml`: `mesh_ip = "auto"`, `[discovery] enabled = true`, **no `[[peers]]`**
-- [ ] `docker/tests/test-phase7.sh`:
-    - [ ] **7A** `all_nodes_discover_each_other`: start all → wait 20s → `pim status --verbose` shows `peers>=1` on all three nodes
-    - [ ] **7B** `client_auto_ip_configured`: `pim0` UP → `ip addr` shows `10.77.0.*` → `ping 10.77.0.1` succeeds
-    - [ ] **7C** `internet_via_discovered_relay`: `curl http://example.com` succeeds from client through discovered relay+gateway chain
-    - [ ] **7D** `dns_through_mesh`: `nslookup google.com` resolves from client
-    - [ ] **7E** `late_joiner_discovers_and_joins`: stop client → wait 5s → restart → wait 20s → mesh IP assigned, ping + curl work
-    - [ ] **7F** `relay_loss_and_recovery`: stop relay → wait 20s → gateway peer count drops → restart relay → wait 25s → client pings gateway, relay shows peers
+- [x] `docker/configs/gateway-p7.toml`: `gateway.enabled = true`, `[discovery] enabled = true port = 9101`, **no `[[peers]]`**
+- [x] `docker/configs/relay-p7.toml`: `[relay] enabled = true`, mesh IP `10.77.0.10/24`, **no `[[peers]]`**
+- [x] `docker/configs/client-p7.toml`: `mesh_ip = "auto"`, `[discovery] enabled = true`, **no `[[peers]]`**
+- [x] `docker/tests/test-phase7.sh`:
+    - [x] **7A** `all_nodes_discover_each_other`: start all → wait 20s → `pim status --verbose` shows `peers>=1` on all three nodes
+    - [x] **7B** `client_auto_ip_configured`: `pim0` UP → `ip addr` shows `10.77.0.*` → `ping 10.77.0.1` succeeds
+    - [x] **7C** `internet_via_discovered_relay`: `curl http://example.com` succeeds from client through discovered relay+gateway chain
+    - [x] **7D** `dns_through_mesh`: `nslookup google.com` resolves from client
+    - [x] **7E** `late_joiner_discovers_and_joins`: stop client → wait 5s → restart → wait 20s → mesh IP assigned, ping + curl work
+    - [x] **7F** `relay_loss_and_recovery`: stop relay → wait 20s → gateway peer count drops → restart relay → wait 25s → client pings gateway, relay shows peers
 
 ## Acceptance Criteria Summary
 
