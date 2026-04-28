@@ -83,7 +83,7 @@ Start with [docs/README.md](docs/README.md). The docs are grouped by purpose:
 - **Getting started** — install, configure, and operate a node.
 - **Architecture** — runtime model, packet flow, routing, protocol, security, transports.
 - **Operations** — testing strategy and Docker-based validation.
-- **Troubleshooting** — operator recovery commands and known cleanup procedures (replaces the previous root TROUBLESHOOTING.md).
+- **Troubleshooting** — operator recovery commands and known cleanup procedures.
 - **Reference** — CLI, config schema, platform support, sample TOMLs.
 - **Project internals** — workspace, roadmap, and delivery history.
 
