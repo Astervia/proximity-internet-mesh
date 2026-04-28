@@ -21,7 +21,7 @@ This folder is organized by purpose so operators, contributors, and reviewers ca
 
 - [testing.md](operations/testing.md): unit, component, and integration test strategy
 - [test-writing.md](operations/test-writing.md): conventions for placing and organizing unit tests
-- [docker-testing.md](operations/docker-testing.md): Docker Compose labs, scripts, and troubleshooting
+- [docker-labs.md](operations/docker-labs.md): Docker Compose labs, scripts, and troubleshooting
 - [../TROUBLESHOOTING.md](../TROUBLESHOOTING.md): top-level troubleshooting index and operator recovery notes
 - [bluetooth-gateway-shutdown.md](operations/bluetooth-gateway-shutdown.md): Bluetooth gateway shutdown and cleanup procedure
 

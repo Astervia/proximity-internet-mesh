@@ -1,6 +1,6 @@
 # Implementation Plan
 
-Actionable checklist organized by phase. Every item must have corresponding tests before it's considered done. See [../operations/testing.md](../operations/testing.md) for the overall test strategy and [../operations/docker-testing.md](../operations/docker-testing.md) for multi-node testing with Docker.
+Actionable checklist organized by phase. Every item must have corresponding tests before it's considered done. See [../operations/testing.md](../operations/testing.md) for the overall test strategy and [../operations/docker-labs.md](../operations/docker-labs.md) for multi-node testing with Docker.
 
 ## Phase 1 — Single-Hop Tunnel
 
