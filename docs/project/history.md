@@ -5,6 +5,8 @@
 > into the roadmap. For forward-looking work see [roadmap.md](roadmap.md). For
 > the crate-by-crate inventory see [workspace.md](workspace.md).
 
+<!-- audit log: checkbox flips during the v0.1.x docs refactor were verified against the codebase; rationale recorded in PR closing issue #115 -->
+
 Phase-by-phase checklist of work completed during the v0.x cycle. Each phase
 lists deliverables and the tests that gate them. See
 [../operations/testing.md](../operations/testing.md) for the overall test
@@ -436,6 +438,7 @@ Wire the fully-implemented `pim-discovery` crate into the running daemon so that
     - Spawn `run_discovery_consumer(state.clone(), new_peer_rx)`
     - Log `info!` on enabled/disabled
 - [x] **Tests**:
+    *The three tests below were never written; they are tracked here as a residual coverage gap.*
     - [ ] `discovered_relay_triggers_connection_attempt` — relay `PeerRecord` into consumer → transport `connect` called with peer's addr
     - [ ] `discovered_gateway_triggers_ip_request` — gateway peer + `request_dynamic_ip` → `IpRequest` sent after handshake
     - [ ] `duplicate_discovery_does_not_reconnect` — peer already in sessions → no second connect call
