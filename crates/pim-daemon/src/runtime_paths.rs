@@ -15,18 +15,18 @@
 use std::path::PathBuf;
 
 /// Per-platform "runtime" root directory for the daemon's transient files.
+///
+/// Linux uses hard-coded `/run/...` paths in every caller for FHS / ABI
+/// reasons, so `runtime_dir` is only needed on non-Linux targets.
+#[cfg(not(target_os = "linux"))]
 fn runtime_dir() -> PathBuf {
-    #[cfg(target_os = "linux")]
-    {
-        PathBuf::from("/run/pim")
-    }
     #[cfg(target_os = "macos")]
     {
         std::env::var_os("TMPDIR")
             .map(PathBuf::from)
             .unwrap_or_else(|| PathBuf::from("/tmp"))
     }
-    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    #[cfg(not(target_os = "macos"))]
     {
         PathBuf::from("/tmp")
     }
