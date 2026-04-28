@@ -26,6 +26,8 @@ duplicating them.
     - peer discovery behavior
 - `docs/architecture/security.md`
     - identity, trust, and crypto model
+- `docs/architecture/transports/bluetooth.md`
+    - Bluetooth PAN transport: NAP/PANU roles, bridge/DHCP setup, coexistence
 - `docs/architecture/transports/wifi-direct.md`
     - current connectivity-specific reference design
 
