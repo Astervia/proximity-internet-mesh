@@ -1,8 +1,10 @@
 # CLI Reference
 
 This document is the canonical reference for the `pim` and `pim-daemon`
-binaries shipped by the workspace. For task-oriented walkthroughs see the
-[getting-started/usage.md](../getting-started/usage.md) doc.
+binaries shipped by the workspace. For task-oriented walkthroughs see
+[getting-started/usage.md](../getting-started/usage.md); for installing the
+binaries and setting `/etc/pim/pim.toml`, see
+[getting-started/installation.md](../getting-started/installation.md).
 
 ## `pim`
 
@@ -24,6 +26,8 @@ Start the PIM daemon. By default the daemon runs in the foreground; pass
 
 Stop the running daemon (Unix only). Sends `SIGTERM` to the PID recorded in
 the PID file.
+
+*`pim down` is supported only on Unix systems; on non-Unix hosts the command exits with an error.*
 
 | Flag | Type | Default | Description |
 |------|------|---------|-------------|
