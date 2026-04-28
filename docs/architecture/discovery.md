@@ -344,6 +344,6 @@ initial gateway selection smarter before any probes are exchanged.
 ## Related Documents
 
 - [security.md](security.md) — handshake and session establishment after discovery
-- [networking-and-routing.md](networking-and-routing.md) — route exchange that follows a successful connection
+- [routing.md](routing.md) — route exchange that follows a successful connection
 - [protocol.md](protocol.md) — wire format for all frame types including `ControlFrame::IpRequest / IpAssign`
-- [system-overview.md](system-overview.md) — placement of discovery in the overall component architecture
+- [overview.md](overview.md) — placement of discovery in the overall component architecture
