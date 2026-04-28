@@ -78,7 +78,7 @@ mod session;
 
 use std::collections::{HashMap, HashSet};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
-use std::sync::atomic::{AtomicU32, AtomicU64, AtomicU8, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicU8, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -238,6 +238,20 @@ struct DaemonState {
     /// On-disk path of `pim.toml`, retained for the JSON-RPC `config.get`
     /// / `config.save` surface so callers don't have to pass it back in.
     config_path: std::path::PathBuf,
+    /// Whether split-default routing is currently engaged. Mutated by
+    /// the JSON-RPC `route.set_split_default` handler; surfaced in
+    /// `build_status`. NOTE: the actual packet-routing side-effect
+    /// (re-pointing default route through the mesh) is not yet wired —
+    /// this flag is purely state-tracking so the UI's RouteTogglePanel
+    /// sees a coherent flip and the corresponding `status.event` fires.
+    /// Wiring the forwarder to honour this is a follow-up.
+    pub(crate) route_on: AtomicBool,
+    /// Broadcast channel for JSON-RPC `status.event` notifications.
+    /// Senders push complete notification objects (with `jsonrpc: "2.0"`
+    /// + `method: "status.event"` + `params: { kind, ... }`); each
+    /// connection's `status.subscribe` forwarder pumps them into the
+    /// per-connection writer.
+    pub(crate) status_events_tx: tokio::sync::broadcast::Sender<serde_json::Value>,
 }
 
 impl DaemonState {
@@ -559,6 +573,12 @@ pub(crate) async fn run() -> Result<()> {
             .as_ref()
             .map(|(discovery_svc, _)| discovery_svc.peer_table()),
         config_path: std::path::PathBuf::from(&config_path),
+        route_on: AtomicBool::new(false),
+        // 64-frame ring is enough for the typical bursts (interface up,
+        // gateway selected, route on/off) without dropping; lagged
+        // subscribers receive RecvError::Lagged and re-sync via the
+        // next `status` RPC.
+        status_events_tx: tokio::sync::broadcast::channel::<serde_json::Value>(64).0,
     });
 
     // ── Initiate connections to configured peers ───────────────────────────
