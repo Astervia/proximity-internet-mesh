@@ -251,6 +251,6 @@ are possible in wpa_supplicant but not yet exploited here.
 
 ## Related Documents
 
-- [discovery.md](discovery.md) — UDP broadcast discovery (LAN-based alternative)
-- [security.md](security.md) — handshake and session establishment after group formation
-- [overview.md](overview.md) — component architecture
+- [discovery.md](../discovery.md) — UDP broadcast discovery (LAN-based alternative)
+- [security.md](../security.md) — handshake and session establishment after group formation
+- [overview.md](../overview.md) — component architecture

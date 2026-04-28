@@ -535,4 +535,4 @@ Add Wi-Fi Direct (IEEE 802.11 P2P) as an optional peer-finding layer. After a P2
 
 - **Unit tests**: `cargo test --workspace` — all tests pass (no subprocess invoked)
 - **Docker tests**: Not applicable — Docker containers cannot access physical Wi-Fi hardware. No `test-p8` target.
-- **Manual hardware test**: See `docs/architecture/wifi-direct.md` for the step-by-step procedure on two Linux devices with Wi-Fi hardware.
+- **Manual hardware test**: See `docs/architecture/transports/wifi-direct.md` for the step-by-step procedure on two Linux devices with Wi-Fi hardware.

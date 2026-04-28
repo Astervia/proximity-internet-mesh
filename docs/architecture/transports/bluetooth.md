@@ -141,6 +141,6 @@ connection attempts still collapse onto the existing session and reconnect logic
 
 ## Related Documents
 
-- [overview.md](overview.md)
+- [overview.md](../overview.md)
 - [wifi-direct.md](wifi-direct.md)
-- [discovery.md](discovery.md)
+- [discovery.md](../discovery.md)
