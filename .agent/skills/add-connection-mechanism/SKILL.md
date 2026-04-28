@@ -30,7 +30,7 @@ Before editing, inspect:
 - `crates/pim-transport/src/lib.rs`
 - `crates/pim-transport/src/tcp.rs`
 - `crates/pim-wifidirect/src/lib.rs`
-- `docs/architecture/wifi-direct.md`
+- `docs/architecture/transports/wifi-direct.md`
 
 Optional helper:
 
