@@ -2,31 +2,35 @@
 
 Proximity Internet Mesh (PIM) is a Rust workspace for running a local mesh adapter that forwards IP traffic across nearby peers until it reaches a node with internet access. The daemon supports local TUN operation on Linux and macOS, accepts packets from the host network stack, and forwards them through the mesh, including gateway NAT on both platforms.
 
-The codebase is currently centered on a Linux daemon, a small CLI, and Docker-based multi-node test environments. The long-term architecture targets proximity transports such as Wi-Fi Direct, but the transport implemented in the repository today is TCP. The documentation below distinguishes current behavior from broader design material.
-
 ## Current Scope
 
 - Linux and macOS client/relay/gateway runtime with a TUN interface
 - Rust workspace with separate crates for protocol, crypto, routing, transport, gateway, discovery, daemon, and CLI
-- `pim` CLI with `up`, `down`, `status`, and `route on|off|status`
+- `pim` CLI with `up`, `down`, `status`, `route on|off|status`, and `config generate`
 - `pim-daemon` runtime that handles peer sessions, routing, fragmentation, metrics, and gateway NAT
 - Docker Compose labs for single-hop, relay, discovery, resilience, and multi-gateway scenarios
 
-## Platform Support Matrix
+## Platform Support
 
-| Capability                    | Linux     | macOS         |
-| ----------------------------- | --------- | ------------- |
-| Client runtime                | Supported | Supported     |
-| Relay runtime                 | Supported | Supported     |
-| Gateway runtime and NAT       | Supported | Supported     |
-| Wi-Fi Direct backend          | Supported | Supported     |
-| Bluetooth PAN backend         | Supported | Supported     |
-| `pim config generate client`  | Supported | Supported     |
-| `pim config generate relay`   | Supported | Supported     |
-| `pim config generate gateway` | Supported | Supported     |
-| Docker integration labs       | Supported | Not supported |
+| Capability        | Linux     | macOS         |
+| ----------------- | --------- | ------------- |
+| Client / relay    | Supported | Supported     |
+| Gateway + NAT     | Supported | Supported     |
+| Wi-Fi Direct      | Supported | Supported     |
+| Bluetooth PAN     | Supported | Supported     |
+| Docker labs       | Supported | Not supported |
 
-On macOS, use a `utunN` interface such as `utun0` for the mesh TUN and set `gateway.nat_interface` to the internet-facing host interface such as `en0`. The Wi-Fi Direct backend uses Bonjour peer-to-peer discovery on macOS rather than Linux `wpa_cli` group formation, so Linux-specific tuning fields in `[wifi_direct]` are ignored there.
+For per-feature host requirements and OS-specific guidance see
+[docs/reference/platform-support.md](docs/reference/platform-support.md).
+
+## Status
+
+The workspace is under active development. The runtime supports client,
+relay, and gateway roles on Linux and macOS, with TCP, Bluetooth PAN, and
+Wi-Fi Direct transports. See [docs/project/roadmap.md](docs/project/roadmap.md)
+for the phased delivery view and
+[docs/project/history.md](docs/project/history.md) for the historical
+implementation log.
 
 ## Repository Layout
 
@@ -40,352 +44,48 @@ On macOS, use a `utunN` interface such as `utun0` for the mesh TUN and set `gate
 └── Makefile               # Docker build, test, and stack-management targets
 ```
 
-## Prerequisites
-
-For local development and manual runs:
-
-- Linux or macOS
-- Rust toolchain new enough to build the workspace when installing from source
-- privileges to create a TUN interface and update routes, typically `root` or `CAP_NET_ADMIN`
-
-Optional host requirements by feature:
-
-- Base client or relay runtime
-    - Linux: `/dev/net/tun` plus `iproute2`
-    - macOS: privileges to create and manage a `utunN` interface
-- Gateway NAT
-    - Linux: `iptables` plus privileges to enable IPv4 forwarding
-    - macOS: `pfctl` plus privileges to enable `net.inet.ip.forwarding`
-- Bluetooth PAN features
-    - Linux: a BlueZ-based host with `bluetoothctl` and `bt-network`
-    - macOS: `blueutil` for radio discovery and host Bluetooth PAN support
-- Bluetooth NAP serving on Linux
-    - `iproute2` to create and manage the NAP bridge such as `br-bt`
-    - `iptables` for MASQUERADE and FORWARD rules from the Bluetooth subnet
-- DHCP on a Bluetooth NAP bridge
-    - Linux only
-    - `dnsmasq` when `[bluetooth].dhcp_enabled = true`
-- DHCP client on a Bluetooth PAN link
-    - Linux only
-    - `dhclient` when `[bluetooth].request_dhcp = true`
-- Wi-Fi Direct
-    - Linux: `wpa_supplicant` compiled with `CONFIG_P2P=y`, `wpa_cli`, and permission to talk to the `wpa_supplicant` control socket
-    - Linux: `iproute2` so the daemon can inspect the resulting P2P group interface
-    - macOS: no `wpa_cli` setup is required; the host must allow Bonjour peer-to-peer Wi-Fi advertisement and browsing
-- Docker-based integration labs
-    - Linux host with Docker Engine and Docker Compose v2
-    - outbound internet access from the host so gateway containers can NAT traffic
-
-For Docker-based integration testing:
-
-- Docker Engine
-- Docker Compose v2
-- outbound internet access from the host so gateway containers can NAT traffic
-
-## Build
-
-Build the workspace in development mode:
-
-```bash
-cargo build --workspace
-```
-
-Build optimized binaries:
-
-```bash
-cargo build --workspace --release
-```
-
-The main binaries are:
-
-- `target/release/pim`
-- `target/release/pim-daemon`
-
-## Generate A Starter Config
-
-The CLI can generate a commented config template for one or more roles:
-
-```bash
-pim config generate client
-pim config generate relay
-pim config generate gateway
-pim config generate relay gateway
-```
-
-On macOS, the generated gateway template uses `utun0` for the mesh TUN and `en0` as the default NAT uplink. Wi-Fi Direct can be enabled there, but the backend uses Bonjour peer-to-peer discovery instead of Linux `wpa_supplicant` controls.
-
-Write directly to a file:
-
-```bash
-pim config generate client --output /tmp/pim.toml
-pim config generate gateway --name edge-a --output /tmp/pim-gateway.toml
-```
-
-The generated TOML is meant to be edited by hand:
-
-- active settings are emitted as real TOML
-- inactive gateway settings are left commented out
-- peer examples are commented so they can be enabled selectively
-
-## Install
-
-Published releases include prebuilt archives for:
-
-- Linux x86_64 via `x86_64-unknown-linux-musl`, which is portable across mainstream distros
-- macOS Intel via `x86_64-apple-darwin`
-- macOS Apple Silicon via `aarch64-apple-darwin`
-
-The daemon can run as a client, relay, or gateway on macOS using `utunN` interfaces, macOS route management, and `pf`-backed gateway setup. The Docker integration labs still require Linux.
-
-Install the latest released binaries for your host:
-
-```bash
-VERSION="$(curl -fsSLI -o /dev/null -w '%{url_effective}' \
-  https://github.com/Astervia/proximity-internet-mesh/releases/latest \
-  | sed 's:.*/::')"
-
-if [ -z "${VERSION}" ]; then
-  echo "Failed to determine the latest GitHub release version" >&2
-  exit 1
-fi
-
-case "$(uname -s)-$(uname -m)" in
-  Linux-x86_64) ASSET="pim-${VERSION}-x86_64-unknown-linux-musl" ;;
-  Darwin-x86_64) ASSET="pim-${VERSION}-x86_64-apple-darwin" ;;
-  Darwin-arm64) ASSET="pim-${VERSION}-aarch64-apple-darwin" ;;
-  *)
-    echo "No published release artifact for $(uname -s)-$(uname -m)" >&2
-    exit 1
-    ;;
-esac
-
-curl -LO "https://github.com/Astervia/proximity-internet-mesh/releases/download/${VERSION}/${ASSET}.tar.gz"
-curl -LO "https://github.com/Astervia/proximity-internet-mesh/releases/download/${VERSION}/${ASSET}.sha256"
-
-if command -v sha256sum >/dev/null 2>&1; then
-  sha256sum -c "${ASSET}.sha256"
-else
-  shasum -a 256 -c "${ASSET}.sha256"
-fi
-
-tar -xzf "${ASSET}.tar.gz"
-sudo mkdir -p /usr/local/bin
-sudo install -m 755 "${ASSET}/pim" /usr/local/bin/pim
-sudo install -m 755 "${ASSET}/pim-daemon" /usr/local/bin/pim-daemon
-
-if [ "$(uname -s)" = "Linux" ]; then
-  sudo mkdir -p /etc/pim /var/lib/pim /run
-fi
-```
-
-If you need to build from source instead:
+## Quick Start
 
 ```bash
 cargo build --workspace --release
 sudo install -Dm755 target/release/pim /usr/local/bin/pim
 sudo install -Dm755 target/release/pim-daemon /usr/local/bin/pim-daemon
-if [ "$(uname -s)" = "Linux" ]; then
-  sudo install -d /etc/pim /var/lib/pim /run
-fi
-```
-
-Then create `/etc/pim/pim.toml`. The easiest starting point is:
-
-```bash
-sudo pim config generate client --output /etc/pim/pim.toml
-```
-
-On macOS, keep the generated `utunN` interface name, set `gateway.nat_interface` to the real uplink if this node should be a gateway, and install `blueutil` if this node should use Bluetooth PAN radio discovery. Wi-Fi Direct can also be enabled; macOS uses Bonjour peer-to-peer discovery for that path.
-
-You can also start from a minimal static client example:
-
-```toml
-[node]
-name = "client-a"
-data_dir = "/var/lib/pim"
-
-[interface]
-name = "pim0" # use "utun0" on macOS
-mesh_ip = "10.77.0.100/24"
-mtu = 1400
-
-[transport]
-type = "tcp"
-listen_port = 9100
-
-[routing]
-max_hops = 10
-algorithm = "distance-vector"
-route_expiry_s = 300
-
-[gateway]
-enabled = false
-nat_interface = "eth0"
-max_connections = 200
-
-[security]
-key_file = "/var/lib/pim/node.key"
-require_encryption = true
-
-[[peers]]
-mechanism = "tcp"
-address = "gateway.example.internal:9100"
-label = "gateway"
-```
-
-For a Linux gateway node, set `gateway.enabled = true`, choose the gateway mesh IP, and point `nat_interface` at the internet-facing interface.
-
-## Uninstall
-
-Stop the daemon first if it is running:
-
-```bash
-sudo pim down || true
-```
-
-Remove the installed binaries:
-
-```bash
-sudo rm -f /usr/local/bin/pim /usr/local/bin/pim-daemon
-```
-
-Remove system-wide config and runtime directories if you no longer need them:
-
-```bash
-sudo rm -rf /etc/pim /var/lib/pim
-sudo rm -f /run/pim.pid /run/pim.stats
-```
-
-If you only want to remove the binaries but keep keys and configuration for a future reinstall, skip deleting `/etc/pim` and `/var/lib/pim`.
-
-## Use
-
-Start in the foreground:
-
-```bash
-sudo pim up --config /etc/pim/pim.toml
-```
-
-Start in the background:
-
-```bash
+sudo pim config generate client --output /etc/pim/pim.toml  # macOS: drop sudo
 sudo pim up --config /etc/pim/pim.toml --daemon
-```
-
-Inspect status:
-
-```bash
-sudo pim status
 sudo pim status --verbose
 ```
 
-Enable split-default routing through `pim0`:
+Full instructions:
 
-```bash
-sudo pim route on
-sudo pim route status
-```
-
-Disable split-default routing and return to the normal underlay route:
-
-```bash
-sudo pim route off
-sudo pim route status
-```
-
-Stop the daemon:
-
-```bash
-sudo pim down
-```
-
-Default runtime paths:
-
-- config: `/etc/pim/pim.toml`
-- pid file: `/run/pim.pid`
-- stats file: `/run/pim.stats`
-
-What `pim status --verbose` reads today:
-
-- peer count
-- route count
-- forwarded packets and bytes
-- dropped packets
-- congestion drops
-- conntrack size
-- uptime
-
-## Use PIM As The Active Route
-
-PIM does not create a Wi-Fi network entry or a separate OS-visible "network" to join. The normal LAN or Wi-Fi connection remains the underlay, while `pim-daemon` creates a TUN interface such as `pim0` for overlay traffic.
-
-To route internet-bound traffic through the mesh from a client node:
-
-1. Start `pim` so `pim0` exists and the client has connected to a relay or gateway.
-2. Enable the split-default routes with `sudo pim route on`.
-3. Verify with `sudo pim route status`.
-
-The route command installs:
-
-- `0.0.0.0/1` via the mesh gateway on `pim0`
-- `128.0.0.0/1` via the mesh gateway on `pim0`
-
-This approach prefers the PIM tunnel for general internet traffic without replacing the host's underlying LAN/Wi-Fi connection.
-
-Notes:
-
-- On clients using `mesh_ip = "auto"`, `pim0` must already be up before `pim route on` can determine the active mesh gateway.
-- `sudo pim route off` removes those split-default routes and returns traffic selection to the normal underlay path.
+- [docs/getting-started/installation.md](docs/getting-started/installation.md) — host requirements, prebuilt-archive install, build from source.
+- [docs/getting-started/configuration.md](docs/getting-started/configuration.md) — config reference and worked examples.
+- [docs/getting-started/usage.md](docs/getting-started/usage.md) — CLI walkthrough and runtime files.
+- [docs/getting-started/example-topology.md](docs/getting-started/example-topology.md) — three-node walkthrough with packet flow.
 
 ## Docker Test Workflows
 
-Build the container image:
-
 ```bash
-make docker-build
+make docker-build      # build container image
+make test-unit         # run unit tests
+make test-all          # run all Docker integration phases (p1–p5)
+make up-p1             # bring up phase-1 lab manually
+make logs-p1           # tail logs
+make sh-p1-client      # shell into client container
+make down-p1           # tear down
 ```
 
-Run unit tests:
-
-```bash
-make test-unit
-```
-
-Run Docker phases:
-
-```bash
-make test-p1
-make test-p2
-make test-p3
-make test-p4
-make test-p5
-make test-all
-```
-
-Bring up a lab manually:
-
-```bash
-make up-p1
-make logs-p1
-make sh-p1-client
-make down-p1
-```
+For full details see [docs/operations/docker-labs.md](docs/operations/docker-labs.md).
 
 ## Documentation
 
-Start with [docs/README.md](docs/README.md). The docs are grouped by topic:
+Start with [docs/README.md](docs/README.md). The docs are grouped by purpose:
 
-- Getting started: install, configure, and operate a node
-- Architecture: system model, packet flow, routing, protocol, and security
-- Operations: test strategy and Docker-based validation
-- Troubleshooting: operator-oriented recovery commands and known cleanup procedures
-- Project: workspace internals, roadmap, and implementation checklist
+- **Getting started** — install, configure, and operate a node.
+- **Architecture** — runtime model, packet flow, routing, protocol, security, transports.
+- **Operations** — testing strategy and Docker-based validation.
+- **Troubleshooting** — operator recovery commands and known cleanup procedures (replaces the previous root TROUBLESHOOTING.md).
+- **Reference** — CLI, config schema, platform support, sample TOMLs.
+- **Project internals** — workspace, roadmap, and delivery history.
 
-For runtime debugging and operator recovery steps, see [docs/troubleshooting/](docs/troubleshooting/README.md).
-
-## Notes On Current Behavior
-
-- The transport backend in this repository is TCP, not Wi-Fi Direct.
-- Linux is the practical target for running the daemon because TUN and route setup are Linux-specific here.
-- The CLI currently exposes only `up`, `down`, and `status`.
-- The daemon supports static peer configuration and includes discovery and dynamic-IP building blocks; the Docker scenarios in the repository still rely on explicit node config files.
+For runtime debugging and operator recovery steps, see
+[docs/troubleshooting/](docs/troubleshooting/README.md).
