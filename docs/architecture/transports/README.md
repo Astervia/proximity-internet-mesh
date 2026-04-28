@@ -2,13 +2,14 @@
 
 The PIM daemon abstracts peer-to-peer connectivity behind a transport interface
 (`pim-transport`). This folder explains the concrete transport implementations
-that ship in the workspace today, their host-OS requirements, and how the
-daemon chooses between them.
+that ship in the workspace today and their host-OS requirements. Each transport
+is enabled independently via its own config section; the daemon runs them
+additively when more than one is enabled.
 
 ## Implementations
 
-- [bluetooth.md](bluetooth.md): Bluetooth PAN backend, NAP/PANU roles, and the bridge/DHCP setup the daemon manages on Linux gateways.
-- [wifi-direct.md](wifi-direct.md): Wi-Fi Direct backend on Linux (`wpa_supplicant` P2P) and macOS (Bonjour peer-to-peer), discovery flow, and capability matrix.
+- [bluetooth.md](bluetooth.md) — Bluetooth PAN backend, NAP/PANU roles, and the bridge/DHCP setup the daemon manages on Linux gateways.
+- [wifi-direct.md](wifi-direct.md) — Wi-Fi Direct backend on Linux (`wpa_supplicant` P2P) and macOS (Bonjour peer-to-peer), discovery flow, and capability matrix.
 
 ## Picking A Transport
 
