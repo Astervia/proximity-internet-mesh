@@ -64,7 +64,7 @@ interface = "auto"
 # - serve a local NAP on `nap_bridge`
 # - also scan/connect outward as a PAN client when peers are discovered
 radio_discovery_enabled = true
-device_name_prefix = "PIM-"
+device_name_prefix = ""
 local_alias = "PIM-gatewaybtonly"
 connect_pan = false # Use true to test simultaneous PAN client/AP
 serve_nap = true
