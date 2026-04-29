@@ -1,4 +1,4 @@
-use anyhow::{bail, Context, Result};
+use anyhow::{bail, Result};
 use std::io::{BufRead, BufReader};
 use std::path::PathBuf;
 use std::time::Duration;
@@ -19,25 +19,28 @@ pub(crate) fn cmd_logs(
     let follow = !no_follow && until_prefix.is_none();
 
     // Wait for the file if --retry
-    if !log_file.exists() {
-        if retry {
-            eprintln!("pim logs: waiting for {}", log_file.display());
-            loop {
-                std::thread::sleep(Duration::from_millis(250));
-                if log_file.exists() {
-                    break;
+    let file = match std::fs::File::open(&log_file) {
+        Ok(f) => f,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            if retry {
+                eprintln!("pim logs: waiting for {}", log_file.display());
+                loop {
+                    std::thread::sleep(Duration::from_millis(250));
+                    match std::fs::File::open(&log_file) {
+                        Ok(f) => break f,
+                        Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+                        Err(e) => return Err(anyhow::Error::new(e).context(format!("cannot open log file: {}", log_file.display()))),
+                    }
                 }
+            } else {
+                bail!(
+                    "log file not found: {} (start with `pim up --detach`, or pass --retry to wait)",
+                    log_file.display()
+                );
             }
-        } else {
-            bail!(
-                "log file not found: {} (start with `pim up --detach`, or pass --retry to wait)",
-                log_file.display()
-            );
         }
-    }
-
-    let file = std::fs::File::open(&log_file)
-        .with_context(|| format!("cannot open log file: {}", log_file.display()))?;
+        Err(e) => return Err(anyhow::Error::new(e).context(format!("cannot open log file: {}", log_file.display()))),
+    };
     let mut file_inode = inode_of(&file);
     let mut reader = BufReader::new(file);
 

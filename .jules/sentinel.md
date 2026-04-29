@@ -21,3 +21,8 @@
 **Vulnerability:** The daemon's config generation (`pim-cli/src/main.rs`) and identity key generation (`pim-crypto/src/identity.rs`) checked `path.exists()` before calling `create(true).truncate(true)`. This creates a Time-of-Check to Time-of-Use (TOCTOU) race condition where an attacker could replace the file with a symlink between the check and the use, potentially leading to arbitrary file overwrites or key theft.
 **Learning:** Checking for file existence before creating a sensitive file is inherently racy and insecure.
 **Prevention:** Always rely on the filesystem to enforce exclusivity. Use `OpenOptions::new().create_new(true)` to atomically create a file only if it does not already exist, and handle `ErrorKind::AlreadyExists` errors gracefully.
+
+## 2024-04-29 - [Prevent TOCTOU via Atomic File Reads]
+**Vulnerability:** The CLI's log-following logic (`pim-cli/src/commands/logs.rs`) checked `log_file.exists()` before calling `std::fs::File::open`. This created a Time-of-Check to Time-of-Use (TOCTOU) race condition where the log file could be manipulated, removed, or swapped with a symlink between the check and the open operation.
+**Learning:** Checking for file existence before opening a file is inherently racy and insecure. We should let the filesystem enforce state.
+**Prevention:** Always rely on atomic filesystem operations. Attempt to open the file directly using `std::fs::File::open` and handle `std::io::ErrorKind::NotFound` gracefully to retry or exit, avoiding separate existence checks.
