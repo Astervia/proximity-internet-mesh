@@ -36,6 +36,7 @@ Current examples:
 - `skills/add-connection-mechanism/SKILL.md` — workflow for adding a new peer connectivity mechanism
 - `skills/secure-code-sentinel/SKILL.md` — workflow for security fixes and logging learnings
 - `skills/write-docker-tests/SKILL.md` — workflow for adding or extending Docker-based tests
+- `skills/write-unit-tests/SKILL.md` — workflow for authoring unit tests following repository layout rules
 - `prompts/implement-connectivity-mechanism.md` — targeted prompt for transport or discovery work
 - `prompts/review-connectivity-change.md` — targeted review prompt for connectivity-sensitive changes
 - `tools/inspect-connectivity-surface.sh` — quick trace for discovery, transport, and daemon integration points

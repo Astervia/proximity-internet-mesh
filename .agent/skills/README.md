@@ -10,6 +10,7 @@ Examples:
 - Docker test debugging
 - networking regression review
 - Docker test authoring
+- unit test authoring
 - security and sentinel workflows
 - performance optimization
 
