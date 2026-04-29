@@ -29,7 +29,10 @@ pub(crate) fn cmd_logs(
                     match std::fs::File::open(&log_file) {
                         Ok(f) => break f,
                         Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
-                        Err(e) => return Err(anyhow::Error::new(e).context(format!("cannot open log file: {}", log_file.display()))),
+                        Err(e) => {
+                            return Err(anyhow::Error::new(e)
+                                .context(format!("cannot open log file: {}", log_file.display())))
+                        }
                     }
                 }
             } else {
@@ -39,7 +42,10 @@ pub(crate) fn cmd_logs(
                 );
             }
         }
-        Err(e) => return Err(anyhow::Error::new(e).context(format!("cannot open log file: {}", log_file.display()))),
+        Err(e) => {
+            return Err(anyhow::Error::new(e)
+                .context(format!("cannot open log file: {}", log_file.display())))
+        }
     };
     let mut file_inode = inode_of(&file);
     let mut reader = BufReader::new(file);
