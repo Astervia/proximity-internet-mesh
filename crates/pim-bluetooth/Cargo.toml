@@ -13,3 +13,9 @@ tokio = { workspace = true }
 tokio-util = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
+# Phase 7 RFCOMM auto-discovery — JSON identity exchange on top of the
+# raw Bluetooth socket. Kept in the base deps (not target-gated) because
+# the codec module is unit-tested on every platform; the actual socket
+# code is `cfg(target_os = "linux")` only.
+serde = { workspace = true }
+serde_json = { workspace = true }
