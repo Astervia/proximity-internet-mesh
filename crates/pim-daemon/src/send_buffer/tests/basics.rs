@@ -8,7 +8,7 @@ fn mk_frame(ft: FrameType) -> TransportFrame {
     TransportFrame {
         frame_type: ft,
         nonce: [0; 12],
-        payload: vec![],
+        payload: bytes::Bytes::new(),
         tag: [0; 16],
     }
 }
@@ -61,14 +61,14 @@ fn peer_buffer_same_priority_is_fifo() {
     let mut buf = PeerBuffer::new(16, Duration::from_secs(60));
     // Use payload to distinguish frames
     let mut f1 = data();
-    f1.payload = vec![1];
+    f1.payload = bytes::Bytes::from(vec![1]);
     let mut f2 = data();
-    f2.payload = vec![2];
+    f2.payload = bytes::Bytes::from(vec![2]);
     buf.push(Priority::Data, f1);
     buf.push(Priority::Data, f2);
     let frames = buf.drain();
-    assert_eq!(frames[0].payload, vec![1]);
-    assert_eq!(frames[1].payload, vec![2]);
+    assert_eq!(frames[0].payload, bytes::Bytes::from(vec![1]));
+    assert_eq!(frames[1].payload, bytes::Bytes::from(vec![2]));
 }
 
 #[test]

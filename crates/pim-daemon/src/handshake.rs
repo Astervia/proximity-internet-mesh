@@ -29,7 +29,7 @@ pub(crate) async fn send_handshake(
             TransportFrame {
                 frame_type: FrameType::Handshake,
                 nonce: [0; 12],
-                payload: buf.to_vec(),
+                payload: buf.freeze(),
                 tag: [0; 16],
             },
         )
@@ -41,7 +41,7 @@ pub(crate) fn decode_handshake_wire(frame: &TransportFrame) -> Result<HandshakeW
     if frame.frame_type != FrameType::Handshake {
         bail!("expected Handshake frame, got {:?}", frame.frame_type);
     }
-    let mut buf = BytesMut::from(frame.payload.as_slice());
+    let mut buf = BytesMut::from(&frame.payload[..]);
     Ok(HandshakeWireFrame::decode(&mut buf)?)
 }
 

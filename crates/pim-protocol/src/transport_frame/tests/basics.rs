@@ -4,7 +4,7 @@ fn sample_frame() -> TransportFrame {
     TransportFrame {
         frame_type: FrameType::Data,
         nonce: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12],
-        payload: vec![0xDE, 0xAD, 0xBE, 0xEF],
+        payload: bytes::Bytes::from(vec![0xDE, 0xAD, 0xBE, 0xEF]),
         tag: [0xAA; 16],
     }
 }
@@ -94,7 +94,7 @@ fn empty_payload_round_trip() {
     let frame = TransportFrame {
         frame_type: FrameType::Heartbeat,
         nonce: [0; 12],
-        payload: vec![],
+        payload: bytes::Bytes::new(),
         tag: [0; 16],
     };
     let mut buf = BytesMut::new();
