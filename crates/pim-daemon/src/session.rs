@@ -13,20 +13,23 @@ pub(crate) struct Session {
 
 impl Session {
     pub(crate) fn encrypt_frame(&self, plaintext: &[u8]) -> Result<TransportFrame> {
-        let mut payload = plaintext.to_vec();
-        let (nonce, tag) = self.send.encrypt_in_place_detached(&mut payload)?;
+        let mut payload_buf = plaintext.to_vec();
+        let (nonce, tag) = self.send.encrypt_in_place_detached(&mut payload_buf)?;
 
         Ok(TransportFrame {
             frame_type: FrameType::Data,
             nonce,
-            payload,
+            payload: bytes::Bytes::from(payload_buf),
             tag,
         })
     }
 
     pub(crate) fn decrypt_frame(&self, mut frame: TransportFrame) -> Result<TransportFrame> {
+        let mut payload_buf = frame.payload.to_vec();
         self.recv
-            .decrypt_in_place_detached(&frame.nonce, &mut frame.payload, &frame.tag)?;
+            .decrypt_in_place_detached(&frame.nonce, &mut payload_buf, &frame.tag)?;
+
+        frame.payload = bytes::Bytes::from(payload_buf);
         Ok(frame)
     }
 }

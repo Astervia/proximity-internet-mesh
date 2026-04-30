@@ -34,7 +34,7 @@ async fn two_transports_send_recv() {
     // A receives
     let (sender, received) = transport_a.recv().await.unwrap();
     assert_eq!(sender, node_b);
-    assert_eq!(received.payload, b"hello from B");
+    assert_eq!(received.payload.as_ref(), b"hello from B");
 }
 
 #[tokio::test]
@@ -68,7 +68,7 @@ async fn bidirectional_communication() {
         .unwrap();
     let (sender, msg) = transport_a.recv().await.unwrap();
     assert_eq!(sender, node_b);
-    assert_eq!(msg.payload, b"B to A");
+    assert_eq!(msg.payload.as_ref(), b"B to A");
 
     // A → B
     transport_a
@@ -77,7 +77,7 @@ async fn bidirectional_communication() {
         .unwrap();
     let (sender, msg) = transport_b.recv().await.unwrap();
     assert_eq!(sender, node_a);
-    assert_eq!(msg.payload, b"A to B");
+    assert_eq!(msg.payload.as_ref(), b"A to B");
 }
 
 #[tokio::test]
@@ -135,9 +135,9 @@ async fn multiple_peers() {
     received.push((s2, m2.payload.clone()));
 
     received.sort_by_key(|(_, p)| p.clone());
-    assert_eq!(received[0].1, b"from B");
+    assert_eq!(received[0].1.as_ref(), b"from B");
     assert_eq!(received[0].0, node_b);
-    assert_eq!(received[1].1, b"from C");
+    assert_eq!(received[1].1.as_ref(), b"from C");
     assert_eq!(received[1].0, node_c);
 }
 

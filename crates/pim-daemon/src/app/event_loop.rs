@@ -224,7 +224,7 @@ pub(super) async fn run_event_loop(state: Arc<DaemonState>) -> Result<()> {
                             Ok(f) => f,
                             Err(e) => { warn!(%from_peer, "decrypt: {e}"); continue; }
                         };
-                        let mut buf = BytesMut::from(frame.payload.as_slice());
+                        let mut buf = BytesMut::from(&frame.payload[..]);
                         let mesh = match MeshDataFrame::decode(&mut buf) {
                             Ok(m) => m,
                             Err(e) => { warn!(%from_peer, "mesh decode: {e}"); continue; }
@@ -232,7 +232,7 @@ pub(super) async fn run_event_loop(state: Arc<DaemonState>) -> Result<()> {
 
                         if mesh.dst_id == state.self_id {
                             if mesh.flags.contains(DataFlags::IS_CONTROL) {
-                                let mut buf = BytesMut::from(mesh.payload.as_slice());
+                                let mut buf = BytesMut::from(&mesh.payload[..]);
                                 match ControlFrame::decode(&mut buf) {
                                     Ok(cf) => match cf {
                                         ControlFrame::IpRequest { requester_id } => {
@@ -477,7 +477,7 @@ pub(super) async fn run_event_loop(state: Arc<DaemonState>) -> Result<()> {
                     }
 
                     FrameType::RouteUpdate => {
-                        let mut buf = BytesMut::from(frame.payload.as_slice());
+                        let mut buf = BytesMut::from(&frame.payload[..]);
                         match RouteUpdateFrame::decode(&mut buf) {
                             Ok(update) => {
                                 // Verify Ed25519 signature before applying.
@@ -520,7 +520,7 @@ pub(super) async fn run_event_loop(state: Arc<DaemonState>) -> Result<()> {
                     }
 
                     FrameType::Heartbeat => {
-                        let mut buf = BytesMut::from(frame.payload.as_slice());
+                        let mut buf = BytesMut::from(&frame.payload[..]);
                         match HeartbeatFrame::decode(&mut buf) {
                             Ok(hb) => {
                                 debug!(%from_peer, gw_hops = hb.gateway_hops, load = hb.load, "heartbeat");
@@ -540,7 +540,7 @@ pub(super) async fn run_event_loop(state: Arc<DaemonState>) -> Result<()> {
                     }
 
                     FrameType::Control => {
-                        let mut buf = BytesMut::from(frame.payload.as_slice());
+                        let mut buf = BytesMut::from(&frame.payload[..]);
                         match ControlFrame::decode(&mut buf) {
                             Ok(cf) => match cf {
                                 ControlFrame::IpRequest { requester_id } => {

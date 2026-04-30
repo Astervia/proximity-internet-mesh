@@ -7,7 +7,7 @@ fn sample_frame() -> MeshDataFrame {
         session_id: 42,
         ttl: 10,
         flags: DataFlags::IS_INTERNET,
-        payload: vec![0xCA, 0xFE],
+        payload: bytes::Bytes::from(vec![0xCA, 0xFE]),
     }
 }
 
@@ -53,7 +53,7 @@ fn reject_truncated_payload() {
 #[test]
 fn empty_payload() {
     let frame = MeshDataFrame {
-        payload: vec![],
+        payload: bytes::Bytes::new(),
         ..sample_frame()
     };
     let mut buf = BytesMut::new();

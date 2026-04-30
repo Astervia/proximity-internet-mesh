@@ -55,7 +55,7 @@ pub(crate) async fn send_single_mesh(
         session_id: 0,
         ttl,
         flags,
-        payload: payload.to_vec(),
+        payload: bytes::Bytes::copy_from_slice(payload),
     }
     .encode(&mut mesh_buf);
 
@@ -112,7 +112,7 @@ pub(crate) async fn run_route_advertisements(state: Arc<DaemonState>) {
                 TransportFrame {
                     frame_type: FrameType::RouteUpdate,
                     nonce: [0; 12],
-                    payload: buf.to_vec(),
+                    payload: buf.freeze(),
                     tag: [0; 16],
                 },
             )
@@ -168,7 +168,7 @@ pub(crate) async fn run_heartbeats(state: Arc<DaemonState>) {
         let tf = TransportFrame {
             frame_type: FrameType::Heartbeat,
             nonce: [0; 12],
-            payload: buf.to_vec(),
+            payload: buf.freeze(),
             tag: [0; 16],
         };
         for peer in &peers {

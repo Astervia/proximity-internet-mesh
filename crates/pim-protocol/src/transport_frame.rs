@@ -32,7 +32,7 @@ pub struct TransportFrame {
     /// AES-GCM nonce used for the encrypted payload.
     pub nonce: [u8; 12],
     /// Encrypted inner frame bytes.
-    pub payload: Vec<u8>,
+    pub payload: bytes::Bytes,
     /// Authentication tag for the encrypted payload.
     pub tag: [u8; 16],
 }
@@ -92,12 +92,13 @@ impl FrameCodec for TransportFrame {
         let mut nonce = [0u8; 12];
         nonce.copy_from_slice(&buf[8..20]);
 
-        let payload = buf[20..20 + length as usize].to_vec();
+        buf.advance(HEADER_SIZE);
+        let payload = buf.split_to(length as usize).freeze();
 
         let mut tag = [0u8; 16];
-        tag.copy_from_slice(&buf[20 + length as usize..total_size]);
+        tag.copy_from_slice(&buf[0..TAG_SIZE]);
 
-        buf.advance(total_size);
+        buf.advance(TAG_SIZE);
 
         Ok(TransportFrame {
             frame_type,
