@@ -60,7 +60,7 @@ pub(crate) async fn send_control(state: &Arc<DaemonState>, peer: &NodeId, cf: Co
     let tf = TransportFrame {
         frame_type: FrameType::Control,
         nonce: [0; 12],
-        payload: buf.to_vec(),
+        payload: buf.freeze(),
         tag: [0; 16],
     };
     send_frame_buffered(state, peer, tf).await;
@@ -89,7 +89,7 @@ pub(crate) async fn remove_peer(state: &Arc<DaemonState>, peer_id: NodeId) {
             TransportFrame {
                 frame_type: FrameType::RouteUpdate,
                 nonce: [0; 12],
-                payload: buf.to_vec(),
+                payload: buf.freeze(),
                 tag: [0; 16],
             },
         )
