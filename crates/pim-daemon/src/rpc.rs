@@ -397,7 +397,7 @@ async fn dispatch(state: &Arc<DaemonState>, req: &RpcRequest, write_tx: &WriteTx
         // §5.4 gateway
         "gateway.preflight" => Ok(build_gateway_preflight(state)),
         "gateway.enable" => method_gateway_enable(state, req.params.as_ref()).await,
-        "gateway.disable" => Ok(json!({ "active": false })),
+        "gateway.disable" => method_gateway_disable(state).await,
         "gateway.status" => Ok(build_gateway_status(state)),
         "gateway.subscribe" => Ok(json!({ "subscription_id": new_subscription_id() })),
         "gateway.unsubscribe" => Ok(Value::Null),
@@ -1026,6 +1026,73 @@ async fn method_gateway_enable(state: &Arc<DaemonState>, params: Option<&Value>)
         "active": false,
         "nat_interface": p.nat_interface,
         "advertised_routes": Vec::<String>::new(),
+        "requires_restart": true,
+        "written_to": path.to_string_lossy(),
+    }))
+}
+
+/// Persist `[gateway].enabled = false` into the live config and
+/// signal the UI that a restart is needed for the running daemon to
+/// actually drop the gateway role. Same caveat as `gateway.enable`:
+/// no in-place hot-toggle yet; the toml mutation just makes the next
+/// startup pick up the new state.
+async fn method_gateway_disable(state: &Arc<DaemonState>) -> RpcResult {
+    let path = state.config_path.clone();
+    let current = match tokio::fs::read_to_string(&path).await {
+        Ok(s) => s,
+        Err(e) => {
+            return Err((
+                codes::INTERNAL_ERROR,
+                format!("gateway.disable: read config {}: {e}", path.display()),
+                None,
+            ))
+        }
+    };
+    let mut doc: toml::Value = match toml::from_str(&current) {
+        Ok(v) => v,
+        Err(e) => {
+            return Err((
+                codes::INTERNAL_ERROR,
+                format!("gateway.disable: parse current toml: {e}"),
+                None,
+            ))
+        }
+    };
+    {
+        let table = doc.as_table_mut().ok_or((
+            codes::INTERNAL_ERROR,
+            "gateway.disable: config root not a table".to_string(),
+            None,
+        ))?;
+        let gw = table
+            .entry("gateway".to_string())
+            .or_insert_with(|| toml::Value::Table(Default::default()));
+        let gw_table = gw.as_table_mut().ok_or((
+            codes::INTERNAL_ERROR,
+            "gateway.disable: [gateway] not a table".to_string(),
+            None,
+        ))?;
+        gw_table.insert("enabled".to_string(), toml::Value::Boolean(false));
+    }
+    let new_toml = match toml::to_string_pretty(&doc) {
+        Ok(s) => s,
+        Err(e) => {
+            return Err((
+                codes::INTERNAL_ERROR,
+                format!("gateway.disable: serialize toml: {e}"),
+                None,
+            ))
+        }
+    };
+    if let Err(e) = super::fs_util::atomic_write(&path, new_toml.as_bytes()).await {
+        return Err((
+            codes::INTERNAL_ERROR,
+            format!("gateway.disable: write {}: {e}", path.display()),
+            None,
+        ));
+    }
+    Ok(json!({
+        "active": false,
         "requires_restart": true,
         "written_to": path.to_string_lossy(),
     }))
