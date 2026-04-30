@@ -3,7 +3,7 @@
 pim-bt-rfcomm-linux.py — Linux BT auto-discovery daemon over RFCOMM/SPP.
 
 Symmetric counterpart to `pim-bt-rfcomm-mac` (Swift). Auto-detects paired
-peers whose name starts with "PIM-", opens RFCOMM channel 1 (SPP), runs the
+peers whose name starts with "PIM-", opens RFCOMM channel 22 (SPP), runs the
 PIM handshake, and emits newline-delimited JSON events on stdout.
 
 Both inbound (we are RFCOMM acceptor) and outbound (we initiate) are
@@ -12,7 +12,7 @@ Hello/HelloAck — see PROTOCOL.md.
 
 Run (as root, because RFCOMM bind needs CAP_NET_BIND_SERVICE for ch < 31):
 
-    sudo sdptool add --channel=1 SP                         # one-time per boot
+    sudo sdptool add --channel=22 SP                         # one-time per boot
     sudo hciconfig hci0 piscan                              # discoverable + scannable
     sudo python3 pim-bt-rfcomm-linux.py --name=PIM-gateway  # foreground
 """
@@ -29,7 +29,7 @@ import threading
 import time
 from datetime import datetime, timezone
 
-CHANNEL = 1
+CHANNEL = 22
 HELLO_VERSION = 1
 MAX_FRAME = 65_536
 DEFAULT_PREFIX = "PIM-"

@@ -28,7 +28,7 @@ struct Args {
     var localName: String = "PIM-mac"
     var localNodeId: String = ""
     var prefix: String = "PIM-"
-    var rfcommChannel: BluetoothRFCOMMChannelID = 1
+    var rfcommChannel: BluetoothRFCOMMChannelID = 22
     var pollInterval: TimeInterval = 30
 }
 

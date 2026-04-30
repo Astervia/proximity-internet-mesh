@@ -30,7 +30,7 @@ is suitable to be piped into `pim-daemon` IPC consumer in a follow-up.
 
 ```bash
 sudo apt install bluez bluez-tools                          # if not already
-sudo sdptool add --channel=1 SP                             # one-time per boot
+sudo sdptool add --channel=22 SP                             # one-time per boot
 sudo hciconfig hci0 piscan                                  # discoverable + scannable
 sudo python3 spikes/bt-rfcomm/linux/pim-bt-rfcomm-linux.py \
     --name=PIM-gateway \

@@ -1,7 +1,7 @@
 # RFCOMM auto-discovery protocol
 
 > Wire format used by `pim-bt-rfcomm-mac` (Swift) ↔ `pim-bt-rfcomm-linux` (Python/Rust)
-> over RFCOMM channel 1, on top of Bluetooth Classic BR/EDR pairing.
+> over RFCOMM channel 22, on top of Bluetooth Classic BR/EDR pairing.
 
 ## Frame format
 
@@ -84,7 +84,7 @@ random 32-byte hex string per process and persist nothing.
 
 ## RFCOMM channel & SDP
 
-- Channel: **1** (SPP convention).
+- Channel: **22** (avoids BlueZ default SPP profile on ch 1)
 - Linux registers an SDP record: `sudo sdptool add --channel=1 SP`. This is
   required for some BR/EDR stacks to discover the SPP service; the Mac
   side can connect directly by channel ID even without SDP, but registration
