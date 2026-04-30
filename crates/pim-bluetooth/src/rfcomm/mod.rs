@@ -211,7 +211,7 @@ impl RfcommService {
             if cfg.outbound_enabled {
                 outbound::spawn(cfg, identity, events_tx, cancel.clone());
             }
-            return Ok(Self { cancel });
+            Ok(Self { cancel })
         }
         #[cfg(not(target_os = "linux"))]
         {

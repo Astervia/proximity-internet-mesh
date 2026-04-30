@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 use tokio::process::Command;
 use tokio::sync::{mpsc, Mutex};
-use tokio::time::{sleep, Duration};
+use tokio::time::sleep;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, warn};
 
@@ -95,14 +95,11 @@ async fn scan_paired_devices(prefix: &str) -> std::io::Result<Vec<(String, Strin
         .output()
         .await?;
     if !out.status.success() {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::Other,
-            format!(
-                "bluetoothctl exit {}: {}",
-                out.status,
-                String::from_utf8_lossy(&out.stderr)
-            ),
-        ));
+        return Err(std::io::Error::other(format!(
+            "bluetoothctl exit {}: {}",
+            out.status,
+            String::from_utf8_lossy(&out.stderr)
+        )));
     }
     let stdout = String::from_utf8_lossy(&out.stdout);
     Ok(parse_bluetoothctl_devices(&stdout, prefix))
