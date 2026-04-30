@@ -178,6 +178,7 @@ wifi_enabled="true"
 bt_enabled="true"
 wifi_mac_comment=""
 bt_mac_comment=""
+bt_rfcomm_enabled="true"
 
 if is_macos; then
     interface_name="utun0"
@@ -199,6 +200,7 @@ EOF
     bt_enabled="true"
     wifi_mac_comment="# Wi-Fi Direct is currently Linux-only; leave this disabled on macOS."
     bt_mac_comment="# macOS Bluetooth PAN uses the host Bluetooth stack. Install blueutil for radio discovery/pair/connect."
+    bt_rfcomm_enabled="false"
 fi
 
 config="$(cat <<EOF
@@ -276,6 +278,15 @@ peer_discovery_interval_ms = 2000
 bluetoothctl_timeout_s = 15
 discoverable_timeout_s = 180
 startup_timeout_ms = 15000
+
+[bluetooth_rfcomm]
+# Linux daemon RFCOMM direct-channel bridge. macOS uses the UI sidecar instead.
+enabled = ${bt_rfcomm_enabled}
+channel = 22
+device_name_prefix = "PIM-"
+outbound_enabled = true
+poll_interval_ms = 30000
+bridge_to_tcp = true
 
 # Optional static peers. Leave these commented if you want to rely entirely on
 # auto-discovery and outbound connection attempts.
