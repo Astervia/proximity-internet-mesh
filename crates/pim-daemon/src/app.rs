@@ -701,12 +701,10 @@ pub(crate) async fn run() -> Result<()> {
     // sidecar in the pim-ui Tauri bundle. macOS / Windows builds skip
     // this block entirely — the service returns UnsupportedPlatform.
     #[cfg(target_os = "linux")]
-    let mut rfcomm_handle: Option<(
+    let _rfcomm_handle: Option<(
         pim_bluetooth::rfcomm::RfcommService,
         tokio::task::JoinHandle<()>,
-    )> = None;
-    #[cfg(target_os = "linux")]
-    if config.bluetooth.enabled {
+    )> = if config.bluetooth.enabled {
         use pim_bluetooth::rfcomm::{LocalIdentity, RfcommConfig, RfcommEvent, RfcommService};
         let local_identity = LocalIdentity {
             node_id_hex: identity.node_id().to_hex(),
@@ -781,11 +779,16 @@ pub(crate) async fn run() -> Result<()> {
                         }
                     }
                 });
-                rfcomm_handle = Some((svc, log_handle));
+                Some((svc, log_handle))
             }
-            Err(e) => warn!("rfcomm service failed to start: {e}"),
+            Err(e) => {
+                warn!("rfcomm service failed to start: {e}");
+                None
+            }
         }
-    }
+    } else {
+        None
+    };
 
     // ── Background tasks ──────────────────────────────────────────────────
     tokio::spawn(run_reassembly_gc(state.clone()));
