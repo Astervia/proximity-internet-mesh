@@ -82,4 +82,12 @@ peer_discovery_interval_ms = 2000
 bluetoothctl_timeout_s = 15
 discoverable_timeout_s = 180
 startup_timeout_ms = 15000
+
+[bluetooth_rfcomm]
+enabled = false
+channel = 22
+device_name_prefix = "PIM-"
+outbound_enabled = true
+poll_interval_ms = 30000
+bridge_to_tcp = true
 "#;

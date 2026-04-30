@@ -8,6 +8,10 @@ fn bluetooth_disabled_config_skips_spawning() {
         !config.bluetooth.enabled,
         "Bluetooth PAN watcher must not start when enabled=false"
     );
+    assert!(
+        !config.bluetooth_rfcomm.enabled,
+        "Bluetooth RFCOMM must not start when enabled=false"
+    );
 }
 
 #[test]
@@ -47,6 +51,19 @@ fn bluetooth_discovery_construction_from_config() {
         vec!["192.168.44.2:9100".parse().unwrap()],
     )
     .unwrap();
+}
+
+#[test]
+fn bluetooth_rfcomm_config_is_independent_from_pan_config() {
+    let toml = "[node]\nname=\"t\"\n[bluetooth]\nenabled=false\n[bluetooth_rfcomm]\nenabled=true\nchannel=23\ndevice_name_prefix=\"MESH-\"\noutbound_enabled=false\npoll_interval_ms=15000\nbridge_to_tcp=true\n";
+    let config = Config::from_toml_str(toml).unwrap();
+    assert!(!config.bluetooth.enabled);
+    assert!(config.bluetooth_rfcomm.enabled);
+    assert_eq!(config.bluetooth_rfcomm.channel, 23);
+    assert_eq!(config.bluetooth_rfcomm.device_name_prefix, "MESH-");
+    assert!(!config.bluetooth_rfcomm.outbound_enabled);
+    assert_eq!(config.bluetooth_rfcomm.poll_interval_ms, 15_000);
+    assert!(config.bluetooth_rfcomm.bridge_to_tcp);
 }
 
 #[test]

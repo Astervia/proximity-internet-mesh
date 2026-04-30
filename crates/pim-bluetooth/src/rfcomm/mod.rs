@@ -27,6 +27,7 @@
 //! RFCOMM via the Tauri sidecar in `pim-ui` instead.
 
 use std::net::SocketAddr;
+use std::path::PathBuf;
 use std::time::{Duration, SystemTime};
 
 use serde::{Deserialize, Serialize};
@@ -103,6 +104,8 @@ pub struct RfcommConfig {
     /// Disable when this node is acceptor-only (e.g. embedded gateway
     /// with no UI to scan from).
     pub outbound_enabled: bool,
+    /// `bluetoothctl` command used by outbound paired-device scans.
+    pub bluetoothctl_command: PathBuf,
     /// Local TCP loopback address that post-handshake RFCOMM bytes are
     /// bridged onto. Should match the `pim-transport` TCP listener.
     /// `None` disables the bridge — discovery still emits `Discovered`
@@ -118,6 +121,7 @@ impl Default for RfcommConfig {
             prefix: DEFAULT_PREFIX.to_string(),
             poll_interval: Duration::from_secs(30),
             outbound_enabled: true,
+            bluetoothctl_command: PathBuf::from(super::DEFAULT_BLUETOOTHCTL_COMMAND),
             local_bridge_addr: None,
         }
     }

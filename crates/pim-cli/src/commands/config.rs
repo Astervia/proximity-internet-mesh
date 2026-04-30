@@ -69,7 +69,7 @@ pub(crate) fn cmd_config_generate(
 //   - Sections that are role-conditional (`[gateway]`) are emitted as
 //     a commented placeholder when the role is absent — preserving the
 //     existing CLI ergonomic where users uncomment-to-enable.
-//   - `[bluetooth]` and `[wifi_direct]` are emitted as full blocks with
+//   - `[bluetooth]`, `[bluetooth_rfcomm]`, and `[wifi_direct]` are emitted as full blocks with
 //     `enabled = false` (matching `BluetoothConfig::default()` /
 //     `WifiDirectConfig::default()` in pim-core), so all knobs are
 //     visible and users edit a single toggle to turn them on.
@@ -102,6 +102,7 @@ pub(crate) fn render_config_template(roles: &[NodeRole], override_name: Option<&
     push_relay(&mut out, is_relay, is_gateway);
     push_security(&mut out);
     push_bluetooth(&mut out, &node_name);
+    push_bluetooth_rfcomm(&mut out);
     push_wifi_direct(&mut out);
     push_static_peers(&mut out, peer_example, is_client, is_relay, is_gateway);
 
@@ -486,6 +487,37 @@ fn push_bluetooth(out: &mut String, node_name: &str) {
         "# Maximum time to wait for the PAN interface to appear before giving up (ms).",
     );
     push_line(out, "startup_timeout_ms = 15000");
+    push_blank(out);
+}
+
+fn push_bluetooth_rfcomm(out: &mut String) {
+    push_line(out, "[bluetooth_rfcomm]");
+    push_line(
+        out,
+        "# Bluetooth RFCOMM direct-channel discovery — Linux daemon, macOS sidecar.",
+    );
+    push_line(
+        out,
+        "# Independent from PAN/NAP: paired devices are dialed over RFCOMM, then bridged",
+    );
+    push_line(
+        out,
+        "# to the local TCP listener so normal PIM handshakes and sessions are reused.",
+    );
+    push_line(out, "enabled = false");
+    push_line(out, "# RFCOMM channel to bind and dial. Default 22 avoids common SPP conflicts.");
+    push_line(out, "channel = 22");
+    push_line(out, "# Filter paired Bluetooth devices by name prefix.");
+    push_line(out, "device_name_prefix = \"PIM-\"");
+    push_line(out, "# Dial paired matching devices periodically.");
+    push_line(out, "outbound_enabled = true");
+    push_line(out, "# Paired-device scan cadence (ms).");
+    push_line(out, "poll_interval_ms = 30000");
+    push_line(
+        out,
+        "# Bridge established RFCOMM sessions into [transport].listen_port over loopback.",
+    );
+    push_line(out, "bridge_to_tcp = true");
     push_blank(out);
 }
 
