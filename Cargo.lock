@@ -812,7 +812,7 @@ dependencies = [
 
 [[package]]
 name = "pim-bluetooth"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "libc",
  "pim-core",
@@ -826,7 +826,7 @@ dependencies = [
 
 [[package]]
 name = "pim-cli"
-version = "0.1.15"
+version = "0.1.16"
 dependencies = [
  "anyhow",
  "clap",
@@ -843,7 +843,7 @@ dependencies = [
 
 [[package]]
 name = "pim-core"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "bytes",
  "serde",
@@ -872,7 +872,7 @@ dependencies = [
 
 [[package]]
 name = "pim-daemon"
-version = "0.1.9"
+version = "0.1.10"
 dependencies = [
  "anyhow",
  "bytes",
