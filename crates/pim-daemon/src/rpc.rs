@@ -931,6 +931,13 @@ struct GatewayEnableParams {
 /// so the existing UI flow (which calls `onEnabled` on success) can
 /// detect the save vs an actual live toggle.
 async fn method_gateway_enable(state: &Arc<DaemonState>, params: Option<&Value>) -> RpcResult {
+    if !gateway_supported_on_this_platform() {
+        return Err((
+            codes::GATEWAY_NOT_SUPPORTED,
+            "gateway.enable: gateway mode requires linux or macos".into(),
+            None,
+        ));
+    }
     let p: GatewayEnableParams = match params {
         Some(v) => serde_json::from_value(v.clone()).map_err(|e| {
             (
@@ -1037,6 +1044,13 @@ async fn method_gateway_enable(state: &Arc<DaemonState>, params: Option<&Value>)
 /// no in-place hot-toggle yet; the toml mutation just makes the next
 /// startup pick up the new state.
 async fn method_gateway_disable(state: &Arc<DaemonState>) -> RpcResult {
+    if !gateway_supported_on_this_platform() {
+        return Err((
+            codes::GATEWAY_NOT_SUPPORTED,
+            "gateway.disable: gateway mode requires linux or macos".into(),
+            None,
+        ));
+    }
     let path = state.config_path.clone();
     let current = match tokio::fs::read_to_string(&path).await {
         Ok(s) => s,
@@ -1224,8 +1238,18 @@ async fn build_route_table(state: &Arc<DaemonState>) -> Value {
 
 // ── §5.4 gateway ─────────────────────────────────────────────────────────
 
+/// Whether this build of the daemon can act as a gateway. Linux + macOS
+/// only — Windows / other targets lack the NAT engine. Used both by
+/// `gateway.preflight` (to advertise capability) and by
+/// `gateway.{enable,disable}` (to short-circuit with
+/// `GATEWAY_NOT_SUPPORTED` instead of writing a config the daemon will
+/// never honor).
+fn gateway_supported_on_this_platform() -> bool {
+    cfg!(any(target_os = "linux", target_os = "macos"))
+}
+
 fn build_gateway_preflight(_state: &Arc<DaemonState>) -> Value {
-    let supported = cfg!(any(target_os = "linux", target_os = "macos"));
+    let supported = gateway_supported_on_this_platform();
     let platform = if cfg!(target_os = "linux") {
         "linux"
     } else if cfg!(target_os = "macos") {
