@@ -396,11 +396,7 @@ async fn dispatch(state: &Arc<DaemonState>, req: &RpcRequest, write_tx: &WriteTx
 
         // §5.4 gateway
         "gateway.preflight" => Ok(build_gateway_preflight(state)),
-        "gateway.enable" => Err((
-            codes::GATEWAY_NOT_SUPPORTED,
-            "gateway.enable: in-place toggle requires daemon restart in this version".into(),
-            None,
-        )),
+        "gateway.enable" => method_gateway_enable(state, req.params.as_ref()).await,
         "gateway.disable" => Ok(json!({ "active": false })),
         "gateway.status" => Ok(build_gateway_status(state)),
         "gateway.subscribe" => Ok(json!({ "subscription_id": new_subscription_id() })),
@@ -920,6 +916,122 @@ fn parse_node_id_hex(s: &str) -> Option<[u8; 16]> {
 }
 
 #[derive(Debug, Deserialize)]
+struct GatewayEnableParams {
+    nat_interface: String,
+    #[allow(dead_code)]
+    max_connections: Option<u32>,
+}
+
+/// Persist `[gateway].enabled = true` and `[gateway].nat_interface =
+/// <iface>` into the live config file, then ask the UI to restart the
+/// daemon. We don't yet hot-apply the gateway engine + iptables rules
+/// at runtime — that's substantial work behind GatewayEngine — so the
+/// UI-facing contract is: save now, restart daemon to actually serve.
+/// The result still mirrors `GatewayEnableResult` with `active: false`
+/// so the existing UI flow (which calls `onEnabled` on success) can
+/// detect the save vs an actual live toggle.
+async fn method_gateway_enable(state: &Arc<DaemonState>, params: Option<&Value>) -> RpcResult {
+    let p: GatewayEnableParams = match params {
+        Some(v) => serde_json::from_value(v.clone()).map_err(|e| {
+            (
+                codes::INVALID_PARAMS,
+                format!("gateway.enable: invalid params: {e}"),
+                None,
+            )
+        })?,
+        None => {
+            return Err((
+                codes::INVALID_PARAMS,
+                "gateway.enable: params required".into(),
+                None,
+            ))
+        }
+    };
+    if p.nat_interface.is_empty() {
+        return Err((
+            codes::INVALID_PARAMS,
+            "gateway.enable: nat_interface required".into(),
+            None,
+        ));
+    }
+    let path = state.config_path.clone();
+    let current = match tokio::fs::read_to_string(&path).await {
+        Ok(s) => s,
+        Err(e) => {
+            return Err((
+                codes::INTERNAL_ERROR,
+                format!("gateway.enable: read config {}: {e}", path.display()),
+                None,
+            ))
+        }
+    };
+    let mut doc: toml::Value = match toml::from_str(&current) {
+        Ok(v) => v,
+        Err(e) => {
+            return Err((
+                codes::INTERNAL_ERROR,
+                format!("gateway.enable: parse current toml: {e}"),
+                None,
+            ))
+        }
+    };
+    {
+        let table = doc.as_table_mut().ok_or((
+            codes::INTERNAL_ERROR,
+            "gateway.enable: config root not a table".to_string(),
+            None,
+        ))?;
+        let gw = table
+            .entry("gateway".to_string())
+            .or_insert_with(|| toml::Value::Table(Default::default()));
+        let gw_table = gw.as_table_mut().ok_or((
+            codes::INTERNAL_ERROR,
+            "gateway.enable: [gateway] not a table".to_string(),
+            None,
+        ))?;
+        gw_table.insert("enabled".to_string(), toml::Value::Boolean(true));
+        gw_table.insert(
+            "nat_interface".to_string(),
+            toml::Value::String(p.nat_interface.clone()),
+        );
+        if let Some(max) = p.max_connections {
+            gw_table.insert(
+                "max_connections".to_string(),
+                toml::Value::Integer(max as i64),
+            );
+        }
+    }
+    let new_toml = match toml::to_string_pretty(&doc) {
+        Ok(s) => s,
+        Err(e) => {
+            return Err((
+                codes::INTERNAL_ERROR,
+                format!("gateway.enable: serialize toml: {e}"),
+                None,
+            ))
+        }
+    };
+    if let Err(e) = super::fs_util::atomic_write(&path, new_toml.as_bytes()).await {
+        return Err((
+            codes::INTERNAL_ERROR,
+            format!("gateway.enable: write {}: {e}", path.display()),
+            None,
+        ));
+    }
+    // active=false is intentional — config saved, but the running
+    // daemon still has is_gateway=false until restart. UI mirrors this
+    // via the requires_restart hint (extra field; rpc-types ignores
+    // unknown JSON fields gracefully).
+    Ok(json!({
+        "active": false,
+        "nat_interface": p.nat_interface,
+        "advertised_routes": Vec::<String>::new(),
+        "requires_restart": true,
+        "written_to": path.to_string_lossy(),
+    }))
+}
+
+#[derive(Debug, Deserialize)]
 struct PeersRemoveParams {
     node_id: Option<String>,
     config_entry_id: Option<String>,
@@ -1070,8 +1182,91 @@ fn build_gateway_preflight(_state: &Arc<DaemonState>) -> Value {
                 },
             }
         ],
-        "suggested_nat_interfaces": Vec::<String>::new(),
+        "suggested_nat_interfaces": list_nat_candidate_interfaces(),
     })
+}
+
+/// Enumerate physical-ish network interfaces that a user might pick as
+/// the upstream NAT egress. Uses the cheapest per-platform listing
+/// (`ifconfig -l` on macOS, `/sys/class/net` on Linux) and filters out
+/// obviously-virtual or kernel-managed interfaces (loopback, utun,
+/// PIM's own TUN, bridges, docker, awdl/llw/anpi on macOS, etc.). The
+/// UI picker calls this via `gateway.preflight`.
+fn list_nat_candidate_interfaces() -> Vec<String> {
+    let names: Vec<String> = {
+        #[cfg(target_os = "macos")]
+        {
+            std::process::Command::new("ifconfig")
+                .arg("-l")
+                .output()
+                .ok()
+                .filter(|o| o.status.success())
+                .map(|o| {
+                    String::from_utf8_lossy(&o.stdout)
+                        .split_whitespace()
+                        .map(String::from)
+                        .collect()
+                })
+                .unwrap_or_default()
+        }
+        #[cfg(target_os = "linux")]
+        {
+            std::fs::read_dir("/sys/class/net")
+                .ok()
+                .map(|rd| {
+                    rd.filter_map(|e| e.ok())
+                        .map(|e| e.file_name().to_string_lossy().into_owned())
+                        .collect()
+                })
+                .unwrap_or_default()
+        }
+        #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+        {
+            Vec::<String>::new()
+        }
+    };
+    names.into_iter().filter(is_nat_candidate).collect()
+}
+
+/// Heuristic for whether a kernel-reported interface is plausibly a
+/// real upstream NAT egress vs. a virtual/internal interface. Pulled
+/// out for unit testability.
+fn is_nat_candidate(name: &String) -> bool {
+    if name.is_empty() {
+        return false;
+    }
+    // Loopback (Linux: lo, macOS: lo0).
+    if name == "lo" || name == "lo0" {
+        return false;
+    }
+    // PIM's own TUN, the macOS userspace tunnel framework, and Apple's
+    // peer-to-peer / nearby-discovery interfaces — never useful as
+    // egress.
+    if name.starts_with("utun")
+        || name.starts_with("pim")
+        || name.starts_with("awdl")
+        || name.starts_with("llw")
+        || name.starts_with("anpi")
+        || name == "ap1"
+    {
+        return false;
+    }
+    // Linux: bridges, container/VM virtual NICs, tunnels.
+    if name.starts_with("br-")
+        || name.starts_with("bridge")
+        || name.starts_with("docker")
+        || name.starts_with("veth")
+        || name.starts_with("vmnet")
+        || name.starts_with("tun")
+        || name.starts_with("tap")
+    {
+        return false;
+    }
+    // gif / stf are macOS legacy IPv6/IPv4 transition interfaces.
+    if name.starts_with("gif") || name.starts_with("stf") {
+        return false;
+    }
+    true
 }
 
 fn build_gateway_status(state: &Arc<DaemonState>) -> Value {
