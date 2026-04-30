@@ -1230,7 +1230,11 @@
             }
 
             document.addEventListener("keydown", (e) => {
-                if (e.key >= "0" && e.key <= "9") {
+                if (e.key === "0" && digitBuffer === "") {
+                    goTo(0);
+                    return;
+                }
+                if (e.key >= "1" && e.key <= "9") {
                     digitBuffer += e.key;
                     clearTimeout(digitTimer);
                     // Flush immediately once the buffer can only match one valid slide
