@@ -1,6 +1,6 @@
 [package]
 name = "pim-tun"
-version = "0.1.2"
+version = "0.1.3"
 edition = "2021"
 description = "TUN virtual network interface management for the Proximity Internet Mesh"
 license.workspace = true

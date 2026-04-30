@@ -1,6 +1,6 @@
 [package]
 name = "pim-core"
-version = "0.1.3"
+version = "0.1.4"
 edition = "2021"
 description = "Core types, traits, and configuration for the Proximity Internet Mesh protocol"
 license.workspace = true
