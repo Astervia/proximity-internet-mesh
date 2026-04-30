@@ -2,6 +2,9 @@
 name = "pim-tun"
 version = "0.1.2"
 edition = "2021"
+description = "TUN virtual network interface management for the Proximity Internet Mesh"
+license.workspace = true
+repository.workspace = true
 
 [dependencies]
 pim-core = { workspace = true }

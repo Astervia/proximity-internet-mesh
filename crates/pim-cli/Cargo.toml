@@ -2,6 +2,9 @@
 name = "pim-cli"
 version = "0.1.13"
 edition = "2021"
+description = "Command-line interface for the Proximity Internet Mesh daemon"
+license.workspace = true
+repository.workspace = true
 
 [[bin]]
 name = "pim"

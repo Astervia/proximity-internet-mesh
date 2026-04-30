@@ -2,6 +2,9 @@
 name = "pim-daemon"
 version = "0.1.7"
 edition = "2021"
+description = "Background daemon process for the Proximity Internet Mesh"
+license.workspace = true
+repository.workspace = true
 
 [dependencies]
 pim-bluetooth = { workspace = true }

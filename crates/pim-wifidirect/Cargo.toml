@@ -2,6 +2,9 @@
 name = "pim-wifidirect"
 version = "0.1.2"
 edition = "2021"
+description = "Wi-Fi Direct transport implementation for the Proximity Internet Mesh"
+license.workspace = true
+repository.workspace = true
 
 [dependencies]
 pim-core = { workspace = true }

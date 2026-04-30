@@ -2,6 +2,9 @@
 name = "pim-protocol"
 version = "0.1.1"
 edition = "2021"
+description = "Wire protocol types and frame serialization for the Proximity Internet Mesh"
+license.workspace = true
+repository.workspace = true
 
 [dependencies]
 pim-core = { workspace = true }

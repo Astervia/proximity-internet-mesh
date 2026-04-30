@@ -2,6 +2,9 @@
 name = "pim-routing"
 version = "0.1.1"
 edition = "2021"
+description = "Mesh routing algorithms for the Proximity Internet Mesh"
+license.workspace = true
+repository.workspace = true
 
 [dependencies]
 pim-core = { workspace = true }

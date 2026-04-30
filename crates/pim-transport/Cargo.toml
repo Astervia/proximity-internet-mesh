@@ -2,6 +2,9 @@
 name = "pim-transport"
 version = "0.1.3"
 edition = "2021"
+description = "Transport abstraction layer and adapters for the Proximity Internet Mesh"
+license.workspace = true
+repository.workspace = true
 
 [dependencies]
 libc = { workspace = true }
