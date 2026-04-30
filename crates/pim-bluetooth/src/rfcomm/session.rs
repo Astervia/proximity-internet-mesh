@@ -139,7 +139,9 @@ async fn handshake(
         }
         let their_v = v.get("v").and_then(|x| x.as_u64()).unwrap_or(0) as u8;
         if their_v != HELLO_VERSION {
-            return Err(format!("version mismatch: peer={} ours={}", their_v, HELLO_VERSION).into());
+            return Err(
+                format!("version mismatch: peer={} ours={}", their_v, HELLO_VERSION).into(),
+            );
         }
         let their_node = v
             .get("node_id")

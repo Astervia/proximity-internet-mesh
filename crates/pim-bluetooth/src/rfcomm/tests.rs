@@ -27,7 +27,6 @@ fn bdaddr_kernel_endianness() {
     assert_eq!(parsed, expected);
 }
 
-
 #[test]
 fn iso_timestamp_format() {
     let s = super::now_iso();

@@ -137,10 +137,7 @@ pub enum RfcommEvent {
     },
     /// Channel closed. `bd_addr` mirrors the `Discovered` event so the
     /// daemon can mark the corresponding peer offline.
-    Lost {
-        bd_addr: String,
-        reason: String,
-    },
+    Lost { bd_addr: String, reason: String },
     /// Outbound dial that did not produce a working channel (peer not
     /// listening, host down, etc). Useful for UI noise filtering.
     OpenFailed {
@@ -151,10 +148,7 @@ pub enum RfcommEvent {
     /// Catch-all error. `code` mirrors the `-33000..=-33099` range
     /// reserved for `bluetooth-coc` in the Phase 7 spec doc; same
     /// numbering applies to RFCOMM since they share the proto subsystem.
-    Error {
-        code: i32,
-        message: String,
-    },
+    Error { code: i32, message: String },
 }
 
 /// Public errors. The daemon converts these into `RfcommEvent::Error`
@@ -165,10 +159,7 @@ pub enum RfcommError {
     UnsupportedPlatform,
 
     #[error("bind RFCOMM channel {channel}: {source}")]
-    BindFailed {
-        channel: u8,
-        source: std::io::Error,
-    },
+    BindFailed { channel: u8, source: std::io::Error },
 
     #[error("connect to {bd_addr} channel {channel}: {source}")]
     ConnectFailed {
@@ -211,7 +202,12 @@ impl RfcommService {
         #[cfg(target_os = "linux")]
         {
             let cancel = CancellationToken::new();
-            listener::spawn(cfg.clone(), identity.clone(), events_tx.clone(), cancel.clone())?;
+            listener::spawn(
+                cfg.clone(),
+                identity.clone(),
+                events_tx.clone(),
+                cancel.clone(),
+            )?;
             if cfg.outbound_enabled {
                 outbound::spawn(cfg, identity, events_tx, cancel.clone());
             }
@@ -290,7 +286,20 @@ fn ymdhms_from_unix(t: u64) -> (u32, u32, u32, u32, u32, u32) {
         year += 1;
     }
     let leap = is_leap(year);
-    let month_days: [i64; 12] = [31, if leap { 29 } else { 28 }, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+    let month_days: [i64; 12] = [
+        31,
+        if leap { 29 } else { 28 },
+        31,
+        30,
+        31,
+        30,
+        31,
+        31,
+        30,
+        31,
+        30,
+        31,
+    ];
     let mut month = 1u32;
     for d in month_days {
         if days < d {
