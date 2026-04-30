@@ -35,7 +35,7 @@ pub fn spawn(
                 _ = sleep(cfg.poll_interval) => {}
             }
 
-            let paired = match scan_paired_devices(&cfg.prefix).await {
+            let paired = match scan_paired_devices(&cfg.bluetoothctl_command, &cfg.prefix).await {
                 Ok(p) => p,
                 Err(e) => {
                     warn!(target: "pim-bluetooth-rfcomm", "scan failed: {e}");
@@ -99,8 +99,11 @@ pub fn spawn(
 /// Run `bluetoothctl devices Paired` and parse output. Each line:
 /// `Device AA:BB:CC:DD:EE:FF Name With Spaces`. Filter to those whose
 /// name starts with `prefix`.
-async fn scan_paired_devices(prefix: &str) -> std::io::Result<Vec<(String, String)>> {
-    let out = Command::new("bluetoothctl")
+async fn scan_paired_devices(
+    bluetoothctl_command: &std::path::Path,
+    prefix: &str,
+) -> std::io::Result<Vec<(String, String)>> {
+    let out = Command::new(bluetoothctl_command)
         .args(["devices", "Paired"])
         .output()
         .await?;

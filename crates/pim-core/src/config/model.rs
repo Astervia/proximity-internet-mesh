@@ -39,6 +39,9 @@ pub struct Config {
     /// Bluetooth PAN peer link monitoring and address handoff settings.
     #[serde(default)]
     pub bluetooth: BluetoothConfig,
+    /// Bluetooth RFCOMM direct-channel discovery and TCP bridge settings.
+    #[serde(default)]
+    pub bluetooth_rfcomm: BluetoothRfcommConfig,
     /// Statically configured peers. Optional — nodes can rely entirely on discovery when empty.
     #[serde(default)]
     pub peers: Vec<PeerConfig>,
@@ -294,6 +297,34 @@ pub struct BluetoothConfig {
     pub startup_timeout_ms: u64,
 }
 
+/// Bluetooth RFCOMM direct-channel configuration.
+///
+/// RFCOMM is independent from Bluetooth PAN/NAP. It opens a Bluetooth RFCOMM
+/// channel to paired devices whose names match `device_name_prefix`, exchanges
+/// PIM identity frames, and can bridge the resulting byte stream to the local
+/// TCP transport listener so the rest of the daemon sees a normal peer session.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct BluetoothRfcommConfig {
+    /// Enable the Linux RFCOMM service. Defaults to `false` (opt-in).
+    #[serde(default)]
+    pub enabled: bool,
+    /// RFCOMM channel to bind and dial.
+    #[serde(default = "default_bluetooth_rfcomm_channel")]
+    pub channel: u8,
+    /// Prefix used to identify paired PIM peers by Bluetooth device name.
+    #[serde(default = "default_bluetooth_device_name_prefix")]
+    pub device_name_prefix: String,
+    /// Enable outbound paired-device scanning and dialing.
+    #[serde(default = "default_bluetooth_rfcomm_outbound_enabled")]
+    pub outbound_enabled: bool,
+    /// Poll interval for outbound paired-device scans, in milliseconds.
+    #[serde(default = "default_bluetooth_rfcomm_poll_interval_ms")]
+    pub poll_interval_ms: u64,
+    /// Bridge established RFCOMM sessions to the local TCP transport listener.
+    #[serde(default = "default_bluetooth_rfcomm_bridge_to_tcp")]
+    pub bridge_to_tcp: bool,
+}
+
 // Default value functions
 
 fn default_data_dir() -> PathBuf {
@@ -476,6 +507,22 @@ fn default_bluetooth_startup_timeout_ms() -> u64 {
     15_000
 }
 
+fn default_bluetooth_rfcomm_channel() -> u8 {
+    22
+}
+
+fn default_bluetooth_rfcomm_outbound_enabled() -> bool {
+    true
+}
+
+fn default_bluetooth_rfcomm_poll_interval_ms() -> u64 {
+    30_000
+}
+
+fn default_bluetooth_rfcomm_bridge_to_tcp() -> bool {
+    true
+}
+
 impl Default for InterfaceConfig {
     fn default() -> Self {
         Self {
@@ -569,6 +616,19 @@ impl Default for BluetoothConfig {
             bluetoothctl_timeout_s: default_bluetoothctl_timeout_s(),
             discoverable_timeout_s: default_bluetooth_discoverable_timeout_s(),
             startup_timeout_ms: default_bluetooth_startup_timeout_ms(),
+        }
+    }
+}
+
+impl Default for BluetoothRfcommConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            channel: default_bluetooth_rfcomm_channel(),
+            device_name_prefix: default_bluetooth_device_name_prefix(),
+            outbound_enabled: default_bluetooth_rfcomm_outbound_enabled(),
+            poll_interval_ms: default_bluetooth_rfcomm_poll_interval_ms(),
+            bridge_to_tcp: default_bluetooth_rfcomm_bridge_to_tcp(),
         }
     }
 }

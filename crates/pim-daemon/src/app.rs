@@ -709,23 +709,25 @@ pub(crate) async fn run() -> Result<()> {
 
     // ── Phase 7: Bluetooth RFCOMM auto-discovery (Linux-only impl) ─────────
     //
-    // Independent of BT-PAN above. Binds RFCOMM channel 22, advertises
-    // `PIM-<node>` identity, dials any paired peer whose name starts
-    // with `PIM-`. Mac side pairs via the `pim-bt-rfcomm-mac` Swift
-    // sidecar in the pim-ui Tauri bundle. macOS / Windows builds skip
-    // this block entirely — the service returns UnsupportedPlatform.
+    // Independent of BT-PAN above. Binds the configured RFCOMM channel,
+    // advertises `<prefix><node>` identity, and dials paired peers whose
+    // names start with the configured prefix. Mac side pairs via the
+    // `pim-bt-rfcomm-mac` Swift sidecar in the pim-ui Tauri bundle.
+    // macOS / Windows builds skip this block entirely.
     #[cfg(target_os = "linux")]
     let _rfcomm_handle: Option<(
         pim_bluetooth::rfcomm::RfcommService,
         tokio::task::JoinHandle<()>,
-    )> = if config.bluetooth.enabled {
+    )> = if config.bluetooth_rfcomm.enabled {
         use pim_bluetooth::rfcomm::{LocalIdentity, RfcommConfig, RfcommEvent, RfcommService};
+        let rfcomm_prefix = if config.bluetooth_rfcomm.device_name_prefix.is_empty() {
+            pim_bluetooth::rfcomm::DEFAULT_PREFIX.to_string()
+        } else {
+            config.bluetooth_rfcomm.device_name_prefix.clone()
+        };
         let local_identity = LocalIdentity {
             node_id_hex: identity.node_id().to_hex(),
-            name: format!(
-                "{}{}",
-                config.bluetooth.device_name_prefix, config.node.name
-            ),
+            name: format!("{rfcomm_prefix}{}", config.node.name),
             caps: {
                 let mut caps = vec!["mesh-v1".to_string()];
                 if config.gateway.enabled {
@@ -736,21 +738,22 @@ pub(crate) async fn run() -> Result<()> {
         };
         let rfcomm_cfg = RfcommConfig {
             enabled: true,
-            channel: pim_bluetooth::rfcomm::DEFAULT_CHANNEL,
-            prefix: if config.bluetooth.device_name_prefix.is_empty() {
-                pim_bluetooth::rfcomm::DEFAULT_PREFIX.to_string()
-            } else {
-                config.bluetooth.device_name_prefix.clone()
-            },
-            poll_interval: std::time::Duration::from_secs(30),
-            outbound_enabled: true,
+            channel: config.bluetooth_rfcomm.channel,
+            prefix: rfcomm_prefix,
+            poll_interval: std::time::Duration::from_millis(
+                config.bluetooth_rfcomm.poll_interval_ms.max(1),
+            ),
+            outbound_enabled: config.bluetooth_rfcomm.outbound_enabled,
+            bluetoothctl_command: bluetoothctl_command(),
             // Bridge post-handshake bytes onto the existing TCP
             // transport listener via loopback so an RFCOMM peer looks
             // like a normal TCP peer to the rest of the kernel.
-            local_bridge_addr: Some(std::net::SocketAddr::new(
-                std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST),
-                transport_listen_port,
-            )),
+            local_bridge_addr: config.bluetooth_rfcomm.bridge_to_tcp.then_some(
+                std::net::SocketAddr::new(
+                    std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST),
+                    transport_listen_port,
+                ),
+            ),
         };
         let (events_tx, mut events_rx) = tokio::sync::mpsc::channel(64);
         match RfcommService::start(rfcomm_cfg, local_identity, events_tx) {
@@ -801,6 +804,7 @@ pub(crate) async fn run() -> Result<()> {
             }
         }
     } else {
+        debug!("Bluetooth RFCOMM disabled by config");
         None
     };
 
