@@ -136,6 +136,20 @@ set_manifest_version() {
     perl -0pi -e 's/^version = "[^"]*"/version = "'"$new_version"'"/m' "$manifest"
 }
 
+# Syncs the version inside the [workspace.dependencies] inline-table for a
+# given crate, e.g.:  pim-foo = { path = "...", version = "OLD" }  ->  "NEW"
+# No-ops silently for crates without an entry there (pim-daemon, pim-cli).
+#
+# Uses the /e modifier so the replacement is evaluated as Perl code with $1/$2
+# variables — avoids the \10 octal-escape bug that occurs when \1 is followed
+# by a digit (all our versions start with 0).
+set_workspace_dep_version() {
+    local crate_name="$1"
+    local new_version="$2"
+
+    perl -0pi -e 'my $v="'"$new_version"'"; s/^('"$crate_name"'\s*=\s*\{[^}]*version\s*=\s*")[^"]*(")/my($p,$s)=($1,$2);"$p$v$s"/gme' Cargo.toml
+}
+
 crate_changed_since_tag() {
     local tag="$1"
     local manifest="$2"
@@ -258,12 +272,15 @@ for manifest in "${changed_manifests[@]}"; do
     current_version="$(crate_version_from_manifest "$manifest")"
     next_version="$(bump_version "$current_version" "$CHANGED_BUMP_KIND")"
     if [[ "$current_version" != "$next_version" ]]; then
+        crate_name="$(crate_name_from_manifest "$manifest")"
         set_manifest_version "$manifest" "$next_version"
+        set_workspace_dep_version "$crate_name" "$next_version"
     fi
 done
 
 if [[ "$MASTER_CURRENT_VERSION" != "$MASTER_TARGET_VERSION" ]]; then
     set_manifest_version "$MASTER_MANIFEST" "$MASTER_TARGET_VERSION"
+    set_workspace_dep_version "$MASTER_CRATE" "$MASTER_TARGET_VERSION"
 fi
 
 cargo update --workspace
@@ -279,6 +296,7 @@ else
     done
 fi
 echo "  $MASTER_CRATE: $(crate_version_from_manifest "$MASTER_MANIFEST")"
+echo "  Cargo.toml [workspace.dependencies] version entries synced."
 echo ""
 echo "Next manual steps:"
 echo "  1. Review manifest and Cargo.lock changes."
