@@ -10,9 +10,7 @@ use tracing::{debug, warn};
 
 use super::frame::{decode_frame, encode_frame, FrameError};
 use super::socket::RfcommStream;
-use super::{
-    format_bdaddr, node_id_to_hex, now_iso, BdAddr, LocalIdentity, RfcommEvent, HELLO_VERSION,
-};
+use super::{format_bdaddr, now_iso, BdAddr, LocalIdentity, RfcommEvent, HELLO_VERSION};
 
 #[derive(Debug, Serialize, Deserialize)]
 struct HelloMsg<'a> {
@@ -95,7 +93,7 @@ async fn handshake(
     events_tx: &mpsc::Sender<RfcommEvent>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let local_caps = identity.caps.clone();
-    let local_node_hex = node_id_to_hex(&identity.node_id);
+    let local_node_hex = identity.node_id_hex.clone();
     let local_name = identity.name.clone();
 
     let send_msg = |kind: &str| -> Result<Vec<u8>, FrameError> {

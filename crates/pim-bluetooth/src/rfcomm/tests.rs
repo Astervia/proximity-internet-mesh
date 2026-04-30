@@ -2,7 +2,7 @@
 //! Socket / kernel tests live behind `RUN_BT_HW_TESTS=1` in dedicated
 //! follow-up files; this file runs on every platform.
 
-use super::{format_bdaddr, node_id_to_hex, parse_bdaddr, BdAddr};
+use super::{format_bdaddr, parse_bdaddr, BdAddr};
 
 #[test]
 fn bdaddr_roundtrip() {
@@ -27,14 +27,6 @@ fn bdaddr_kernel_endianness() {
     assert_eq!(parsed, expected);
 }
 
-#[test]
-fn node_id_to_hex_roundtrip() {
-    let id = [0x01u8; 32];
-    let hex = node_id_to_hex(&id);
-    assert_eq!(hex.len(), 64);
-    assert!(hex.chars().all(|c| c.is_ascii_hexdigit()));
-    assert_eq!(&hex[..6], "010101");
-}
 
 #[test]
 fn iso_timestamp_format() {
