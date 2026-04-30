@@ -1225,7 +1225,29 @@ fn list_nat_candidate_interfaces() -> Vec<String> {
             Vec::<String>::new()
         }
     };
-    names.into_iter().filter(is_nat_candidate).collect()
+    names
+        .into_iter()
+        .filter(is_nat_candidate)
+        .filter(|name| interface_has_ipv4(name))
+        .collect()
+}
+
+/// Returns true iff the interface currently has at least one IPv4
+/// address bound. Filters out interfaces that are UP-but-unconfigured
+/// (Thunderbolt bridges, USB-C dongles without DHCP, secondary Wi-Fi
+/// adapters with no association). Without this check, the picker
+/// surfaces interfaces that crash the gateway runtime with
+/// `failed to resolve IPv4 address for <iface>`.
+fn interface_has_ipv4(name: &str) -> bool {
+    // `ifconfig <iface>` works on both macOS and Linux; we just need
+    // any line containing "inet " (IPv4 only — `inet6` is too loose
+    // since most interfaces have a link-local v6).
+    let out = match std::process::Command::new("ifconfig").arg(name).output() {
+        Ok(o) if o.status.success() => o,
+        _ => return false,
+    };
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    stdout.lines().any(|l| l.trim_start().starts_with("inet "))
 }
 
 /// Heuristic for whether a kernel-reported interface is plausibly a
