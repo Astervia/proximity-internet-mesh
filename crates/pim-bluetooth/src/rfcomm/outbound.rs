@@ -76,8 +76,18 @@ pub fn spawn(
                 let events_tx = events_tx.clone();
                 let cancel = cancel.clone();
                 let active = active.clone();
+                let bridge_addr = cfg.local_bridge_addr;
                 tokio::spawn(async move {
-                    session::run(stream, bd_addr, true, identity, events_tx, cancel).await;
+                    session::run(
+                        stream,
+                        bd_addr,
+                        true,
+                        identity,
+                        events_tx,
+                        cancel,
+                        bridge_addr,
+                    )
+                    .await;
                     let mut set = active.lock().await;
                     set.remove(&bd_addr);
                 });

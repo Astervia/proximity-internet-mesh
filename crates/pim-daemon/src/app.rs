@@ -732,6 +732,13 @@ pub(crate) async fn run() -> Result<()> {
             },
             poll_interval: std::time::Duration::from_secs(30),
             outbound_enabled: true,
+            // Bridge post-handshake bytes onto the existing TCP
+            // transport listener via loopback so an RFCOMM peer looks
+            // like a normal TCP peer to the rest of the kernel.
+            local_bridge_addr: Some(std::net::SocketAddr::new(
+                std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST),
+                transport.listen_addr.port(),
+            )),
         };
         let (events_tx, mut events_rx) = tokio::sync::mpsc::channel(64);
         match RfcommService::start(rfcomm_cfg, local_identity, events_tx) {
