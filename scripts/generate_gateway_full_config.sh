@@ -223,6 +223,7 @@ bt_nap_bridge="br-bt"
 bt_nap_bridge_addr="192.168.44.1/24"
 bt_dhcp_enabled="true"
 bt_request_dhcp="false"
+bt_rfcomm_enabled="true"
 
 if is_macos; then
     interface_name="utun0"
@@ -238,6 +239,7 @@ if is_macos; then
     bt_nap_bridge="bridge0"
     bt_dhcp_enabled="false"
     bt_request_dhcp="false"
+    bt_rfcomm_enabled="false"
 else
     interface_name="pim0"
     review_cmd_1="#   ip route get 1.1.1.1"
@@ -334,6 +336,15 @@ peer_discovery_interval_ms = 2000
 bluetoothctl_timeout_s = 15
 discoverable_timeout_s = 180
 startup_timeout_ms = 15000
+
+[bluetooth_rfcomm]
+# Linux daemon RFCOMM direct-channel bridge. macOS uses the UI sidecar instead.
+enabled = ${bt_rfcomm_enabled}
+channel = 22
+device_name_prefix = "PIM-"
+outbound_enabled = true
+poll_interval_ms = 30000
+bridge_to_tcp = true
 
 # Optional static peers. Leave these commented if you want to rely entirely on
 # auto-discovery and inbound connections.
