@@ -67,11 +67,15 @@ pub const DEFAULT_PREFIX: &str = "PIM-";
 pub const HELLO_VERSION: u8 = 1;
 
 /// Local identity carried in the Hello / HelloAck frames. Provided by
-/// the daemon (typically `pim-core::Identity` on Linux).
+/// the daemon (typically `pim-core::NodeId` on Linux, formatted via
+/// `to_hex()`).
 #[derive(Debug, Clone)]
 pub struct LocalIdentity {
-    /// 32-byte node id (hex-encoded on the wire).
-    pub node_id: [u8; 32],
+    /// Pre-formatted hex node id. Kernel `NodeId` is 16 bytes / 32 hex
+    /// chars; spike Mac side advertises 64 hex chars (random 32 bytes).
+    /// Either is fine on the wire — this field accepts whatever the
+    /// daemon hands in.
+    pub node_id_hex: String,
     /// Local advertised name; the peer-side prefix filter expects
     /// `cfg.prefix` (default `PIM-`). The daemon owns the format.
     pub name: String,
@@ -250,11 +254,6 @@ pub fn parse_bdaddr(s: &str) -> Option<BdAddr> {
         out[5 - i] = u8::from_str_radix(p, 16).ok()?;
     }
     Some(out)
-}
-
-/// Convert a 32-byte node id to 64-char lowercase hex.
-pub fn node_id_to_hex(id: &[u8; 32]) -> String {
-    id.iter().map(|b| format!("{:02x}", b)).collect()
 }
 
 /// ISO-8601 timestamp for the current instant.
