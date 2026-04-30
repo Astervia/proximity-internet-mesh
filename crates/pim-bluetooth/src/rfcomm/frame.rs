@@ -132,6 +132,9 @@ mod codec_tests {
     #[test]
     fn rejects_zero_length_in_stream() {
         let mut buf = vec![0u8, 0, 0, 0];
-        assert!(matches!(decode_frame(&mut buf), Err(FrameError::EmptyFrame)));
+        assert!(matches!(
+            decode_frame(&mut buf),
+            Err(FrameError::EmptyFrame)
+        ));
     }
 }

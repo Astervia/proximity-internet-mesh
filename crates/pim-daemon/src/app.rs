@@ -707,9 +707,7 @@ pub(crate) async fn run() -> Result<()> {
     )> = None;
     #[cfg(target_os = "linux")]
     if config.bluetooth.enabled {
-        use pim_bluetooth::rfcomm::{
-            LocalIdentity, RfcommConfig, RfcommEvent, RfcommService,
-        };
+        use pim_bluetooth::rfcomm::{LocalIdentity, RfcommConfig, RfcommEvent, RfcommService};
         let local_identity = LocalIdentity {
             node_id_hex: identity.node_id().to_hex(),
             name: format!(
@@ -765,7 +763,9 @@ pub(crate) async fn run() -> Result<()> {
                             RfcommEvent::Lost { bd_addr, reason } => {
                                 info!(bd_addr = %bd_addr, reason = %reason, "rfcomm peer lost")
                             }
-                            RfcommEvent::OpenFailed { bd_addr, reason, .. } => {
+                            RfcommEvent::OpenFailed {
+                                bd_addr, reason, ..
+                            } => {
                                 debug!(bd_addr = %bd_addr, reason = %reason, "rfcomm open failed")
                             }
                             RfcommEvent::Error { code, message } => {

@@ -13,9 +13,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::{debug, warn};
 
 use super::socket;
-use super::{
-    parse_bdaddr, session, BdAddr, LocalIdentity, RfcommConfig, RfcommEvent,
-};
+use super::{parse_bdaddr, session, BdAddr, LocalIdentity, RfcommConfig, RfcommEvent};
 
 /// Spawn the outbound discovery task. Cancels cleanly on the cancel
 /// token; never returns errors directly (errors become RfcommEvent).
@@ -112,10 +110,7 @@ async fn scan_paired_devices(prefix: &str) -> std::io::Result<Vec<(String, Strin
 
 /// Parse `bluetoothctl devices [Paired]` output into a list of
 /// `(bd_addr, name)` pairs filtered by `prefix`. Pulled out for unit test.
-pub(crate) fn parse_bluetoothctl_devices(
-    stdout: &str,
-    prefix: &str,
-) -> Vec<(String, String)> {
+pub(crate) fn parse_bluetoothctl_devices(stdout: &str, prefix: &str) -> Vec<(String, String)> {
     let mut out = Vec::new();
     for line in stdout.lines() {
         let line = line.trim();
