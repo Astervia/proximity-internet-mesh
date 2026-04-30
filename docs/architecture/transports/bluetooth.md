@@ -15,6 +15,12 @@ Once that interface is up, PIM feeds the discovered peer IPs into the existing
 `TcpTransport`, so the normal handshake, session, routing, and gateway logic
 remain unchanged. Static peer IPs remain available as a fallback.
 
+The Linux daemon also supports an independent RFCOMM path. RFCOMM scans paired
+devices by name prefix, opens a configured RFCOMM channel, exchanges PIM
+identity frames, and bridges the RFCOMM byte stream to the local TCP transport
+listener. That makes an RFCOMM peer behave like a normal authenticated PIM
+session after the channel is established.
+
 ## Scope
 
 - Bluetooth is opt-in via `[bluetooth] enabled = true`
@@ -22,6 +28,7 @@ remain unchanged. Static peer IPs remain available as a fallback.
 - Linux requests PAN/NAP setup via `bt-network`; macOS uses the host stack's connection flow
 - The daemon waits for the PAN interface to become ready
 - When ready, it discovers peer IPs and emits `SocketAddr`s using `[transport] listen_port`
+- RFCOMM is opt-in via `[bluetooth_rfcomm] enabled = true` and does not require a PAN interface
 
 This keeps Bluetooth aligned with the Wi-Fi Direct design: link setup first,
 standard TCP connection second.
@@ -48,6 +55,14 @@ peer_discovery_interval_ms = 2000
 bluetoothctl_timeout_s = 15
 discoverable_timeout_s = 180
 startup_timeout_ms = 15000
+
+[bluetooth_rfcomm]
+enabled = false
+channel = 22
+device_name_prefix = "PIM-"
+outbound_enabled = true
+poll_interval_ms = 30000
+bridge_to_tcp = true
 ```
 
 `interface` is now a preferred hint on Linux rather than a fixed requirement.
@@ -69,6 +84,14 @@ table and converts discovered PAN neighbor IPs into `SocketAddr`s using
 macOS uses `arp -an -i <interface>`. Static Bluetooth peers can also be
 declared under `[[peers]]` with `mechanism = "bluetooth"` for environments
 where neighbor discovery is incomplete.
+
+When `[bluetooth_rfcomm].enabled = true`, Linux also binds the configured
+RFCOMM channel and optionally scans paired devices with `bluetoothctl devices
+Paired`. Matching peers are dialed on that channel. After the RFCOMM
+hello/hello-ack identity exchange, `bridge_to_tcp = true` forwards bytes to
+`127.0.0.1:<transport.listen_port>`, reusing the normal PIM transport and
+security path. `bridge_to_tcp = false` leaves the service in discovery-only
+mode.
 
 ## Daemon Flow
 
@@ -100,6 +123,27 @@ run_bluetooth_consumer
                  └─ TCP + authenticated handshake + session setup
 ```
 
+RFCOMM flow:
+
+```
+Paired Bluetooth device whose name matches prefix
+        │
+        ▼
+RfcommService
+        │
+        ├─ bind configured RFCOMM channel
+        ├─ outbound loop: bluetoothctl devices Paired
+        ├─ dial matching peer on configured channel
+        ├─ accept inbound peer channels
+        ├─ exchange hello / hello-ack identity JSON
+        └─ bridge RFCOMM bytes to 127.0.0.1:[transport].listen_port
+                │
+                ▼
+TCP transport listener
+        │
+        └─ authenticated handshake + normal session setup
+```
+
 ## Docker-Testable Seam
 
 For container-based testing, the daemon also honors:
@@ -126,6 +170,7 @@ Static [[peers]]        ──▶ initiate_peer_connection
 UDP discovery           ──▶ run_discovery_consumer ──▶ initiate_peer_connection
 Wi-Fi Direct            ──▶ run_wifidirect_consumer ──▶ initiate_peer_connection
 Bluetooth PAN           ──▶ run_bluetooth_consumer ──▶ initiate_peer_connection
+Bluetooth RFCOMM        ──▶ RFCOMM bridge ──▶ TCP listener ──▶ normal session
 ```
 
 If the same peer is reachable through more than one mechanism, duplicate
