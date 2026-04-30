@@ -372,6 +372,7 @@ pub(crate) async fn run() -> Result<()> {
     let transport = TcpTransport::new_with_cancel(listen_addr, self_id, cancel.clone())
         .await
         .context("failed to start TCP transport")?;
+    let transport_listen_port = transport.listen_addr.port();
     info!(listen = %transport.listen_addr, "transport listening");
 
     // ── Gateway NAT setup ─────────────────────────────────────────────────
@@ -692,6 +693,103 @@ pub(crate) async fn run() -> Result<()> {
     } else {
         debug!("Bluetooth PAN disabled by config");
     }
+
+    // ── Phase 7: Bluetooth RFCOMM auto-discovery (Linux-only impl) ─────────
+    //
+    // Independent of BT-PAN above. Binds RFCOMM channel 22, advertises
+    // `PIM-<node>` identity, dials any paired peer whose name starts
+    // with `PIM-`. Mac side pairs via the `pim-bt-rfcomm-mac` Swift
+    // sidecar in the pim-ui Tauri bundle. macOS / Windows builds skip
+    // this block entirely — the service returns UnsupportedPlatform.
+    #[cfg(target_os = "linux")]
+    let _rfcomm_handle: Option<(
+        pim_bluetooth::rfcomm::RfcommService,
+        tokio::task::JoinHandle<()>,
+    )> = if config.bluetooth.enabled {
+        use pim_bluetooth::rfcomm::{LocalIdentity, RfcommConfig, RfcommEvent, RfcommService};
+        let local_identity = LocalIdentity {
+            node_id_hex: identity.node_id().to_hex(),
+            name: format!(
+                "{}{}",
+                config.bluetooth.device_name_prefix, config.node.name
+            ),
+            caps: {
+                let mut caps = vec!["mesh-v1".to_string()];
+                if config.gateway.enabled {
+                    caps.push("gateway-v1".to_string());
+                }
+                caps
+            },
+        };
+        let rfcomm_cfg = RfcommConfig {
+            enabled: true,
+            channel: pim_bluetooth::rfcomm::DEFAULT_CHANNEL,
+            prefix: if config.bluetooth.device_name_prefix.is_empty() {
+                pim_bluetooth::rfcomm::DEFAULT_PREFIX.to_string()
+            } else {
+                config.bluetooth.device_name_prefix.clone()
+            },
+            poll_interval: std::time::Duration::from_secs(30),
+            outbound_enabled: true,
+            // Bridge post-handshake bytes onto the existing TCP
+            // transport listener via loopback so an RFCOMM peer looks
+            // like a normal TCP peer to the rest of the kernel.
+            local_bridge_addr: Some(std::net::SocketAddr::new(
+                std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST),
+                transport_listen_port,
+            )),
+        };
+        let (events_tx, mut events_rx) = tokio::sync::mpsc::channel(64);
+        match RfcommService::start(rfcomm_cfg, local_identity, events_tx) {
+            Ok(svc) => {
+                info!("Bluetooth RFCOMM service started");
+                let log_handle = tokio::spawn(async move {
+                    while let Some(ev) = events_rx.recv().await {
+                        match &ev {
+                            RfcommEvent::Listening { channel } => {
+                                info!(channel = *channel, "rfcomm listening")
+                            }
+                            RfcommEvent::Discovered {
+                                bd_addr,
+                                node_id,
+                                name,
+                                platform,
+                                caps,
+                                initiator,
+                                ..
+                            } => info!(
+                                bd_addr = %bd_addr,
+                                node_id = %&node_id[..16.min(node_id.len())],
+                                name = %name,
+                                platform = %platform,
+                                caps = ?caps,
+                                initiator = *initiator,
+                                "rfcomm peer discovered"
+                            ),
+                            RfcommEvent::Lost { bd_addr, reason } => {
+                                info!(bd_addr = %bd_addr, reason = %reason, "rfcomm peer lost")
+                            }
+                            RfcommEvent::OpenFailed {
+                                bd_addr, reason, ..
+                            } => {
+                                debug!(bd_addr = %bd_addr, reason = %reason, "rfcomm open failed")
+                            }
+                            RfcommEvent::Error { code, message } => {
+                                warn!(code = *code, message = %message, "rfcomm error")
+                            }
+                        }
+                    }
+                });
+                Some((svc, log_handle))
+            }
+            Err(e) => {
+                warn!("rfcomm service failed to start: {e}");
+                None
+            }
+        }
+    } else {
+        None
+    };
 
     // ── Background tasks ──────────────────────────────────────────────────
     tokio::spawn(run_reassembly_gc(state.clone()));

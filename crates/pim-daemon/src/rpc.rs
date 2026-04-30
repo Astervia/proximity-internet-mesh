@@ -340,6 +340,7 @@ async fn dispatch(state: &Arc<DaemonState>, req: &RpcRequest, write_tx: &WriteTx
         // §5.2 peers
         "peers.list" => Ok(build_peer_list(state).await),
         "peers.add_static" => method_peers_add_static(state, req.params.as_ref()).await,
+        "peers.connect_dynamic" => method_peers_connect_dynamic(state, req.params.as_ref()).await,
         "peers.remove" => method_peers_remove(state, req.params.as_ref()).await,
         "peers.discovered" => Ok(build_peers_discovered(state).await),
         "peers.pair" => Err((
@@ -790,6 +791,85 @@ async fn method_peers_add_static(_state: &Arc<DaemonState>, params: Option<&Valu
         "config_entry_id": format!("entry-{}-{}", p.mechanism.unwrap_or_else(|| "tcp".to_string()), p.address),
         "_label": p.label,
     }))
+}
+
+#[derive(Debug, Deserialize)]
+struct PeersConnectDynamicParams {
+    /// 32-character lowercase hex of the peer's 16-byte NodeId.
+    node_id: String,
+    /// Socket address to dial — typically `127.0.0.1:<port>` of a
+    /// Bluetooth bridge, but any valid `SocketAddr` is accepted.
+    address: String,
+}
+
+/// Open a TCP transport connection to the given address and identify
+/// the remote peer with the supplied NodeId. Used by the UI to wire a
+/// Bluetooth-discovered peer into the mesh: the `pim-ui` Tauri side
+/// learns of the peer + its loopback bridge port from the BT sidecar
+/// and asks the daemon to dial it as if it were a normal TCP peer.
+async fn method_peers_connect_dynamic(
+    state: &Arc<DaemonState>,
+    params: Option<&Value>,
+) -> RpcResult {
+    let p: PeersConnectDynamicParams = match params {
+        Some(v) => serde_json::from_value(v.clone()).map_err(|e| {
+            (
+                codes::INVALID_PARAMS,
+                format!("peers.connect_dynamic: invalid params: {e}"),
+                None,
+            )
+        })?,
+        None => {
+            return Err((
+                codes::INVALID_PARAMS,
+                "peers.connect_dynamic: params required".into(),
+                None,
+            ))
+        }
+    };
+    let bytes = parse_node_id_hex(&p.node_id).ok_or_else(|| {
+        (
+            codes::INVALID_PARAMS,
+            format!(
+                "peers.connect_dynamic: node_id must be 32 hex chars (got {})",
+                p.node_id.len()
+            ),
+            None,
+        )
+    })?;
+    let node_id = NodeId::from_bytes(bytes);
+    let addr: std::net::SocketAddr = p.address.parse().map_err(|e: std::net::AddrParseError| {
+        (
+            codes::INVALID_PARAMS,
+            format!("peers.connect_dynamic: address parse error: {e}"),
+            None,
+        )
+    })?;
+    use pim_transport::Transport;
+    let peer = pim_transport::PeerAddress { node_id, addr };
+    state.transport.connect(&peer).await.map_err(|e| {
+        (
+            codes::INTERNAL_ERROR,
+            format!("peers.connect_dynamic: connect failed: {e}"),
+            None,
+        )
+    })?;
+    Ok(json!({
+        "node_id": node_id.to_hex(),
+        "address": p.address,
+        "status": "connected",
+    }))
+}
+
+fn parse_node_id_hex(s: &str) -> Option<[u8; 16]> {
+    if s.len() != 32 {
+        return None;
+    }
+    let mut out = [0u8; 16];
+    for i in 0..16 {
+        out[i] = u8::from_str_radix(&s[i * 2..i * 2 + 2], 16).ok()?;
+    }
+    Some(out)
 }
 
 #[derive(Debug, Deserialize)]
