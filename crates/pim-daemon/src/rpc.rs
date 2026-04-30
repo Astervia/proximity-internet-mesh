@@ -78,6 +78,9 @@ mod codes {
     pub(super) const INTERNAL_ERROR: i32 = -32603;
     pub(super) const RPC_VERSION_MISMATCH: i32 = -32001;
     pub(super) const GATEWAY_NOT_SUPPORTED: i32 = -32031;
+    pub(super) const MESSAGE_PEER_UNKNOWN: i32 = -32060;
+    pub(super) const MESSAGE_BODY_TOO_LARGE: i32 = -32061;
+    pub(super) const MESSAGE_STORAGE_ERROR: i32 = -32062;
 }
 
 /// Module-private subscription-id allocator. Stable across reconnects
@@ -216,6 +219,41 @@ async fn handle_connection(stream: UnixStream, state: Arc<DaemonState>) -> Resul
         }
     });
 
+    // Single per-connection messaging forwarder. Same shape as the status
+    // forwarder above: subscribe to the messaging broadcast channel and
+    // pump every event onto the write channel as a `messages.event`
+    // notification. UIs filter by event `kind` on their side.
+    let messaging_write_tx = write_tx.clone();
+    let mut messaging_rx = state.messaging.subscribe();
+    let messaging_forwarder = tokio::spawn(async move {
+        loop {
+            match messaging_rx.recv().await {
+                Ok(event) => {
+                    let notif = match serde_json::to_value(&event) {
+                        Ok(v) => v,
+                        Err(e) => {
+                            warn!("rpc: serialize messages.event failed: {e}");
+                            continue;
+                        }
+                    };
+                    let payload = json!({
+                        "jsonrpc": "2.0",
+                        "method": "messages.event",
+                        "params": notif,
+                    });
+                    if push_value(&messaging_write_tx, &payload).is_err() {
+                        break;
+                    }
+                }
+                Err(broadcast::error::RecvError::Lagged(n)) => {
+                    debug!(lagged = n, "messaging forwarder lagged; resyncing");
+                    continue;
+                }
+                Err(broadcast::error::RecvError::Closed) => break,
+            }
+        }
+    });
+
     let mut lines = BufReader::new(rd).lines();
     let mut handshake_done = false;
 
@@ -281,6 +319,7 @@ async fn handle_connection(stream: UnixStream, state: Arc<DaemonState>) -> Resul
     // wait briefly for it to drain its queue.
     drop(write_tx);
     status_forwarder.abort();
+    messaging_forwarder.abort();
     let _ = writer_handle.await;
     Ok(())
 }
@@ -377,6 +416,14 @@ async fn dispatch(state: &Arc<DaemonState>, req: &RpcRequest, write_tx: &WriteTx
             write_tx.clone(),
         )),
         "logs.unsubscribe" => Ok(Value::Null),
+
+        // §5.7 messages
+        "messages.list_conversations" => method_messages_list_conversations(state).await,
+        "messages.history" => method_messages_history(state, req.params.as_ref()).await,
+        "messages.send" => method_messages_send(state, req.params.as_ref()).await,
+        "messages.mark_read" => method_messages_mark_read(state, req.params.as_ref()).await,
+        "messages.subscribe" => Ok(json!({ "subscription_id": new_subscription_id() })),
+        "messages.unsubscribe" => Ok(Value::Null),
 
         unknown => Err((
             codes::METHOD_NOT_FOUND,
@@ -1193,4 +1240,244 @@ mod tests {
         assert_ne!(a, b);
         assert!(a.starts_with("rpc-sub-"));
     }
+}
+
+// ── §5.7 messages ────────────────────────────────────────────────────────
+
+#[derive(Debug, Deserialize)]
+struct MessagesHistoryParams {
+    peer_node_id: String,
+    #[serde(default)]
+    before_ts_ms: Option<i64>,
+    #[serde(default)]
+    limit: Option<i64>,
+}
+
+#[derive(Debug, Deserialize)]
+struct MessagesSendParams {
+    peer_node_id: String,
+    body: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct MessagesMarkReadParams {
+    peer_node_id: String,
+    up_to_ts_ms: i64,
+}
+
+fn parse_peer_node_id(
+    hex: &str,
+) -> std::result::Result<NodeId, (i32, String, Option<Value>)> {
+    parse_node_id_hex(hex)
+        .map(NodeId::from_bytes)
+        .ok_or_else(|| {
+            (
+                codes::INVALID_PARAMS,
+                "peer_node_id must be 32 hex characters".into(),
+                None,
+            )
+        })
+}
+
+async fn method_messages_list_conversations(state: &Arc<DaemonState>) -> RpcResult {
+    let storage = state.messaging.storage().clone();
+    let sessions = state.sessions.read().await;
+    let connected: std::collections::HashSet<String> = sessions
+        .keys()
+        .map(crate::app::messaging::hex_node_id)
+        .collect();
+    drop(sessions);
+
+    let conversations =
+        match tokio::task::spawn_blocking(move || storage.list_conversations()).await {
+            Ok(Ok(c)) => c,
+            Ok(Err(e)) => {
+                return Err((
+                    codes::MESSAGE_STORAGE_ERROR,
+                    format!("messages.list_conversations: {e}"),
+                    None,
+                ))
+            }
+            Err(e) => {
+                return Err((
+                    codes::INTERNAL_ERROR,
+                    format!("messages.list_conversations join: {e}"),
+                    None,
+                ))
+            }
+        };
+
+    let mut out: Vec<Value> = Vec::with_capacity(conversations.len());
+    for conv in conversations {
+        let is_connected = connected.contains(&conv.peer_node_id);
+        out.push(json!({
+            "peer_node_id": conv.peer_node_id,
+            "peer_node_id_short": conv.peer_node_id_short,
+            "name": conv.name,
+            "last_message_preview": conv.last_message_preview,
+            "last_message_ts_ms": conv.last_message_ts_ms,
+            "unread_count": conv.unread_count,
+            "is_connected": is_connected,
+        }));
+    }
+    Ok(json!({ "conversations": out }))
+}
+
+async fn method_messages_history(state: &Arc<DaemonState>, params: Option<&Value>) -> RpcResult {
+    let parsed: MessagesHistoryParams = match params {
+        Some(v) => serde_json::from_value(v.clone()).map_err(|e| {
+            (
+                codes::INVALID_PARAMS,
+                format!("messages.history params: {e}"),
+                None,
+            )
+        })?,
+        None => {
+            return Err((
+                codes::INVALID_PARAMS,
+                "messages.history requires peer_node_id".into(),
+                None,
+            ))
+        }
+    };
+
+    if parsed.peer_node_id.len() != 32 {
+        return Err((
+            codes::INVALID_PARAMS,
+            "peer_node_id must be 32 hex characters".into(),
+            None,
+        ));
+    }
+    let peer_hex = parsed.peer_node_id;
+    let limit = parsed.limit.unwrap_or(100).clamp(1, 500);
+    let before = parsed.before_ts_ms;
+    let storage = state.messaging.storage().clone();
+
+    let result = tokio::task::spawn_blocking(move || storage.history(&peer_hex, before, limit))
+        .await
+        .map_err(|e| {
+            (
+                codes::INTERNAL_ERROR,
+                format!("messages.history join: {e}"),
+                None,
+            )
+        })?
+        .map_err(|e| {
+            (
+                codes::MESSAGE_STORAGE_ERROR,
+                format!("messages.history: {e}"),
+                None,
+            )
+        })?;
+
+    let (messages, has_more) = result;
+    Ok(json!({
+        "messages": messages,
+        "has_more": has_more,
+    }))
+}
+
+async fn method_messages_send(state: &Arc<DaemonState>, params: Option<&Value>) -> RpcResult {
+    let parsed: MessagesSendParams = match params {
+        Some(v) => serde_json::from_value(v.clone()).map_err(|e| {
+            (
+                codes::INVALID_PARAMS,
+                format!("messages.send params: {e}"),
+                None,
+            )
+        })?,
+        None => {
+            return Err((
+                codes::INVALID_PARAMS,
+                "messages.send requires peer_node_id and body".into(),
+                None,
+            ))
+        }
+    };
+
+    if parsed.body.is_empty() {
+        return Err((
+            codes::INVALID_PARAMS,
+            "messages.send body must be non-empty".into(),
+            None,
+        ));
+    }
+    if parsed.body.len() > crate::app::messaging::MAX_BODY_BYTES {
+        return Err((
+            codes::MESSAGE_BODY_TOO_LARGE,
+            format!(
+                "body exceeds {} bytes",
+                crate::app::messaging::MAX_BODY_BYTES
+            ),
+            None,
+        ));
+    }
+
+    let peer = parse_peer_node_id(&parsed.peer_node_id)?;
+    let body = parsed.body;
+    let result = crate::app::messaging::dispatch::send_user_message(state, peer, body).await;
+    match result {
+        Ok(record) => Ok(json!({
+            "id": record.id,
+            "timestamp_ms": record.timestamp_ms,
+            "status": record.status,
+        })),
+        Err(e) => {
+            let msg = format!("{e}");
+            if msg.contains("no x25519") {
+                Err((codes::MESSAGE_PEER_UNKNOWN, msg, None))
+            } else {
+                Err((codes::MESSAGE_STORAGE_ERROR, msg, None))
+            }
+        }
+    }
+}
+
+async fn method_messages_mark_read(state: &Arc<DaemonState>, params: Option<&Value>) -> RpcResult {
+    let parsed: MessagesMarkReadParams = match params {
+        Some(v) => serde_json::from_value(v.clone()).map_err(|e| {
+            (
+                codes::INVALID_PARAMS,
+                format!("messages.mark_read params: {e}"),
+                None,
+            )
+        })?,
+        None => {
+            return Err((
+                codes::INVALID_PARAMS,
+                "messages.mark_read requires peer_node_id and up_to_ts_ms".into(),
+                None,
+            ))
+        }
+    };
+
+    if parsed.peer_node_id.len() != 32 {
+        return Err((
+            codes::INVALID_PARAMS,
+            "peer_node_id must be 32 hex characters".into(),
+            None,
+        ));
+    }
+    let peer_hex = parsed.peer_node_id;
+    let up_to = parsed.up_to_ts_ms;
+    let storage = state.messaging.storage().clone();
+
+    let unread = tokio::task::spawn_blocking(move || storage.mark_read_up_to(&peer_hex, up_to))
+        .await
+        .map_err(|e| {
+            (
+                codes::INTERNAL_ERROR,
+                format!("messages.mark_read join: {e}"),
+                None,
+            )
+        })?
+        .map_err(|e| {
+            (
+                codes::MESSAGE_STORAGE_ERROR,
+                format!("messages.mark_read: {e}"),
+                None,
+            )
+        })?;
+
+    Ok(json!({ "unread_count": unread }))
 }

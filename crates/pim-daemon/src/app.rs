@@ -51,6 +51,8 @@ mod handshake;
 mod ip_control;
 #[path = "logs_subscriber.rs"]
 mod logs_subscriber;
+#[path = "messaging.rs"]
+pub(crate) mod messaging;
 #[path = "net.rs"]
 mod net;
 #[path = "observability.rs"]
@@ -165,7 +167,7 @@ type SessionMap = Arc<RwLock<HashMap<NodeId, Arc<Session>>>>;
 /// Pending handshakes: maps peer_id → channel for routing incoming HS frames
 type HsChannels = Arc<Mutex<HashMap<NodeId, mpsc::Sender<HandshakeWireFrame>>>>;
 
-struct DaemonState {
+pub(crate) struct DaemonState {
     node_name: String,
     self_id: NodeId,
     identity: Arc<Identity>,
@@ -252,6 +254,9 @@ struct DaemonState {
     /// connection's `status.subscribe` forwarder pumps them into the
     /// per-connection writer.
     pub(crate) status_events_tx: tokio::sync::broadcast::Sender<serde_json::Value>,
+    /// Encrypted peer-to-peer messaging subsystem. Lazily opens a SQLite
+    /// database under [`runtime_paths::data_dir`] on daemon startup.
+    pub(crate) messaging: Arc<messaging::MessagingState>,
 }
 
 impl DaemonState {
@@ -527,6 +532,13 @@ pub(crate) async fn run() -> Result<()> {
         routing_table.set_self_mesh_ip(mesh_ip);
     }
     let routing = Arc::new(Mutex::new(routing_table));
+
+    let messages_db_path = runtime_paths::messages_db_path();
+    let messaging = Arc::new(
+        messaging::MessagingState::open(messages_db_path.clone())
+            .with_context(|| format!("open messages db at {}", messages_db_path.display()))?,
+    );
+
     let state = Arc::new(DaemonState {
         node_name: config.node.name.clone(),
         self_id,
@@ -580,6 +592,7 @@ pub(crate) async fn run() -> Result<()> {
         // subscribers receive RecvError::Lagged and re-sync via the
         // next `status` RPC.
         status_events_tx: tokio::sync::broadcast::channel::<serde_json::Value>(64).0,
+        messaging,
     });
 
     // ── Initiate connections to configured peers ───────────────────────────

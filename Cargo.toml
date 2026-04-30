@@ -60,6 +60,10 @@ libc = "0.2"
 # Async utilities
 tokio-util = { version = "0.7", features = ["full"] }
 
+# Embedded storage (used by pim-daemon's messaging module)
+rusqlite = { version = "0.32", features = ["bundled"] }
+uuid = { version = "1", features = ["v4"] }
+
 # Internal crates
 pim-core = { path = "crates/pim-core", version = "0.1.4" }
 pim-bluetooth = { path = "crates/pim-bluetooth", version = "0.1.4" }

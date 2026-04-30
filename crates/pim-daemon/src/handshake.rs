@@ -153,6 +153,7 @@ pub(crate) async fn handshake_initiator(
 
     flush_send_buffer(state, peer_id).await;
     request_dynamic_ip_from_peer(state, peer_id).await;
+    crate::app::messaging::dispatch::send_peer_info(state, peer_id).await;
     Ok(peer_id)
 }
 
@@ -246,5 +247,6 @@ pub(crate) async fn handshake_responder(
 
     flush_send_buffer(state, peer_id).await;
     request_dynamic_ip_from_peer(state, peer_id).await;
+    crate::app::messaging::dispatch::send_peer_info(state, peer_id).await;
     Ok(())
 }
