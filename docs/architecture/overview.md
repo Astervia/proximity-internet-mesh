@@ -240,6 +240,11 @@ enabled = false
 enabled = false
 interface = "auto"
 
+[bluetooth_rfcomm]
+enabled = false
+channel = 22
+device_name_prefix = "PIM-"
+
 [routing]
 max_hops = 10
 algorithm = "distance-vector"
