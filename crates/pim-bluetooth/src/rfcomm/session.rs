@@ -2,12 +2,15 @@
 
 #![cfg(target_os = "linux")]
 
+use std::sync::Arc;
+
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, warn};
 
+use super::bridge;
 use super::frame::{decode_frame, encode_frame, FrameError};
 use super::socket::RfcommStream;
 use super::{format_bdaddr, now_iso, BdAddr, LocalIdentity, RfcommEvent, HELLO_VERSION};
@@ -23,6 +26,15 @@ struct HelloMsg<'a> {
     caps: Vec<String>,
 }
 
+/// Drive a freshly-accepted/dialed RFCOMM session from handshake
+/// completion through teardown.
+///
+/// `local_bridge_addr`: when `Some`, on successful handshake the
+/// channel is bridged to that loopback TCP address (the daemon's
+/// `pim-transport` listener) and bytes flow through until either side
+/// closes or `cancel` fires. When `None`, the post-handshake side
+/// just consumes bytes until the channel closes (discovery-only mode,
+/// kept for tests / acceptor-only deployments).
 pub async fn run(
     stream: RfcommStream,
     peer_addr: BdAddr,
@@ -30,6 +42,7 @@ pub async fn run(
     identity: LocalIdentity,
     events_tx: mpsc::Sender<RfcommEvent>,
     cancel: CancellationToken,
+    local_bridge_addr: Option<std::net::SocketAddr>,
 ) {
     let bd_str = format_bdaddr(&peer_addr);
     if let Err(e) = handshake(&stream, &bd_str, initiator, &identity, &events_tx).await {
@@ -42,39 +55,21 @@ pub async fn run(
         return;
     }
 
-    // Post-handshake idle loop: read frames until the channel closes
-    // or shutdown is requested. Phase 7 spike scope is discovery only,
-    // so we just consume bytes; production will pump
-    // pim-protocol::TransportFrame here.
-    let mut buf: Vec<u8> = Vec::with_capacity(8192);
-    let mut chunk = [0u8; 4096];
-    let close_reason = loop {
-        tokio::select! {
-            _ = cancel.cancelled() => break "shutdown".to_string(),
-            r = stream.read(&mut chunk) => {
-                match r {
-                    Ok(0) => break "stream_eof".to_string(),
-                    Ok(n) => {
-                        buf.extend_from_slice(&chunk[..n]);
-                        match decode_frame(&mut buf) {
-                            Ok(frames) => {
-                                for f in frames {
-                                    match serde_json::from_slice::<Value>(&f) {
-                                        Ok(_v) => {
-                                            // Future: dispatch frame to pim-protocol
-                                            debug!(target: "pim-bluetooth-rfcomm", "rx post-handshake frame ({} bytes)", f.len());
-                                        }
-                                        Err(e) => warn!(target: "pim-bluetooth-rfcomm", "non-json post-handshake: {e}"),
-                                    }
-                                }
-                            }
-                            Err(e) => break format!("frame_error: {e}"),
-                        }
-                    }
-                    Err(e) => break format!("read_error: {e}"),
-                }
+    let stream = Arc::new(stream);
+    let close_reason = match local_bridge_addr {
+        Some(addr) => {
+            debug!(
+                target: "pim-bluetooth-rfcomm",
+                peer = %bd_str,
+                bridge = %addr,
+                "session: handshake OK, bridging to loopback TCP",
+            );
+            match bridge::run(stream.clone(), addr, bd_str.clone(), cancel.clone()).await {
+                Ok(()) => "bridge_closed".to_string(),
+                Err(e) => format!("bridge_io_error: {e}"),
             }
         }
+        None => discovery_only_loop(stream, &bd_str, cancel).await,
     };
 
     let _ = events_tx
@@ -83,6 +78,51 @@ pub async fn run(
             reason: close_reason,
         })
         .await;
+}
+
+/// Discovery-only mode: just consume bytes until the peer closes or
+/// the supervisor cancels us. Kept around for tests and acceptor-only
+/// deployments that don't run a daemon TCP listener.
+async fn discovery_only_loop(
+    stream: Arc<RfcommStream>,
+    bd_str: &str,
+    cancel: CancellationToken,
+) -> String {
+    let mut buf: Vec<u8> = Vec::with_capacity(8192);
+    let mut chunk = [0u8; 4096];
+    loop {
+        tokio::select! {
+            _ = cancel.cancelled() => return "shutdown".to_string(),
+            r = stream.read(&mut chunk) => match r {
+                Ok(0) => return "stream_eof".to_string(),
+                Ok(n) => {
+                    buf.extend_from_slice(&chunk[..n]);
+                    match decode_frame(&mut buf) {
+                        Ok(frames) => {
+                            for f in frames {
+                                match serde_json::from_slice::<Value>(&f) {
+                                    Ok(_v) => debug!(
+                                        target: "pim-bluetooth-rfcomm",
+                                        peer = %bd_str,
+                                        bytes = f.len(),
+                                        "rx post-handshake frame (discovery-only)",
+                                    ),
+                                    Err(e) => warn!(
+                                        target: "pim-bluetooth-rfcomm",
+                                        peer = %bd_str,
+                                        err = %e,
+                                        "non-json post-handshake frame",
+                                    ),
+                                }
+                            }
+                        }
+                        Err(e) => return format!("frame_error: {e}"),
+                    }
+                }
+                Err(e) => return format!("read_error: {e}"),
+            }
+        }
+    }
 }
 
 async fn handshake(

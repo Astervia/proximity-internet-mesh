@@ -26,12 +26,15 @@
 //! returns `RfcommError::UnsupportedPlatform` — those platforms speak
 //! RFCOMM via the Tauri sidecar in `pim-ui` instead.
 
+use std::net::SocketAddr;
 use std::time::{Duration, SystemTime};
 
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
+#[cfg(target_os = "linux")]
+mod bridge;
 #[cfg(target_os = "linux")]
 mod listener;
 #[cfg(target_os = "linux")]
@@ -100,6 +103,11 @@ pub struct RfcommConfig {
     /// Disable when this node is acceptor-only (e.g. embedded gateway
     /// with no UI to scan from).
     pub outbound_enabled: bool,
+    /// Local TCP loopback address that post-handshake RFCOMM bytes are
+    /// bridged onto. Should match the `pim-transport` TCP listener.
+    /// `None` disables the bridge — discovery still emits `Discovered`
+    /// events but the channel will not carry mesh frames.
+    pub local_bridge_addr: Option<SocketAddr>,
 }
 
 impl Default for RfcommConfig {
@@ -110,6 +118,7 @@ impl Default for RfcommConfig {
             prefix: DEFAULT_PREFIX.to_string(),
             poll_interval: Duration::from_secs(30),
             outbound_enabled: true,
+            local_bridge_addr: None,
         }
     }
 }
