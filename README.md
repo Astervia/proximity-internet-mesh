@@ -18,6 +18,7 @@ Proximity Internet Mesh (PIM) is a Rust workspace for running a local mesh adapt
 | Gateway + NAT     | Supported | Supported     |
 | Wi-Fi Direct      | Supported | Supported     |
 | Bluetooth PAN     | Supported | Supported     |
+| Bluetooth RFCOMM  | Supported | Sidecar       |
 | Docker labs       | Supported | Not supported |
 
 For per-feature host requirements and OS-specific guidance see
@@ -26,8 +27,8 @@ For per-feature host requirements and OS-specific guidance see
 ## Status
 
 The workspace is under active development. The runtime supports client,
-relay, and gateway roles on Linux and macOS, with TCP, Bluetooth PAN, and
-Wi-Fi Direct transports. See [docs/project/roadmap.md](docs/project/roadmap.md)
+relay, and gateway roles on Linux and macOS, with TCP, Bluetooth PAN, Bluetooth
+RFCOMM, and Wi-Fi Direct transports. See [docs/project/roadmap.md](docs/project/roadmap.md)
 for the phased delivery view and
 [docs/project/history.md](docs/project/history.md) for the historical
 implementation log.

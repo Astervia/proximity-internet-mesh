@@ -20,7 +20,7 @@ can find the right level of detail quickly.
 - [protocol.md](architecture/protocol.md) — frame layout and wire-level behavior.
 - [security.md](architecture/security.md) — identities, handshake, transport encryption, end-to-end protection.
 - [discovery.md](architecture/discovery.md) — peer discovery (UDP broadcast, Bonjour, Wi-Fi Direct scan).
-- [transports/](architecture/transports/README.md) — Bluetooth PAN and Wi-Fi Direct backends.
+- [transports/](architecture/transports/README.md) — Bluetooth PAN/RFCOMM and Wi-Fi Direct backends.
 
 ## Operations
 

@@ -29,6 +29,7 @@ everything else has a documented default and may be omitted entirely.
 | `[security]` | no | `SecurityConfig` |
 | `[wifi_direct]` | no | `WifiDirectConfig` |
 | `[bluetooth]` | no | `BluetoothConfig` |
+| `[bluetooth_rfcomm]` | no | `BluetoothRfcommConfig` |
 | `[[peers]]` | no | `PeerConfig` / `PeerEndpointConfig` |
 
 ---
@@ -277,6 +278,35 @@ connect_pan = true
 serve_nap = false
 auto_discover_peers = true
 poll_interval_ms = 2000
+```
+
+---
+
+## `[bluetooth_rfcomm]`
+
+Bluetooth RFCOMM direct-channel discovery and TCP bridge configuration.
+Disabled by default (opt-in). This is independent from Bluetooth PAN/NAP:
+RFCOMM scans already paired Bluetooth devices by name prefix, opens the
+configured RFCOMM channel, exchanges PIM identity frames, and can bridge the
+resulting byte stream into the local TCP transport listener.
+
+| Key | Type | Default | Required | Notes |
+|-----|------|---------|----------|-------|
+| `enabled` | boolean | `false` | no | Enable the Linux RFCOMM service. |
+| `channel` | integer | `22` | no | RFCOMM channel to bind and dial. Channel 22 avoids common SPP channel conflicts. |
+| `device_name_prefix` | string | `"PIM-"` | no | Prefix used to identify paired PIM peers by Bluetooth device name. |
+| `outbound_enabled` | boolean | `true` | no | Enable periodic paired-device scans and outbound RFCOMM dialing. |
+| `poll_interval_ms` | integer | `30000` | no | Poll interval for outbound paired-device scans, in milliseconds. |
+| `bridge_to_tcp` | boolean | `true` | no | Bridge established RFCOMM sessions to `127.0.0.1:<transport.listen_port>`. Disable for discovery-only deployments. |
+
+```toml
+[bluetooth_rfcomm]
+enabled = true
+channel = 22
+device_name_prefix = "PIM-"
+outbound_enabled = true
+poll_interval_ms = 30000
+bridge_to_tcp = true
 ```
 
 ---
