@@ -219,6 +219,13 @@ mod platform_impl;
 mod service;
 mod support;
 
+/// Phase 7 RFCOMM auto-discovery service. Linux production impl of the
+/// Python spike at `spikes/bt-rfcomm/linux/pim-bt-rfcomm-linux.py`. The
+/// Mac side keeps using the Swift sidecar in `pim-ui/tools/`. Both
+/// sides speak the same wire protocol so they discover each other
+/// without coordination.
+pub mod rfcomm;
+
 #[cfg(test)]
 mod tests;
 
