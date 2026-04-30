@@ -11,6 +11,7 @@ This project supports client, relay, and gateway nodes on Linux and macOS. The g
 | Gateway node | Supported | Supported |
 | Wi-Fi Direct | Supported | Supported |
 | Bluetooth PAN | Supported | Supported |
+| Bluetooth RFCOMM | Supported | Sidecar |
 | Docker lab flows | Supported | Not supported |
 
 On macOS, plan on a `utunN` interface name for the mesh TUN and use a real uplink such as `en0` for `gateway.nat_interface`. Wi-Fi Direct uses Bonjour peer-to-peer discovery on macOS, Bluetooth PAN uses the host stack, and the Docker lab workflows still remain Linux-only.

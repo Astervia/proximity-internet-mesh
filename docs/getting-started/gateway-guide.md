@@ -289,6 +289,15 @@ peer_discovery_interval_ms = 2000
 bluetoothctl_timeout_s = 15
 discoverable_timeout_s = 180
 startup_timeout_ms = 15000
+
+[bluetooth_rfcomm]
+# Optional Linux RFCOMM direct-channel bridge for already paired PIM devices.
+enabled = false
+channel = 22
+device_name_prefix = "PIM-"
+outbound_enabled = true
+poll_interval_ms = 30000
+bridge_to_tcp = true
 ```
 
 Operational notes:
@@ -303,6 +312,7 @@ Operational notes:
 - Linux uses `bluetoothctl`; macOS uses the host Bluetooth stack and expects `blueutil` for radio discovery and pairing automation
 - once the PAN link exists, PIM reads neighbor entries from `ip neigh show dev <interface>` on Linux or `arp -an -i <interface>` on macOS
 - discovered neighbor IPs are then used as normal TCP peer targets on `transport.listen_port`
+- `[bluetooth_rfcomm].enabled = true` skips PAN/NAP and bridges paired RFCOMM channels into the same TCP listener
 
 For environments where radio discovery is not enough, you can also declare
 static Bluetooth peers:
@@ -350,6 +360,9 @@ interface = "wlan0"
 [bluetooth]
 enabled = true
 interface = "auto"
+
+[bluetooth_rfcomm]
+enabled = false
 
 [[peers]]
 mechanism = "tcp"
