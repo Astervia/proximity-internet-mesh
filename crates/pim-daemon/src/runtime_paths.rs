@@ -95,6 +95,43 @@ pub(crate) fn default_pid_file() -> PathBuf {
     }
 }
 
+/// Persistent data directory used for state that must survive daemon
+/// restarts (notably the messages database). Distinct from
+/// [`runtime_dir`], which holds transient sockets / PIDs.
+pub(crate) fn data_dir() -> PathBuf {
+    #[cfg(target_os = "linux")]
+    {
+        if let Some(xdg) = std::env::var_os("XDG_DATA_HOME") {
+            return PathBuf::from(xdg).join("pim");
+        }
+        if let Some(home) = std::env::var_os("HOME") {
+            return PathBuf::from(home).join(".local/share/pim");
+        }
+        PathBuf::from("/var/lib/pim")
+    }
+    #[cfg(target_os = "macos")]
+    {
+        if let Some(home) = std::env::var_os("HOME") {
+            PathBuf::from(home).join("Library/Application Support/pim")
+        } else {
+            PathBuf::from("/var/lib/pim")
+        }
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    {
+        if let Some(home) = std::env::var_os("HOME") {
+            PathBuf::from(home).join(".pim")
+        } else {
+            PathBuf::from("./pim-data")
+        }
+    }
+}
+
+/// Default messages.db path inside [`data_dir`].
+pub(crate) fn messages_db_path() -> PathBuf {
+    data_dir().join("messages.db")
+}
+
 /// Default config-file path when `pim-daemon` is started without an
 /// explicit argv override.
 pub(crate) fn default_config_path() -> PathBuf {

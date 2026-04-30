@@ -327,6 +327,44 @@ pub(super) async fn run_event_loop(state: Arc<DaemonState>) -> Result<()> {
                                                 );
                                             }
                                         }
+                                        ControlFrame::PeerInfo {
+                                            x25519_pub,
+                                            friendly_name,
+                                        } => {
+                                            crate::app::messaging::dispatch::handle_incoming_peer_info(
+                                                &state,
+                                                mesh.src_id,
+                                                x25519_pub,
+                                                friendly_name,
+                                            )
+                                            .await;
+                                        }
+                                        ControlFrame::Message {
+                                            message_id,
+                                            timestamp_ms,
+                                            ciphertext,
+                                        } => {
+                                            crate::app::messaging::dispatch::handle_incoming_message(
+                                                &state,
+                                                mesh.src_id,
+                                                message_id,
+                                                timestamp_ms,
+                                                ciphertext,
+                                            )
+                                            .await;
+                                        }
+                                        ControlFrame::MessageAck {
+                                            message_id,
+                                            ack_kind,
+                                        } => {
+                                            crate::app::messaging::dispatch::handle_incoming_message_ack(
+                                                &state,
+                                                mesh.src_id,
+                                                message_id,
+                                                ack_kind,
+                                            )
+                                            .await;
+                                        }
                                         other => {
                                             debug!(
                                                 src_id = %mesh.src_id,
@@ -645,6 +683,44 @@ pub(super) async fn run_event_loop(state: Arc<DaemonState>) -> Result<()> {
                                     }
                                 }
                                 ControlFrame::Rekey => {}
+                                ControlFrame::PeerInfo {
+                                    x25519_pub,
+                                    friendly_name,
+                                } => {
+                                    crate::app::messaging::dispatch::handle_incoming_peer_info(
+                                        &state,
+                                        from_peer,
+                                        x25519_pub,
+                                        friendly_name,
+                                    )
+                                    .await;
+                                }
+                                ControlFrame::Message {
+                                    message_id,
+                                    timestamp_ms,
+                                    ciphertext,
+                                } => {
+                                    crate::app::messaging::dispatch::handle_incoming_message(
+                                        &state,
+                                        from_peer,
+                                        message_id,
+                                        timestamp_ms,
+                                        ciphertext,
+                                    )
+                                    .await;
+                                }
+                                ControlFrame::MessageAck {
+                                    message_id,
+                                    ack_kind,
+                                } => {
+                                    crate::app::messaging::dispatch::handle_incoming_message_ack(
+                                        &state,
+                                        from_peer,
+                                        message_id,
+                                        ack_kind,
+                                    )
+                                    .await;
+                                }
                             },
                             Err(e) => warn!(%from_peer, "control frame decode: {e}"),
                         }
