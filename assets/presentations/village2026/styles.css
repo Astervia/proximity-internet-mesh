@@ -59,8 +59,8 @@ body::after {
 
 /* ─── Progress bar ─── */
 #progress {
-  position: fixed; bottom: 52px; left: 0; right: 0;
-  height: 2px; background: var(--border); z-index: 100;
+  position: fixed; bottom: 0; left: 0; right: 0;
+  height: 2px; background: var(--border); z-index: 200;
 }
 #progress-fill {
   height: 100%; background: var(--green);
@@ -68,14 +68,29 @@ body::after {
   transition: width 0.25s ease;
 }
 
-/* ─── Navigation bar ─── */
+/* ─── Navigation — auto-hide, reveal on hover ─── */
+#nav-wrap {
+  position: fixed; bottom: 2px; left: 0; right: 0;
+  height: 72px;
+  z-index: 100;
+}
+
 #nav {
-  position: fixed; bottom: 0; left: 0; right: 0; height: 52px;
+  position: absolute; bottom: 0; left: 0; right: 0; height: 52px;
   display: flex; align-items: center; justify-content: space-between;
   padding: 0 80px;
   border-top: 1px solid var(--border);
   background: rgba(8, 13, 8, 0.97);
-  z-index: 100;
+  opacity: 0;
+  transform: translateY(6px);
+  transition: opacity 0.2s ease, transform 0.2s ease;
+  pointer-events: none;
+}
+
+#nav-wrap:hover #nav {
+  opacity: 1;
+  transform: translateY(0);
+  pointer-events: auto;
 }
 
 .nav-btn {
@@ -89,6 +104,7 @@ body::after {
   cursor: pointer;
   text-transform: uppercase;
   transition: border-color 0.15s, color 0.15s, box-shadow 0.15s;
+  flex-shrink: 0;
 }
 .nav-btn:hover:not(:disabled) {
   border-color: var(--green);
@@ -97,8 +113,36 @@ body::after {
 }
 .nav-btn:disabled { opacity: 0.18; cursor: not-allowed; }
 
-#counter { font-size: 11px; color: var(--text-dim); letter-spacing: 0.12em; }
-#counter .cur { color: var(--green); }
+/* ─── Slide number pills ─── */
+#slide-nums {
+  display: flex; align-items: center; gap: 4px;
+  overflow: hidden;
+}
+
+.slide-num {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+  font-family: inherit;
+  font-size: 10px;
+  letter-spacing: 0.05em;
+  width: 28px; height: 24px;
+  cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+  transition: border-color 0.12s, color 0.12s, box-shadow 0.12s, background 0.12s;
+  flex-shrink: 0;
+}
+.slide-num:hover {
+  border-color: var(--green);
+  color: var(--green);
+  box-shadow: 0 0 6px var(--green-glow);
+}
+.slide-num.active {
+  border-color: var(--green);
+  color: var(--green-b);
+  background: rgba(61, 214, 110, 0.08);
+  box-shadow: 0 0 10px var(--green-glow);
+}
 
 /* ─── Slide prompt line ─── */
 .prompt {

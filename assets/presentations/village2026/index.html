@@ -1189,10 +1189,12 @@
 
         <div id="progress"><div id="progress-fill" style="width: 7.69%"></div></div>
 
-        <div id="nav">
-            <button class="nav-btn" id="btn-prev" onclick="go(-1)" disabled>← prev</button>
-            <div id="counter"><span class="cur" id="cur">1</span> / <span id="tot">13</span></div>
-            <button class="nav-btn" id="btn-next" onclick="go(1)">next →</button>
+        <div id="nav-wrap">
+            <div id="nav">
+                <button class="nav-btn" id="btn-prev" onclick="go(-1)" disabled>← prev</button>
+                <div id="slide-nums"></div>
+                <button class="nav-btn" id="btn-next" onclick="go(1)">next →</button>
+            </div>
         </div>
 
         <script>
@@ -1200,11 +1202,24 @@
             const total = slides.length;
             let idx = 0;
 
+            // Build clickable slide number pills
+            const numsContainer = document.getElementById("slide-nums");
+            for (let i = 0; i < total; i++) {
+                const btn = document.createElement("button");
+                btn.className = "slide-num" + (i === 0 ? " active" : "");
+                btn.textContent = String(i + 1).padStart(2, "0");
+                btn.title = "Slide " + (i + 1);
+                btn.addEventListener("click", () => goTo(i));
+                numsContainer.appendChild(btn);
+            }
+
             function goTo(n) {
                 slides[idx].classList.remove("active");
+                numsContainer.children[idx].classList.remove("active");
                 idx = Math.max(0, Math.min(n, total - 1));
                 slides[idx].classList.add("active");
-                document.getElementById("cur").textContent = idx + 1;
+                numsContainer.children[idx].classList.add("active");
+                numsContainer.children[idx].scrollIntoView({ inline: "nearest", block: "nearest" });
                 document.getElementById("btn-prev").disabled = idx === 0;
                 document.getElementById("btn-next").disabled = idx === total - 1;
                 document.getElementById("progress-fill").style.width = (((idx + 1) / total) * 100).toFixed(2) + "%";
