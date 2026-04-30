@@ -76,3 +76,64 @@ fn reject_truncated_ip_assign() {
     let mut buf = BytesMut::from(&[0x02, 10, 77, 0][..]); // too short
     assert!(ControlFrame::decode(&mut buf).is_err());
 }
+
+#[test]
+fn peer_info_round_trip() {
+    let frame = ControlFrame::PeerInfo {
+        x25519_pub: [0x11; 32],
+        friendly_name: "client-a-macbook".into(),
+    };
+    let mut buf = BytesMut::new();
+    frame.encode(&mut buf);
+    let decoded = ControlFrame::decode(&mut buf).unwrap();
+    assert_eq!(frame, decoded);
+}
+
+#[test]
+fn peer_info_empty_name_round_trip() {
+    let frame = ControlFrame::PeerInfo {
+        x25519_pub: [0x22; 32],
+        friendly_name: String::new(),
+    };
+    let mut buf = BytesMut::new();
+    frame.encode(&mut buf);
+    let decoded = ControlFrame::decode(&mut buf).unwrap();
+    assert_eq!(frame, decoded);
+}
+
+#[test]
+fn message_round_trip() {
+    let frame = ControlFrame::Message {
+        message_id: [0x55; 16],
+        timestamp_ms: 1_745_960_000_000,
+        ciphertext: vec![0xDE, 0xAD, 0xBE, 0xEF, 0xCA, 0xFE],
+    };
+    let mut buf = BytesMut::new();
+    frame.encode(&mut buf);
+    let decoded = ControlFrame::decode(&mut buf).unwrap();
+    assert_eq!(frame, decoded);
+}
+
+#[test]
+fn message_ack_round_trip() {
+    let frame = ControlFrame::MessageAck {
+        message_id: [0x77; 16],
+        ack_kind: 1,
+    };
+    let mut buf = BytesMut::new();
+    frame.encode(&mut buf);
+    let decoded = ControlFrame::decode(&mut buf).unwrap();
+    assert_eq!(frame, decoded);
+}
+
+#[test]
+fn reject_truncated_peer_info() {
+    let mut buf = BytesMut::from(&[0x07, 0x00, 0x01][..]); // too short
+    assert!(ControlFrame::decode(&mut buf).is_err());
+}
+
+#[test]
+fn reject_truncated_message() {
+    let mut buf = BytesMut::from(&[0x08, 0x00][..]); // too short
+    assert!(ControlFrame::decode(&mut buf).is_err());
+}
