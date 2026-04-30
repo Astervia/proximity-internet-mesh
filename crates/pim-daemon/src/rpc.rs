@@ -1265,7 +1265,9 @@ struct MessagesMarkReadParams {
     up_to_ts_ms: i64,
 }
 
-fn parse_peer_node_id(hex: &str) -> std::result::Result<NodeId, (i32, String, Option<Value>)> {
+fn parse_peer_node_id(
+    hex: &str,
+) -> std::result::Result<NodeId, (i32, String, Option<Value>)> {
     parse_node_id_hex(hex)
         .map(NodeId::from_bytes)
         .ok_or_else(|| {
