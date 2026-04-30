@@ -89,7 +89,7 @@ pub struct LocalIdentity {
 }
 
 /// Configuration for `RfcommService`. The daemon constructs this from
-/// the `[bluetooth_rfcomm]` config section (TBD-config).
+/// the `[bluetooth_rfcomm]` config section.
 #[derive(Debug, Clone)]
 pub struct RfcommConfig {
     /// Whether to start at all. Daemon honors `[bluetooth_rfcomm].enabled`.
@@ -121,7 +121,7 @@ impl Default for RfcommConfig {
             prefix: DEFAULT_PREFIX.to_string(),
             poll_interval: Duration::from_secs(30),
             outbound_enabled: true,
-            bluetoothctl_command: PathBuf::from(super::DEFAULT_BLUETOOTHCTL_COMMAND),
+            bluetoothctl_command: PathBuf::from("bluetoothctl"),
             local_bridge_addr: None,
         }
     }
