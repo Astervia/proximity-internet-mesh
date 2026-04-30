@@ -161,16 +161,21 @@ class Session:
             return
         t = msg.get("type")
         if t == "hello":
-            self.peer_info = msg
+            self.peer_info = self._extract_identity(msg)
             self.send(self.hello_ack())
             self._emit_discovered()
         elif t == "hello-ack":
-            self.peer_info = msg
+            self.peer_info = self._extract_identity(msg)
             self._emit_discovered()
         elif t == "error":
             emit({"event": "peer_error", "bd_addr": self.bd_addr, "detail": msg})
         else:
             emit({"event": "frame", "bd_addr": self.bd_addr, "type": t})
+
+    @staticmethod
+    def _extract_identity(msg: dict) -> dict:
+        """Strip protocol meta fields (type, v); keep only peer identity."""
+        return {k: v for k, v in msg.items() if k not in ("type", "v")}
 
     def _emit_discovered(self) -> None:
         peer = dict(self.peer_info)

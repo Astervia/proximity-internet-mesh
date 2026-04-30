@@ -223,12 +223,12 @@ final class Session: NSObject, IOBluetoothRFCOMMChannelDelegate {
         switch type {
         case "hello":
             // We are the acceptor. Capture peer info, ack.
-            peerInfo = obj
+            peerInfo = Session.extractIdentity(obj)
             sendHelloAck()
             emitDiscovered()
         case "hello-ack":
             // We are the initiator.
-            peerInfo = obj
+            peerInfo = Session.extractIdentity(obj)
             ackReceived = true
             emitDiscovered()
         case "error":
@@ -237,6 +237,14 @@ final class Session: NSObject, IOBluetoothRFCOMMChannelDelegate {
             // Future mesh frames go here. Echo for now to prove duplex.
             emit(["event": "frame", "bd_addr": bdAddr, "type": type])
         }
+    }
+
+    /// Strip protocol meta fields (type, v); keep only peer identity.
+    static func extractIdentity(_ msg: [String: Any]) -> [String: Any] {
+        var out = msg
+        out.removeValue(forKey: "type")
+        out.removeValue(forKey: "v")
+        return out
     }
 
     private func emitDiscovered() {
@@ -290,16 +298,27 @@ func discoveryTick() {
 }
 
 // MARK: - Inbound: register an RFCOMM channel listener
+//
+// The IOBluetoothRFCOMMChannel notification API calls the selector with
+// TWO arguments — the IOBluetoothUserNotification and the channel — not
+// a Foundation.Notification. Selector signature must match exactly,
+// otherwise Swift's auto-bridging tries to cast IOBluetoothUserNotification
+// to NSNotification and crashes with `unrecognized selector sent to
+// instance` on -[IOBluetoothConcreteUserNotification name].
 
 final class InboundHandler: NSObject {
-    @objc func newRFCOMMChannelOpened(_ notification: Foundation.Notification) {
-        guard let ch = notification.object as? IOBluetoothRFCOMMChannel else { return }
+    @objc func handleIncoming(
+        _ userNotification: IOBluetoothUserNotification,
+        channel ch: IOBluetoothRFCOMMChannel
+    ) {
         guard let dev = ch.getDevice() else { ch.close(); return }
         let addr = dev.addressString ?? "unknown"
         let name = dev.name ?? ""
         // Filter to PIM-* peers; close anyone else.
         guard name.hasPrefix(ARGS.prefix) else { ch.close(); return }
         if registry.has(addr: addr) {
+            // Outbound session already exists with this peer — drop the
+            // duplicate inbound channel for now. Production may multiplex.
             ch.close(); return
         }
         let s = Session(addr: addr, name: name, channel: ch, initiator: false)
@@ -313,7 +332,7 @@ let inboundHandler = InboundHandler()
 let userInfoChannel: BluetoothRFCOMMChannelID = ARGS.rfcommChannel
 IOBluetoothRFCOMMChannel.register(
     forChannelOpenNotifications: inboundHandler,
-    selector: #selector(InboundHandler.newRFCOMMChannelOpened(_:)),
+    selector: #selector(InboundHandler.handleIncoming(_:channel:)),
     withChannelID: userInfoChannel,
     direction: kIOBluetoothUserNotificationChannelDirectionIncoming
 )
