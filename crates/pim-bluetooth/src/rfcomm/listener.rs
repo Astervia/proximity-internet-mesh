@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use tokio::sync::{mpsc, Mutex};
 use tokio_util::sync::CancellationToken;
-use tracing::{error, info, warn};
+use tracing::{info, warn};
 
 use super::socket::RfcommListener;
 use super::{session, BdAddr, LocalIdentity, RfcommConfig, RfcommError, RfcommEvent};
