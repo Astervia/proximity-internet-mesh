@@ -381,15 +381,29 @@ pub(crate) async fn run() -> Result<()> {
     info!(listen = %transport.listen_addr, "transport listening");
 
     // ── Gateway NAT setup ─────────────────────────────────────────────────
+    //
+    // `nat_interface` may be temporarily down at startup — Wi-Fi off
+    // for a BT-only test, dock unplugged, DHCP not yet renewed. We
+    // log a warning and continue with `gateway_external_ip = None` so
+    // the daemon still boots (BT discovery, transport, mesh routing
+    // all work without NAT). The gateway role stays declared in
+    // `is_gateway` so peers still see `gateway-v1` capability; only
+    // the NAT engine is skipped. A future iteration can hot-bind NAT
+    // when the interface gains an IP without requiring a restart.
     let gateway_external_ip = if is_gateway {
-        Some(
-            lookup_interface_ipv4(&config.gateway.nat_interface).with_context(|| {
-                format!(
-                    "failed to resolve IPv4 address for {}",
-                    config.gateway.nat_interface
-                )
-            })?,
-        )
+        match lookup_interface_ipv4(&config.gateway.nat_interface) {
+            Ok(ip) => Some(ip),
+            Err(e) => {
+                warn!(
+                    nat_interface = %config.gateway.nat_interface,
+                    err = %e,
+                    "gateway enabled but nat_interface has no IPv4 — booting without NAT \
+                     (BT/mesh still work; NAT activates after restart once interface \
+                     has an IP)",
+                );
+                None
+            }
+        }
     } else {
         None
     };
@@ -418,18 +432,21 @@ pub(crate) async fn run() -> Result<()> {
         None
     };
 
-    let gw_engine: Option<Arc<GatewayEngine>> = if is_gateway {
-        let gw = Arc::new(GatewayEngine::new(
-            gateway_external_ip.expect("gateway external IP set when gateway is enabled"),
-            &config.gateway.nat_interface,
-        ));
-        let cidr = format!("{}/{}", mesh_ip, prefix_len);
-        if let Err(e) = gw.setup_masquerade(&cidr) {
-            warn!("iptables setup failed (may need root): {e}");
+    let gw_engine: Option<Arc<GatewayEngine>> = match (is_gateway, gateway_external_ip) {
+        (true, Some(external_ip)) => {
+            let gw = Arc::new(GatewayEngine::new(
+                external_ip,
+                &config.gateway.nat_interface,
+            ));
+            let cidr = format!("{}/{}", mesh_ip, prefix_len);
+            if let Err(e) = gw.setup_masquerade(&cidr) {
+                warn!("iptables setup failed (may need root): {e}");
+            }
+            Some(gw)
         }
-        Some(gw)
-    } else {
-        None
+        // Gateway role declared but no upstream IPv4 yet — see warning
+        // emitted just above; we boot without an active NAT engine.
+        _ => None,
     };
     let gw_engine_v6: Option<Arc<GatewayEngineV6>> = if is_gateway {
         gateway_external_ipv6.map(|external_ip| {
