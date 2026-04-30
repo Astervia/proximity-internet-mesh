@@ -1192,7 +1192,7 @@
         <div id="nav-wrap">
             <div id="nav">
                 <button class="nav-btn" id="btn-prev" onclick="go(-1)" disabled>← prev</button>
-                <div id="slide-nums"></div>
+                <div id="counter"><span class="cur" id="cur">1</span> / <span id="tot">13</span></div>
                 <button class="nav-btn" id="btn-next" onclick="go(1)">next →</button>
             </div>
         </div>
@@ -1200,26 +1200,14 @@
         <script>
             const slides = Array.from(document.querySelectorAll(".slide"));
             const total = slides.length;
+            document.getElementById("tot").textContent = total;
             let idx = 0;
-
-            // Build clickable slide number pills
-            const numsContainer = document.getElementById("slide-nums");
-            for (let i = 0; i < total; i++) {
-                const btn = document.createElement("button");
-                btn.className = "slide-num" + (i === 0 ? " active" : "");
-                btn.textContent = String(i + 1).padStart(2, "0");
-                btn.title = "Slide " + (i + 1);
-                btn.addEventListener("click", () => goTo(i));
-                numsContainer.appendChild(btn);
-            }
 
             function goTo(n) {
                 slides[idx].classList.remove("active");
-                numsContainer.children[idx].classList.remove("active");
                 idx = Math.max(0, Math.min(n, total - 1));
                 slides[idx].classList.add("active");
-                numsContainer.children[idx].classList.add("active");
-                numsContainer.children[idx].scrollIntoView({ inline: "nearest", block: "nearest" });
+                document.getElementById("cur").textContent = idx + 1;
                 document.getElementById("btn-prev").disabled = idx === 0;
                 document.getElementById("btn-next").disabled = idx === total - 1;
                 document.getElementById("progress-fill").style.width = (((idx + 1) / total) * 100).toFixed(2) + "%";
@@ -1229,7 +1217,33 @@
                 goTo(idx + dir);
             }
 
+            // Number-key navigation: buffer digits for up to 600 ms so two-digit
+            // slides (10–13) can be typed as "1" then "0", "1" then "1", etc.
+            let digitBuffer = "";
+            let digitTimer = null;
+
+            function flushDigits() {
+                const n = parseInt(digitBuffer, 10);
+                digitBuffer = "";
+                digitTimer = null;
+                if (n >= 1 && n <= total) goTo(n - 1);
+            }
+
             document.addEventListener("keydown", (e) => {
+                if (e.key >= "0" && e.key <= "9") {
+                    digitBuffer += e.key;
+                    clearTimeout(digitTimer);
+                    // Flush immediately once the buffer can only match one valid slide
+                    const n = parseInt(digitBuffer, 10);
+                    const maxPossible = parseInt(digitBuffer + "9".repeat(2 - digitBuffer.length), 10);
+                    if (n >= 1 && maxPossible > total) {
+                        flushDigits();
+                    } else {
+                        digitTimer = setTimeout(flushDigits, 600);
+                    }
+                    return;
+                }
+
                 switch (e.key) {
                     case "ArrowRight":
                     case "ArrowDown":
@@ -1244,9 +1258,11 @@
                         go(-1);
                         break;
                     case "Home":
+                        e.preventDefault();
                         goTo(0);
                         break;
                     case "End":
+                        e.preventDefault();
                         goTo(total - 1);
                         break;
                 }
