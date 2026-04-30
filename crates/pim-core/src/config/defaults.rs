@@ -183,3 +183,19 @@ pub(super) fn default_bluetooth_discoverable_timeout_s() -> u64 {
 pub(super) fn default_bluetooth_startup_timeout_ms() -> u64 {
     15_000
 }
+
+pub(super) fn default_bluetooth_rfcomm_channel() -> u8 {
+    22
+}
+
+pub(super) fn default_bluetooth_rfcomm_outbound_enabled() -> bool {
+    true
+}
+
+pub(super) fn default_bluetooth_rfcomm_poll_interval_ms() -> u64 {
+    30_000
+}
+
+pub(super) fn default_bluetooth_rfcomm_bridge_to_tcp() -> bool {
+    true
+}

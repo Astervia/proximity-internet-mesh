@@ -242,6 +242,33 @@ fn template_bluetooth_local_alias_uses_node_name() {
 }
 
 #[test]
+fn template_bluetooth_rfcomm_emits_full_block_disabled_by_default() {
+    let rendered = render_config_template(&[NodeRole::Client], None);
+    assert!(rendered.contains("[bluetooth_rfcomm]"));
+    for needle in [
+        "enabled = false",
+        "channel = 22",
+        "device_name_prefix = \"PIM-\"",
+        "outbound_enabled = true",
+        "poll_interval_ms = 30000",
+        "bridge_to_tcp = true",
+    ] {
+        assert!(
+            rendered.contains(needle),
+            "bluetooth_rfcomm missing `{needle}`. rendered:\n{rendered}"
+        );
+    }
+
+    let cfg = pim_core::Config::from_toml_str(&rendered).unwrap();
+    assert!(!cfg.bluetooth_rfcomm.enabled);
+    assert_eq!(cfg.bluetooth_rfcomm.channel, 22);
+    assert_eq!(cfg.bluetooth_rfcomm.device_name_prefix, "PIM-");
+    assert!(cfg.bluetooth_rfcomm.outbound_enabled);
+    assert_eq!(cfg.bluetooth_rfcomm.poll_interval_ms, 30_000);
+    assert!(cfg.bluetooth_rfcomm.bridge_to_tcp);
+}
+
+#[test]
 fn template_wifi_direct_emits_full_block_disabled_by_default() {
     let rendered = render_config_template(&[NodeRole::Client], None);
     assert!(rendered.contains("[wifi_direct]"));

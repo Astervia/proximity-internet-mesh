@@ -100,3 +100,46 @@ startup_timeout_ms = 10000
     assert_eq!(config.bluetooth.discoverable_timeout_s, 60);
     assert_eq!(config.bluetooth.startup_timeout_ms, 10_000);
 }
+
+#[test]
+fn bluetooth_rfcomm_defaults_to_disabled() {
+    let config = Config::from_toml_str(MINIMAL_CONFIG).unwrap();
+    assert!(!config.bluetooth_rfcomm.enabled);
+    assert_eq!(config.bluetooth_rfcomm.channel, 22);
+    assert_eq!(config.bluetooth_rfcomm.device_name_prefix, "PIM-");
+    assert!(config.bluetooth_rfcomm.outbound_enabled);
+    assert_eq!(config.bluetooth_rfcomm.poll_interval_ms, 30_000);
+    assert!(config.bluetooth_rfcomm.bridge_to_tcp);
+}
+
+#[test]
+fn bluetooth_rfcomm_enabled_round_trips() {
+    let toml = r#"
+[node]
+name = "t"
+
+[bluetooth_rfcomm]
+enabled = true
+channel = 23
+device_name_prefix = "MESH-"
+outbound_enabled = false
+poll_interval_ms = 15000
+bridge_to_tcp = false
+"#;
+    let config = Config::from_toml_str(toml).unwrap();
+    assert!(config.bluetooth_rfcomm.enabled);
+    assert_eq!(config.bluetooth_rfcomm.channel, 23);
+    assert_eq!(config.bluetooth_rfcomm.device_name_prefix, "MESH-");
+    assert!(!config.bluetooth_rfcomm.outbound_enabled);
+    assert_eq!(config.bluetooth_rfcomm.poll_interval_ms, 15_000);
+    assert!(!config.bluetooth_rfcomm.bridge_to_tcp);
+
+    let serialized = config.to_toml_string().unwrap();
+    let reparsed = Config::from_toml_str(&serialized).unwrap();
+    assert!(reparsed.bluetooth_rfcomm.enabled);
+    assert_eq!(reparsed.bluetooth_rfcomm.channel, 23);
+    assert_eq!(reparsed.bluetooth_rfcomm.device_name_prefix, "MESH-");
+    assert!(!reparsed.bluetooth_rfcomm.outbound_enabled);
+    assert_eq!(reparsed.bluetooth_rfcomm.poll_interval_ms, 15_000);
+    assert!(!reparsed.bluetooth_rfcomm.bridge_to_tcp);
+}
