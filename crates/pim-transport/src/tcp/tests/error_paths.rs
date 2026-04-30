@@ -56,7 +56,7 @@ async fn send_returns_congested_when_write_queue_full() {
         let f = TransportFrame {
             frame_type: FrameType::Data,
             nonce: [0; 12],
-            payload: payload.clone(),
+            payload: bytes::Bytes::from(payload.clone()),
             tag: [0; 16],
         };
         match transport_b.send(&node_a, f).await {
