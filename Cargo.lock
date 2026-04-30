@@ -812,7 +812,7 @@ dependencies = [
 
 [[package]]
 name = "pim-bluetooth"
-version = "0.1.3"
+version = "0.1.4"
 dependencies = [
  "libc",
  "pim-core",
@@ -826,7 +826,7 @@ dependencies = [
 
 [[package]]
 name = "pim-cli"
-version = "0.1.13"
+version = "0.1.14"
 dependencies = [
  "anyhow",
  "clap",
@@ -843,7 +843,7 @@ dependencies = [
 
 [[package]]
 name = "pim-core"
-version = "0.1.3"
+version = "0.1.4"
 dependencies = [
  "bytes",
  "serde",
@@ -855,7 +855,7 @@ dependencies = [
 
 [[package]]
 name = "pim-crypto"
-version = "0.1.3"
+version = "0.1.4"
 dependencies = [
  "aes-gcm",
  "ed25519-dalek",
@@ -872,7 +872,7 @@ dependencies = [
 
 [[package]]
 name = "pim-daemon"
-version = "0.1.7"
+version = "0.1.8"
 dependencies = [
  "anyhow",
  "bytes",
@@ -904,7 +904,7 @@ dependencies = [
 
 [[package]]
 name = "pim-discovery"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "aes-gcm",
  "anyhow",
@@ -921,7 +921,7 @@ dependencies = [
 
 [[package]]
 name = "pim-gateway"
-version = "0.1.3"
+version = "0.1.4"
 dependencies = [
  "bytes",
  "pim-core",
@@ -932,7 +932,7 @@ dependencies = [
 
 [[package]]
 name = "pim-protocol"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "bitflags 2.11.1",
  "byteorder",
@@ -944,7 +944,7 @@ dependencies = [
 
 [[package]]
 name = "pim-routing"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "ed25519-dalek",
  "pim-core",
@@ -957,7 +957,7 @@ dependencies = [
 
 [[package]]
 name = "pim-transport"
-version = "0.1.3"
+version = "0.1.4"
 dependencies = [
  "async-trait",
  "bytes",
@@ -972,7 +972,7 @@ dependencies = [
 
 [[package]]
 name = "pim-tun"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "libc",
  "nix",
@@ -984,7 +984,7 @@ dependencies = [
 
 [[package]]
 name = "pim-wifidirect"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "async-dnssd",
  "futures-util",

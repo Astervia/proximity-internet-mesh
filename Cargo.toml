@@ -65,13 +65,13 @@ rusqlite = { version = "0.32", features = ["bundled"] }
 uuid = { version = "1", features = ["v4"] }
 
 # Internal crates
-pim-core = { path = "crates/pim-core", version = "0.1.3" }
-pim-bluetooth = { path = "crates/pim-bluetooth", version = "0.1.3" }
-pim-crypto = { path = "crates/pim-crypto", version = "0.1.3" }
-pim-protocol = { path = "crates/pim-protocol", version = "0.1.1" }
-pim-transport = { path = "crates/pim-transport", version = "0.1.3" }
-pim-tun = { path = "crates/pim-tun", version = "0.1.2" }
-pim-gateway = { path = "crates/pim-gateway", version = "0.1.3" }
-pim-discovery = { path = "crates/pim-discovery", version = "0.1.1" }
-pim-routing = { path = "crates/pim-routing", version = "0.1.1" }
-pim-wifidirect = { path = "crates/pim-wifidirect", version = "0.1.2" }
+pim-core = { path = "crates/pim-core", version = "0.1.4" }
+pim-bluetooth = { path = "crates/pim-bluetooth", version = "0.1.4" }
+pim-crypto = { path = "crates/pim-crypto", version = "0.1.4" }
+pim-protocol = { path = "crates/pim-protocol", version = "0.1.2" }
+pim-transport = { path = "crates/pim-transport", version = "0.1.4" }
+pim-tun = { path = "crates/pim-tun", version = "0.1.3" }
+pim-gateway = { path = "crates/pim-gateway", version = "0.1.4" }
+pim-discovery = { path = "crates/pim-discovery", version = "0.1.2" }
+pim-routing = { path = "crates/pim-routing", version = "0.1.2" }
+pim-wifidirect = { path = "crates/pim-wifidirect", version = "0.1.3" }
