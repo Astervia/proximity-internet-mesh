@@ -826,7 +826,7 @@ dependencies = [
 
 [[package]]
 name = "pim-cli"
-version = "0.1.14"
+version = "0.1.15"
 dependencies = [
  "anyhow",
  "clap",
@@ -872,7 +872,7 @@ dependencies = [
 
 [[package]]
 name = "pim-daemon"
-version = "0.1.8"
+version = "0.1.9"
 dependencies = [
  "anyhow",
  "bytes",
@@ -932,7 +932,7 @@ dependencies = [
 
 [[package]]
 name = "pim-protocol"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "bitflags 2.11.1",
  "byteorder",
