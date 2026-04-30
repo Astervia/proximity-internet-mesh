@@ -127,9 +127,22 @@ jobs:
                   set -euo pipefail
                   publish() {
                       echo "==> Publishing $1..."
-                      cargo publish -p "$1" --locked
-                      echo "    Waiting 30s for crates.io to index $1..."
-                      sleep 30
+                      local log status
+                      log="$(mktemp)"
+                      set +e
+                      cargo publish -p "$1" --locked 2>&1 | tee "$log"
+                      status=${PIPESTATUS[0]}
+                      set -e
+                      if [ "$status" -eq 0 ]; then
+                          echo "    Waiting 30s for crates.io to index $1..."
+                          sleep 30
+                      elif grep -qE 'already (exists|uploaded)' "$log"; then
+                          echo "    $1 already published, skipping."
+                      else
+                          rm -f "$log"
+                          return "$status"
+                      fi
+                      rm -f "$log"
                   }
                   publish pim-core
                   publish pim-crypto
