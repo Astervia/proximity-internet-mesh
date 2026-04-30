@@ -113,36 +113,8 @@ body::after {
 }
 .nav-btn:disabled { opacity: 0.18; cursor: not-allowed; }
 
-/* ─── Slide number pills ─── */
-#slide-nums {
-  display: flex; align-items: center; gap: 4px;
-  overflow: hidden;
-}
-
-.slide-num {
-  background: transparent;
-  border: 1px solid var(--border);
-  color: var(--text-dim);
-  font-family: inherit;
-  font-size: 10px;
-  letter-spacing: 0.05em;
-  width: 28px; height: 24px;
-  cursor: pointer;
-  display: flex; align-items: center; justify-content: center;
-  transition: border-color 0.12s, color 0.12s, box-shadow 0.12s, background 0.12s;
-  flex-shrink: 0;
-}
-.slide-num:hover {
-  border-color: var(--green);
-  color: var(--green);
-  box-shadow: 0 0 6px var(--green-glow);
-}
-.slide-num.active {
-  border-color: var(--green);
-  color: var(--green-b);
-  background: rgba(61, 214, 110, 0.08);
-  box-shadow: 0 0 10px var(--green-glow);
-}
+#counter { font-size: 11px; color: var(--text-dim); letter-spacing: 0.12em; }
+#counter .cur { color: var(--green); }
 
 /* ─── Slide prompt line ─── */
 .prompt {
