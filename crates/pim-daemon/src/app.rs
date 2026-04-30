@@ -372,6 +372,7 @@ pub(crate) async fn run() -> Result<()> {
     let transport = TcpTransport::new_with_cancel(listen_addr, self_id, cancel.clone())
         .await
         .context("failed to start TCP transport")?;
+    let transport_listen_port = transport.listen_addr.port();
     info!(listen = %transport.listen_addr, "transport listening");
 
     // ── Gateway NAT setup ─────────────────────────────────────────────────
@@ -735,7 +736,7 @@ pub(crate) async fn run() -> Result<()> {
             // like a normal TCP peer to the rest of the kernel.
             local_bridge_addr: Some(std::net::SocketAddr::new(
                 std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST),
-                transport.listen_addr.port(),
+                transport_listen_port,
             )),
         };
         let (events_tx, mut events_rx) = tokio::sync::mpsc::channel(64);
