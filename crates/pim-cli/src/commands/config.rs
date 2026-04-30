@@ -505,7 +505,10 @@ fn push_bluetooth_rfcomm(out: &mut String) {
         "# to the local TCP listener so normal PIM handshakes and sessions are reused.",
     );
     push_line(out, "enabled = false");
-    push_line(out, "# RFCOMM channel to bind and dial. Default 22 avoids common SPP conflicts.");
+    push_line(
+        out,
+        "# RFCOMM channel to bind and dial. Default 22 avoids common SPP conflicts.",
+    );
     push_line(out, "channel = 22");
     push_line(out, "# Filter paired Bluetooth devices by name prefix.");
     push_line(out, "device_name_prefix = \"PIM-\"");
