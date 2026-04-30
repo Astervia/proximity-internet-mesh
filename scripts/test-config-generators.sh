@@ -30,7 +30,11 @@ assert_not_contains() {
 }
 
 linux_client="$tmpdir/linux-client.toml"
-PIM_HOST_OS=Linux scripts/generate_client_full_config.sh > "$linux_client"
+PIM_HOST_OS=Linux scripts/generate_client_full_config.sh \
+    --name client-node \
+    --wifi-interface wlan0 \
+    --bt-interface auto \
+    > "$linux_client"
 assert_contains "$linux_client" 'name = "pim0"'
 assert_contains "$linux_client" '[wifi_direct]'
 assert_contains "$linux_client" 'enabled = true'
@@ -46,7 +50,11 @@ assert_contains "$linux_client" 'channel = 22'
 assert_contains "$linux_client" 'bridge_to_tcp = true'
 
 mac_client="$tmpdir/macos-client.toml"
-PIM_HOST_OS=Darwin scripts/generate_client_full_config.sh > "$mac_client"
+PIM_HOST_OS=Darwin scripts/generate_client_full_config.sh \
+    --name client-node \
+    --wifi-interface en0 \
+    --bt-interface bridge0 \
+    > "$mac_client"
 assert_contains "$mac_client" 'name = "utun0"'
 assert_contains "$mac_client" '# Wi-Fi Direct is currently Linux-only; leave this disabled on macOS.'
 assert_contains "$mac_client" '# macOS Bluetooth PAN uses the host Bluetooth stack. Install blueutil for radio discovery/pair/connect.'
@@ -61,7 +69,12 @@ assert_not_contains "$mac_client" '#   iw dev'
 assert_not_contains "$mac_client" '#   bluetoothctl show'
 
 linux_gateway="$tmpdir/linux-gateway.toml"
-PIM_HOST_OS=Linux scripts/generate_gateway_full_config.sh > "$linux_gateway"
+PIM_HOST_OS=Linux scripts/generate_gateway_full_config.sh \
+    --name gateway-node \
+    --nat-interface eth0 \
+    --wifi-interface wlan0 \
+    --bt-interface auto \
+    > "$linux_gateway"
 assert_contains "$linux_gateway" 'serve_nap = true'
 assert_contains "$linux_gateway" 'nap_bridge = "br-bt"'
 assert_contains "$linux_gateway" 'nap_bridge_addr = "192.168.44.1/24"'
@@ -72,7 +85,12 @@ assert_contains "$linux_gateway" 'channel = 22'
 assert_contains "$linux_gateway" 'bridge_to_tcp = true'
 
 mac_gateway="$tmpdir/macos-gateway.toml"
-PIM_HOST_OS=Darwin scripts/generate_gateway_full_config.sh > "$mac_gateway"
+PIM_HOST_OS=Darwin scripts/generate_gateway_full_config.sh \
+    --name gateway-node \
+    --nat-interface en0 \
+    --wifi-interface en0 \
+    --bt-interface bridge0 \
+    > "$mac_gateway"
 assert_contains "$mac_gateway" 'name = "utun0"'
 assert_contains "$mac_gateway" 'nat_interface = "en0"'
 assert_contains "$mac_gateway" '# Wi-Fi Direct is currently Linux-only; leave this disabled on macOS.'
