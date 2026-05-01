@@ -394,7 +394,9 @@ impl RoutingTable {
     pub fn generate_advertisement(&mut self, to_peer: NodeId) -> RouteUpdateFrame {
         self.sequence += 1;
 
-        let mut entries: Vec<RouteEntry> = Vec::new();
+        // OPTIMIZATION: Pre-allocate capacity to prevent multiple vector reallocations
+        // when dealing with large numbers of route entries.
+        let mut entries: Vec<RouteEntry> = Vec::with_capacity(self.routes.len() + 1);
 
         // Advertise our own node (0 hops, possibly as gateway)
         entries.push(RouteEntry {
