@@ -32,3 +32,7 @@
 
 **Learning:** Data and Transport frames were constantly taking ownership of byte buffers via `.to_vec()` instead of using zero-copy `bytes::Bytes`. This caused numerous heap allocations per forwarded packet on relay nodes, unnecessarily straining memory bandwidth.
 **Action:** Replace `Vec<u8>` payloads in protocol frame structs (`TransportFrame`, `MeshDataFrame`, `FragmentFrame`) with `bytes::Bytes` to allow zero-copy parsing and forwarding, drastically cutting allocations per packet.
+## 2024-05-18 - Avoid allocations on uniquely owned `bytes::Bytes` with `try_into_mut()`
+
+**Learning:** `bytes::Bytes` holds a reference-counted buffer but its contents cannot be mutated via `.to_vec()` without forcing a clone and full allocation. However, if the network code owns the sole reference to the buffer (e.g. immediately after decoding), `.try_into_mut()` can safely reclaim mutable access to the underlying `BytesMut` with zero allocations. In high-throughput network daemons like PIM, allocating memory for every frame on the read path becomes a major performance bottleneck.
+**Action:** When a frame buffer needs to be mutated directly (like in `decrypt_in_place_detached`), avoid `.to_vec()`. Instead, attempt to use `.try_into_mut()` when we know the `Bytes` object is uniquely owned to recover zero-copy mutability.
