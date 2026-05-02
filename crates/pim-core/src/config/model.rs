@@ -42,6 +42,9 @@ pub struct Config {
     /// Bluetooth RFCOMM direct-channel discovery and TCP bridge settings.
     #[serde(default)]
     pub bluetooth_rfcomm: BluetoothRfcommConfig,
+    /// User-to-user encrypted messaging settings, including broadcast policy.
+    #[serde(default)]
+    pub messaging: MessagingConfig,
     /// Statically configured peers. Optional — nodes can rely entirely on discovery when empty.
     #[serde(default)]
     pub peers: Vec<PeerConfig>,
@@ -323,6 +326,70 @@ pub struct BluetoothRfcommConfig {
     /// Bridge established RFCOMM sessions to the local TCP transport listener.
     #[serde(default = "default_bluetooth_rfcomm_bridge_to_tcp")]
     pub bridge_to_tcp: bool,
+}
+
+/// Messaging subsystem configuration. Currently exposes the
+/// `[messaging.broadcast]` policy that governs how this node advertises
+/// its identity across the mesh and how it consumes broadcasts from
+/// other peers.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+pub struct MessagingConfig {
+    /// Identity-broadcast policy for the multi-hop mesh.
+    #[serde(default)]
+    pub broadcast: BroadcastConfig,
+}
+
+/// Identity-broadcast policy.
+///
+/// Broadcasts are routed `PeerInfo` control frames sent to every node
+/// in the local routing table — they let multi-hop peers learn each
+/// other's `node_id + x25519_pubkey` without an out-of-band exchange.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct BroadcastConfig {
+    /// Cadence between scheduled outbound broadcast cycles, in seconds.
+    /// `None` (or omitted) disables the periodic task; one-shot
+    /// `peers.broadcast_identity_now` calls still work. Values below
+    /// `MIN_OUTGOING_INTERVAL_S` are rejected at the RPC layer.
+    #[serde(default)]
+    pub outgoing_interval_s: Option<u64>,
+    /// When `true`, routed `PeerInfo` arrivals (the inbound side of a
+    /// broadcast) are surfaced as `peer_seen` events and a discovered
+    /// row in the UI. When `false`, the X25519 key is still cached
+    /// (replies need it) but no event is emitted — useful on noisy
+    /// meshes where the local node does not want surfaced discovery.
+    #[serde(default = "default_broadcast_watch_incoming")]
+    pub watch_incoming: bool,
+    /// Minimum seconds that must elapse between accepted broadcasts
+    /// from any single peer. Subsequent broadcasts from the same peer
+    /// arriving sooner are dropped before the keystore is touched —
+    /// a single misbehaving peer cannot flood the keystore or the UI.
+    #[serde(default = "default_broadcast_min_peer_interval_s")]
+    pub min_peer_interval_s: u64,
+}
+
+impl Default for BroadcastConfig {
+    fn default() -> Self {
+        Self {
+            outgoing_interval_s: None,
+            watch_incoming: default_broadcast_watch_incoming(),
+            min_peer_interval_s: default_broadcast_min_peer_interval_s(),
+        }
+    }
+}
+
+impl BroadcastConfig {
+    /// Floor enforced by the RPC layer when a non-`None`
+    /// `outgoing_interval_s` is supplied. Below this we'd start
+    /// hammering the mesh.
+    pub const MIN_OUTGOING_INTERVAL_S: u64 = 30;
+}
+
+fn default_broadcast_watch_incoming() -> bool {
+    true
+}
+
+fn default_broadcast_min_peer_interval_s() -> u64 {
+    60
 }
 
 // Default value functions

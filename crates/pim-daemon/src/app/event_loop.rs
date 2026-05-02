@@ -336,6 +336,7 @@ pub(super) async fn run_event_loop(state: Arc<DaemonState>) -> Result<()> {
                                                 mesh.src_id,
                                                 x25519_pub,
                                                 friendly_name,
+                                                crate::app::messaging::PeerInfoSource::Routed,
                                             )
                                             .await;
                                         }
@@ -692,6 +693,7 @@ pub(super) async fn run_event_loop(state: Arc<DaemonState>) -> Result<()> {
                                         from_peer,
                                         x25519_pub,
                                         friendly_name,
+                                        crate::app::messaging::PeerInfoSource::Direct,
                                     )
                                     .await;
                                 }
