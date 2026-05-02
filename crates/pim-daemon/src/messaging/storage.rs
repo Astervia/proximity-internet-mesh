@@ -144,6 +144,30 @@ pub struct ConversationSummary {
     pub last_message_ts_ms: Option<i64>,
     /// Number of received messages since `mark_read`.
     pub unread_count: i64,
+    /// Cached X25519 static public key (64-char lowercase hex), if known.
+    /// Populated from `peers_seen` so the UI's identity card can show the
+    /// key for offline / known-only peers without an extra round-trip.
+    pub x25519_pubkey: Option<String>,
+}
+
+/// Outcome of an out-of-band identity import
+/// ([`MessagingStorage::import_peer_identity_if_compatible`]).
+///
+/// Returned in lieu of a plain `bool` so the RPC layer can distinguish
+/// "first-time insert", "redundant idempotent import", and "user must
+/// resolve the conflict before we silently rewrite the keystore".
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ImportOutcome {
+    /// `node_id` was not previously cached — a fresh row was created.
+    Inserted,
+    /// `node_id` was already cached with the same `x25519_pub`. The
+    /// row's `last_seen_ms` (and optionally `last_known_name`) was
+    /// refreshed; no key material changed.
+    Refreshed,
+    /// `node_id` is already cached with a *different* `x25519_pub`. The
+    /// stored row was left untouched. The hex-encoded existing key is
+    /// returned so callers can surface a meaningful diagnostic.
+    KeyMismatch { existing_x25519_hex: String },
 }
 
 /// Wraps a single SQLite connection guarded by a `std::sync::Mutex`. The
@@ -220,6 +244,89 @@ impl MessagingStorage {
                 Ok(false)
             }
         }
+    }
+
+    /// Insert or refresh a peer's identity ONLY if the supplied
+    /// `x25519_pub` matches any existing cached value. Returns
+    /// `ImportOutcome::Inserted` when the row is new,
+    /// `ImportOutcome::Refreshed` when an identical row already
+    /// existed (timestamps/name updated), or
+    /// `ImportOutcome::KeyMismatch` when `node_id` is already cached
+    /// with a different x25519 key. The mismatch case yields the
+    /// existing key as hex so the caller can surface it to the user.
+    ///
+    /// `name_if_set` is only applied when `Some(_)` AND non-empty —
+    /// callers that wish to preserve an existing label should pass
+    /// `None`.
+    pub fn import_peer_identity_if_compatible(
+        &self,
+        peer: &NodeId,
+        x25519_pub: &[u8; 32],
+        name_if_set: Option<&str>,
+        now_ms: i64,
+    ) -> Result<ImportOutcome> {
+        let conn = self.conn.lock().unwrap();
+        let peer_hex = hex_node_id(peer);
+        let existing: Option<Vec<u8>> = conn
+            .query_row(
+                "SELECT x25519_pub FROM peers_seen WHERE node_id = ?1",
+                params![peer_hex],
+                |row| row.get::<_, Vec<u8>>(0),
+            )
+            .ok();
+
+        match existing {
+            None => {
+                let name = name_if_set.unwrap_or("");
+                conn.execute(
+                    "INSERT INTO peers_seen (node_id, x25519_pub, last_known_name, first_seen_ms, last_seen_ms) \
+                     VALUES (?1, ?2, ?3, ?4, ?4)",
+                    params![peer_hex, x25519_pub.as_slice(), name, now_ms],
+                )?;
+                Ok(ImportOutcome::Inserted)
+            }
+            Some(bytes) if bytes.as_slice() == x25519_pub.as_slice() => {
+                // Same key. Refresh last_seen_ms; only overwrite name if
+                // the caller supplied a non-empty replacement.
+                if let Some(name) = name_if_set.filter(|s| !s.is_empty()) {
+                    conn.execute(
+                        "UPDATE peers_seen SET last_known_name = ?2, last_seen_ms = ?3 WHERE node_id = ?1",
+                        params![peer_hex, name, now_ms],
+                    )?;
+                } else {
+                    conn.execute(
+                        "UPDATE peers_seen SET last_seen_ms = ?2 WHERE node_id = ?1",
+                        params![peer_hex, now_ms],
+                    )?;
+                }
+                Ok(ImportOutcome::Refreshed)
+            }
+            Some(bytes) => Ok(ImportOutcome::KeyMismatch {
+                existing_x25519_hex: hex32(&bytes),
+            }),
+        }
+    }
+
+    /// Snapshot every known peer's X25519 public key as hex. Used by the
+    /// RPC peer-summary builder to attach `x25519_pubkey` without a
+    /// per-peer SQLite round-trip. Keyed by 32-char node_id hex.
+    pub fn list_known_x25519_pubs(&self) -> Result<std::collections::HashMap<String, String>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare("SELECT node_id, x25519_pub FROM peers_seen")?;
+        let rows = stmt
+            .query_map([], |row| {
+                let node_id: String = row.get(0)?;
+                let bytes: Vec<u8> = row.get(1)?;
+                Ok((node_id, bytes))
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        let mut out = std::collections::HashMap::with_capacity(rows.len());
+        for (node_id, bytes) in rows {
+            if bytes.len() == 32 {
+                out.insert(node_id, hex32(&bytes));
+            }
+        }
+        Ok(out)
     }
 
     /// Look up a peer's cached X25519 static public key, if known.
@@ -346,6 +453,21 @@ impl MessagingStorage {
             })
             .unwrap_or_else(|| short_id(peer_id_hex));
 
+        let x25519_pubkey: Option<String> = conn
+            .query_row(
+                "SELECT x25519_pub FROM peers_seen WHERE node_id = ?1",
+                params![peer_id_hex],
+                |row| row.get::<_, Vec<u8>>(0),
+            )
+            .ok()
+            .and_then(|bytes| {
+                if bytes.len() == 32 {
+                    Some(hex32(&bytes))
+                } else {
+                    None
+                }
+            });
+
         Ok(ConversationSummary {
             peer_node_id: peer_id_hex.to_owned(),
             peer_node_id_short: short_id(peer_id_hex),
@@ -353,6 +475,7 @@ impl MessagingStorage {
             last_message_preview: Some(preview),
             last_message_ts_ms: Some(ts_ms),
             unread_count,
+            x25519_pubkey,
         })
     }
 
@@ -449,7 +572,7 @@ impl MessagingStorage {
     pub fn list_conversations(&self) -> Result<Vec<ConversationSummary>> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
-            "SELECT cm.peer_node_id, ps.last_known_name, cm.last_message_preview, cm.last_message_ts_ms, cm.unread_count \
+            "SELECT cm.peer_node_id, ps.last_known_name, cm.last_message_preview, cm.last_message_ts_ms, cm.unread_count, ps.x25519_pub \
              FROM conversations_meta cm \
              LEFT JOIN peers_seen ps ON ps.node_id = cm.peer_node_id \
              ORDER BY cm.last_message_ts_ms DESC NULLS LAST",
@@ -462,6 +585,14 @@ impl MessagingStorage {
                 let preview: Option<String> = row.get(2)?;
                 let ts: Option<i64> = row.get(3)?;
                 let unread: i64 = row.get(4)?;
+                let x25519_bytes: Option<Vec<u8>> = row.get(5)?;
+                let x25519_pubkey = x25519_bytes.and_then(|bytes| {
+                    if bytes.len() == 32 {
+                        Some(hex32(&bytes))
+                    } else {
+                        None
+                    }
+                });
                 let short = short_id(&peer_node_id);
                 Ok(ConversationSummary {
                     peer_node_id_short: short.clone(),
@@ -470,6 +601,7 @@ impl MessagingStorage {
                     last_message_preview: preview,
                     last_message_ts_ms: ts,
                     unread_count: unread,
+                    x25519_pubkey,
                 })
             })?
             .collect::<Result<Vec<_>, _>>()?;
@@ -544,4 +676,160 @@ fn preview_of(body: &str) -> String {
 
 fn short_id(hex: &str) -> String {
     hex.chars().take(8).collect()
+}
+
+fn hex32(bytes: &[u8]) -> String {
+    let mut out = String::with_capacity(64);
+    for b in bytes {
+        out.push_str(&format!("{b:02x}"));
+    }
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    fn open_temp_storage() -> (TempDir, MessagingStorage) {
+        let dir = TempDir::new().expect("create tempdir");
+        let path = dir.path().join("messages.db");
+        let storage = MessagingStorage::open(path).expect("open storage");
+        (dir, storage)
+    }
+
+    fn node_a() -> NodeId {
+        NodeId::from_bytes([0xa1; 16])
+    }
+
+    fn node_b() -> NodeId {
+        NodeId::from_bytes([0xb2; 16])
+    }
+
+    #[test]
+    fn import_inserts_when_unknown() {
+        let (_d, storage) = open_temp_storage();
+        let key = [0x11u8; 32];
+        let outcome = storage
+            .import_peer_identity_if_compatible(&node_a(), &key, Some("alice"), 100)
+            .expect("import");
+        assert_eq!(outcome, ImportOutcome::Inserted);
+        let cached = storage
+            .lookup_x25519_pub(&node_a())
+            .expect("lookup")
+            .expect("present");
+        assert_eq!(cached, key);
+        let name = storage
+            .lookup_peer_name(&node_a())
+            .expect("name")
+            .expect("present");
+        assert_eq!(name, "alice");
+    }
+
+    #[test]
+    fn import_refreshes_when_same_key() {
+        let (_d, storage) = open_temp_storage();
+        let key = [0x22u8; 32];
+        storage
+            .import_peer_identity_if_compatible(&node_a(), &key, Some("alice"), 100)
+            .unwrap();
+        let outcome = storage
+            .import_peer_identity_if_compatible(&node_a(), &key, Some("alice-renamed"), 200)
+            .expect("import");
+        assert_eq!(outcome, ImportOutcome::Refreshed);
+        let name = storage
+            .lookup_peer_name(&node_a())
+            .expect("name")
+            .expect("present");
+        assert_eq!(name, "alice-renamed");
+    }
+
+    #[test]
+    fn import_preserves_name_when_caller_passes_none() {
+        let (_d, storage) = open_temp_storage();
+        let key = [0x33u8; 32];
+        storage
+            .import_peer_identity_if_compatible(&node_a(), &key, Some("alice"), 100)
+            .unwrap();
+        let outcome = storage
+            .import_peer_identity_if_compatible(&node_a(), &key, None, 200)
+            .expect("import");
+        assert_eq!(outcome, ImportOutcome::Refreshed);
+        let name = storage
+            .lookup_peer_name(&node_a())
+            .expect("name")
+            .expect("present");
+        assert_eq!(name, "alice");
+    }
+
+    #[test]
+    fn import_refuses_mismatched_key() {
+        let (_d, storage) = open_temp_storage();
+        let key1 = [0x44u8; 32];
+        let key2 = [0x55u8; 32];
+        storage
+            .import_peer_identity_if_compatible(&node_a(), &key1, Some("alice"), 100)
+            .unwrap();
+        let outcome = storage
+            .import_peer_identity_if_compatible(&node_a(), &key2, Some("alice"), 200)
+            .expect("import");
+        match outcome {
+            ImportOutcome::KeyMismatch {
+                existing_x25519_hex,
+            } => {
+                assert_eq!(existing_x25519_hex, hex32(&key1));
+            }
+            other => panic!("expected KeyMismatch, got {other:?}"),
+        }
+        // Stored key was NOT overwritten.
+        let cached = storage
+            .lookup_x25519_pub(&node_a())
+            .expect("lookup")
+            .expect("present");
+        assert_eq!(cached, key1);
+    }
+
+    #[test]
+    fn list_known_x25519_pubs_snapshot() {
+        let (_d, storage) = open_temp_storage();
+        let key_a = [0x66u8; 32];
+        let key_b = [0x77u8; 32];
+        storage
+            .import_peer_identity_if_compatible(&node_a(), &key_a, Some("alice"), 100)
+            .unwrap();
+        storage
+            .import_peer_identity_if_compatible(&node_b(), &key_b, Some("bob"), 100)
+            .unwrap();
+        let snapshot = storage.list_known_x25519_pubs().expect("snapshot");
+        assert_eq!(snapshot.len(), 2);
+        assert_eq!(
+            snapshot.get(&hex_node_id(&node_a())).cloned(),
+            Some(hex32(&key_a))
+        );
+        assert_eq!(
+            snapshot.get(&hex_node_id(&node_b())).cloned(),
+            Some(hex32(&key_b))
+        );
+    }
+
+    #[test]
+    fn list_conversations_includes_x25519_when_cached() {
+        let (_d, storage) = open_temp_storage();
+        let key = [0x88u8; 32];
+        // First, cache the identity.
+        storage
+            .import_peer_identity_if_compatible(&node_a(), &key, Some("alice"), 100)
+            .unwrap();
+        // Synthesize an inbound message so a conversations_meta row exists.
+        let peer_hex = hex_node_id(&node_a());
+        let _ = storage
+            .bump_conversation_after_remote_receive(&peer_hex, "deadbeef", 200, "hi", None)
+            .unwrap();
+        let convos = storage.list_conversations().expect("list");
+        let convo = convos
+            .iter()
+            .find(|c| c.peer_node_id == peer_hex)
+            .expect("have one");
+        assert_eq!(convo.x25519_pubkey.as_deref(), Some(hex32(&key).as_str()));
+    }
 }

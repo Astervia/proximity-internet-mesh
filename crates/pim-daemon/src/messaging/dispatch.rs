@@ -37,6 +37,23 @@ pub(crate) async fn send_peer_info(state: &Arc<DaemonState>, peer: NodeId) {
     debug!(%peer, "sent PeerInfo");
 }
 
+/// Routed counterpart to [`send_peer_info`] — piggybacks our identity
+/// ahead of a user message so a multi-hop recipient that has not yet
+/// cached our X25519 key can decrypt + reply without an explicit
+/// `peers.import_identity` round-trip on their side. Best-effort: a
+/// failed send is logged but does not abort the surrounding `Message`
+/// dispatch.
+pub(crate) async fn send_peer_info_routed(state: &Arc<DaemonState>, peer: NodeId) {
+    let frame = ControlFrame::PeerInfo {
+        x25519_pub: state.own_x25519_pub,
+        friendly_name: state.node_name.clone(),
+    };
+    let sent = send_routed_control(state, peer, frame).await;
+    if !sent {
+        debug!(%peer, "routed PeerInfo: no route (proceeding with Message anyway)");
+    }
+}
+
 /// Persist a freshly-learned PeerInfo and emit the `peer_seen` event.
 pub(crate) async fn handle_incoming_peer_info(
     state: &Arc<DaemonState>,
@@ -100,6 +117,14 @@ pub(crate) async fn send_user_message(
 
     let ciphertext = e2e_encrypt(body.as_bytes(), &recipient_x25519)
         .map_err(|e| anyhow!("e2e_encrypt failed: {e}"))?;
+
+    // Best-effort: prepend a routed PeerInfo so a multi-hop recipient
+    // who only knows us via an out-of-band identity card (or not at
+    // all) can populate their x25519 cache and reply. Idempotent on
+    // the recipient side — `record_peer_seen` upserts. If the routing
+    // table has no path the helper logs and returns; the subsequent
+    // Message attempt will surface the `no_route` failure to the user.
+    send_peer_info_routed(state, peer).await;
 
     let frame = ControlFrame::Message {
         message_id: id_bytes,
