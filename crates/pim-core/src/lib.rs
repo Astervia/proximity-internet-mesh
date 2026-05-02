@@ -8,8 +8,9 @@ pub mod error;
 pub mod types;
 
 pub use config::{
-    AuthorizationPolicy, BluetoothConfig, BluetoothRfcommConfig, Config, DiscoveryConfig,
-    PeerConfig, PeerEndpointConfig, RelayConfig, SecurityConfig, WifiDirectConfig,
+    AuthorizationPolicy, BluetoothConfig, BluetoothRfcommConfig, BroadcastConfig, Config,
+    DiscoveryConfig, MessagingConfig, PeerConfig, PeerEndpointConfig, RelayConfig, SecurityConfig,
+    WifiDirectConfig,
 };
 pub use debug::*;
 pub use error::PimError;

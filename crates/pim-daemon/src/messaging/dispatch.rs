@@ -13,7 +13,7 @@ use pim_crypto::{e2e_decrypt_in_place, e2e_encrypt};
 use pim_protocol::{ControlFrame, DataFlags};
 use tracing::{debug, info, warn};
 
-use super::{hex_node_id, AckKind, MAX_BODY_BYTES};
+use super::{hex_node_id, AckKind, PeerInfoSource, MAX_BODY_BYTES};
 use crate::app::ip_control::send_routed_control;
 use crate::app::peer_tasks::send_control;
 use crate::app::DaemonState;
@@ -54,16 +54,158 @@ pub(crate) async fn send_peer_info_routed(state: &Arc<DaemonState>, peer: NodeId
     }
 }
 
-/// Persist a freshly-learned PeerInfo and emit the `peer_seen` event.
+/// Outcome of one identity-broadcast cycle — used by both the
+/// `peers.broadcast_identity_now` RPC and the periodic background
+/// task so they share a single implementation.
+pub(crate) struct BroadcastCycleOutcome {
+    /// Number of distinct destination NodeIds the cycle attempted to
+    /// reach (excluding ourselves). The actual on-wire send rate may
+    /// be lower if a route disappeared between snapshot and dispatch.
+    pub recipients: usize,
+}
+
+/// Send our identity (`PeerInfo`) to every node currently in the
+/// routing table. Idempotent on the recipient side via the existing
+/// `record_peer_seen` upsert.
+pub(crate) async fn run_broadcast_cycle(state: &Arc<DaemonState>) -> BroadcastCycleOutcome {
+    let snapshot: Vec<NodeId> = {
+        let routing = state.routing.lock().await;
+        routing
+            .routes_snapshot()
+            .into_iter()
+            .map(|(id, _entry)| id)
+            .filter(|id| *id != state.self_id)
+            .collect()
+    };
+    let recipients = snapshot.len();
+    for peer in snapshot {
+        send_peer_info_routed(state, peer).await;
+    }
+    let now_ms = now_ms();
+    state
+        .last_broadcast_ms
+        .store(now_ms, std::sync::atomic::Ordering::Relaxed);
+    state
+        .last_broadcast_recipients
+        .store(recipients as u64, std::sync::atomic::Ordering::Relaxed);
+    debug!(recipients, "broadcast cycle complete");
+    BroadcastCycleOutcome { recipients }
+}
+
+/// Long-running background task that fires `run_broadcast_cycle`
+/// according to `state.broadcast_config.outgoing_interval_s`. Wakes
+/// early when `broadcast_notify` is poked (e.g. on a config change)
+/// so the next cycle reflects the new interval immediately.
+///
+/// Cancellation: the task exits cleanly when `state.cancel` fires.
+pub(crate) async fn run_broadcast_task(state: Arc<DaemonState>) {
+    use std::sync::atomic::Ordering;
+    use std::time::Duration;
+    use tokio::time::sleep;
+
+    /// How long to wait before re-checking the config when broadcasts
+    /// are disabled. Picked small enough that a freshly-enabled
+    /// schedule fires within a few seconds; the `Notify` path makes
+    /// this responsive even when the user toggles via UI.
+    const DISABLED_RECHECK_S: u64 = 30;
+
+    loop {
+        if state.cancel.is_cancelled() {
+            return;
+        }
+        let interval = state.broadcast_config.read().await.outgoing_interval_s;
+
+        let sleep_dur = match interval {
+            Some(secs) => Duration::from_secs(secs.max(1)),
+            None => Duration::from_secs(DISABLED_RECHECK_S),
+        };
+
+        // Race the timer against the notify so config edits take
+        // effect immediately. Ordering matters: notify_one() wakes
+        // exactly one waiter, so a missed wake while we're inside
+        // run_broadcast_cycle is harmless — the next loop re-reads
+        // the (already-updated) config.
+        tokio::select! {
+            _ = sleep(sleep_dur) => {}
+            _ = state.broadcast_notify.notified() => {
+                // Config changed — re-evaluate without firing a cycle.
+                continue;
+            }
+            _ = state.cancel.cancelled() => return,
+        }
+
+        // Re-read interval after sleep — it may have flipped to None
+        // while we waited (e.g. user disabled broadcasts).
+        let still_enabled = state
+            .broadcast_config
+            .read()
+            .await
+            .outgoing_interval_s
+            .is_some();
+        if !still_enabled {
+            continue;
+        }
+        let _ = run_broadcast_cycle(&state).await;
+        // Update last counters again here for clarity (run_broadcast_cycle
+        // already does it but keeping the side-effect explicit makes the
+        // task readable).
+        let _ = Ordering::Relaxed;
+    }
+}
+
+/// Persist a freshly-learned PeerInfo and (conditionally) emit the
+/// `peer_seen` event.
+///
+/// Routed PeerInfo arrivals are subject to two configurable gates:
+/// 1. `messaging.broadcast.min_peer_interval_s` — drops broadcasts
+///    arriving sooner than the configured per-peer minimum so a single
+///    misbehaving peer cannot flood our keystore or UI.
+/// 2. `messaging.broadcast.watch_incoming` — when false, we still
+///    upsert the X25519 key (replies need it) but do NOT surface the
+///    `peer_seen` event so the UI stays quiet.
+///
+/// Direct PeerInfo (handshake-initiated) bypasses both gates — the
+/// frame can only be sent once per direct session and we always want
+/// it surfaced.
 pub(crate) async fn handle_incoming_peer_info(
     state: &Arc<DaemonState>,
     src: NodeId,
     x25519_pub: [u8; 32],
     friendly_name: String,
+    source: PeerInfoSource,
 ) {
+    if source == PeerInfoSource::Routed {
+        // Rate-limit gate. Reject (silently — debug only) repeats from
+        // the same peer arriving sooner than configured.
+        let min_interval_s = state.broadcast_config.read().await.min_peer_interval_s;
+        if min_interval_s > 0 {
+            let now = std::time::Instant::now();
+            let mut last_seen = state.broadcast_peer_last_seen.lock().await;
+            if let Some(prev) = last_seen.get(&src) {
+                if now.duration_since(*prev).as_secs() < min_interval_s {
+                    debug!(
+                        %src,
+                        elapsed_s = now.duration_since(*prev).as_secs(),
+                        min_interval_s,
+                        "broadcast rate-limit drop"
+                    );
+                    return;
+                }
+            }
+            last_seen.insert(src, now);
+        }
+    }
+
     let inserted = match state
         .messaging
-        .record_peer_seen(src, x25519_pub, friendly_name.clone(), now_ms())
+        .record_peer_seen(
+            src,
+            x25519_pub,
+            friendly_name.clone(),
+            now_ms(),
+            source,
+            broadcast_should_emit_event(state, source).await,
+        )
         .await
     {
         Ok(v) => v,
@@ -73,7 +215,17 @@ pub(crate) async fn handle_incoming_peer_info(
         }
     };
     if inserted {
-        info!(%src, name = %friendly_name, "first contact: peer identity cached");
+        info!(%src, name = %friendly_name, ?source, "first contact: peer identity cached");
+    }
+}
+
+/// Whether `record_peer_seen` should also emit the `peer_seen` event
+/// based on the watch-incoming policy. Direct PeerInfo always emits;
+/// routed PeerInfo respects the toggle.
+async fn broadcast_should_emit_event(state: &Arc<DaemonState>, source: PeerInfoSource) -> bool {
+    match source {
+        PeerInfoSource::Direct => true,
+        PeerInfoSource::Routed => state.broadcast_config.read().await.watch_incoming,
     }
 }
 
