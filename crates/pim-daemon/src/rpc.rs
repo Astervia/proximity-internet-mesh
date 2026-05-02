@@ -81,6 +81,22 @@ mod codes {
     pub(super) const MESSAGE_PEER_UNKNOWN: i32 = -32060;
     pub(super) const MESSAGE_BODY_TOO_LARGE: i32 = -32061;
     pub(super) const MESSAGE_STORAGE_ERROR: i32 = -32062;
+    /// `peers.import_identity` was asked to overwrite an existing
+    /// `peers_seen` row whose cached `x25519_pubkey` does not match the
+    /// supplied value. Caller should confirm with the user before
+    /// removing the stale entry and re-issuing the import.
+    pub(super) const PEER_IDENTITY_MISMATCH: i32 = -32040;
+}
+
+/// Format 32 raw bytes (e.g. an X25519 static public key) as 64-char
+/// lowercase hex — the wire-encoding used everywhere we surface key
+/// material on the JSON-RPC surface.
+fn hex32(bytes: &[u8; 32]) -> String {
+    let mut out = String::with_capacity(64);
+    for b in bytes {
+        out.push_str(&format!("{b:02x}"));
+    }
+    out
 }
 
 /// Module-private subscription-id allocator. Stable across reconnects
@@ -387,6 +403,7 @@ async fn dispatch(state: &Arc<DaemonState>, req: &RpcRequest, write_tx: &WriteTx
             "peers.pair: not yet implemented in this RPC server".into(),
             None,
         )),
+        "peers.import_identity" => method_peers_import_identity(state, req.params.as_ref()).await,
         "peers.subscribe" => Ok(json!({ "subscription_id": new_subscription_id() })),
         "peers.unsubscribe" => Ok(Value::Null),
 
@@ -651,10 +668,13 @@ async fn build_status(state: &Arc<DaemonState>) -> Value {
     let listen_port = state.transport.listen_addr.port();
     let interface_name = state.tun.name();
 
+    let x25519_pubkey_self = hex32(&state.own_x25519_pub);
+
     json!({
         "node": state.node_name,
         "node_id": state.self_id.to_hex(),
         "node_id_short": state.self_id.to_string(),
+        "x25519_pubkey": x25519_pubkey_self,
         "mesh_ip": mesh_ip_cidr,
         "interface": {
             "name": interface_name,
@@ -732,6 +752,16 @@ async fn peer_summaries(state: &Arc<DaemonState>) -> Vec<Value> {
         routing.routes_snapshot().into_iter().collect();
     drop(routing);
 
+    // Bulk-load every known peer's X25519 pubkey in one SQLite read so
+    // each summary entry can attach its own key without a per-peer
+    // round-trip from inside the async loop below.
+    let storage = state.messaging.storage().clone();
+    let x25519_by_node_hex: HashMap<String, String> =
+        match tokio::task::spawn_blocking(move || storage.list_known_x25519_pubs()).await {
+            Ok(Ok(m)) => m,
+            _ => HashMap::new(),
+        };
+
     let mut out = Vec::with_capacity(sessions.len());
     for (peer_id, _session) in sessions.iter() {
         let info = state.reconnect.peer_info(peer_id).await;
@@ -758,8 +788,11 @@ async fn peer_summaries(state: &Arc<DaemonState>) -> Vec<Value> {
         let route_hops = route.map(|e| e.hops).unwrap_or(1);
         let latency_ms = route.and_then(|e| e.rtt_ms);
 
+        let peer_hex = peer_id.to_hex();
+        let x25519_pubkey = x25519_by_node_hex.get(&peer_hex).cloned();
+
         out.push(json!({
-            "node_id": peer_id.to_hex(),
+            "node_id": peer_hex,
             "node_id_short": peer_id.to_string(),
             "label": null,
             "mesh_ip": addr,
@@ -770,6 +803,7 @@ async fn peer_summaries(state: &Arc<DaemonState>) -> Vec<Value> {
             "latency_ms": latency_ms,
             "is_gateway": is_gateway,
             "static": configured,
+            "x25519_pubkey": x25519_pubkey,
         }));
     }
     out
@@ -1116,6 +1150,126 @@ async fn method_gateway_disable(state: &Arc<DaemonState>) -> RpcResult {
 struct PeersRemoveParams {
     node_id: Option<String>,
     config_entry_id: Option<String>,
+}
+
+/// `peers.import_identity` params — see docs/RPC.md §5.2.
+#[derive(Debug, Deserialize)]
+struct PeersImportIdentityParams {
+    /// 32-char lowercase hex NodeId of the peer being imported.
+    node_id: String,
+    /// 64-char lowercase hex of the peer's X25519 static public key.
+    x25519_pubkey: String,
+    /// Optional friendly label — when omitted or empty, the existing
+    /// label (if any) is preserved.
+    #[serde(default)]
+    friendly_name: Option<String>,
+}
+
+fn parse_x25519_hex(s: &str) -> Result<[u8; 32], (i32, String, Option<Value>)> {
+    if s.len() != 64 {
+        return Err((
+            codes::INVALID_PARAMS,
+            format!("x25519_pubkey must be 64 hex characters, got {}", s.len()),
+            None,
+        ));
+    }
+    let mut out = [0u8; 32];
+    for (idx, chunk) in s.as_bytes().chunks_exact(2).enumerate() {
+        let pair = std::str::from_utf8(chunk).map_err(|_| {
+            (
+                codes::INVALID_PARAMS,
+                "x25519_pubkey contains non-utf8 bytes".into(),
+                None,
+            )
+        })?;
+        out[idx] = u8::from_str_radix(pair, 16).map_err(|_| {
+            (
+                codes::INVALID_PARAMS,
+                format!("x25519_pubkey contains invalid hex: {pair}"),
+                None,
+            )
+        })?;
+    }
+    Ok(out)
+}
+
+async fn method_peers_import_identity(
+    state: &Arc<DaemonState>,
+    params: Option<&Value>,
+) -> RpcResult {
+    let parsed: PeersImportIdentityParams = match params {
+        Some(v) => serde_json::from_value(v.clone()).map_err(|e| {
+            (
+                codes::INVALID_PARAMS,
+                format!("peers.import_identity: invalid params: {e}"),
+                None,
+            )
+        })?,
+        None => {
+            return Err((
+                codes::INVALID_PARAMS,
+                "peers.import_identity: params required".into(),
+                None,
+            ))
+        }
+    };
+
+    let node_id: NodeId = parsed.node_id.parse().map_err(|e| {
+        (
+            codes::INVALID_PARAMS,
+            format!("peers.import_identity: invalid node_id: {e}"),
+            None,
+        )
+    })?;
+    let x25519 = parse_x25519_hex(&parsed.x25519_pubkey)?;
+    let friendly_name = parsed
+        .friendly_name
+        .map(|s| s.trim().to_owned())
+        .filter(|s| !s.is_empty());
+
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0);
+
+    let outcome = state
+        .messaging
+        .import_peer_identity(node_id, x25519, friendly_name, now_ms)
+        .await
+        .map_err(|e| {
+            (
+                codes::MESSAGE_STORAGE_ERROR,
+                format!("peers.import_identity: {e}"),
+                None,
+            )
+        })?;
+
+    match outcome {
+        crate::app::messaging::ImportOutcome::Inserted => Ok(json!({
+            "node_id": node_id.to_hex(),
+            "node_id_short": node_id.to_string(),
+            "imported": true,
+        })),
+        crate::app::messaging::ImportOutcome::Refreshed => Ok(json!({
+            "node_id": node_id.to_hex(),
+            "node_id_short": node_id.to_string(),
+            "imported": false,
+        })),
+        crate::app::messaging::ImportOutcome::KeyMismatch {
+            existing_x25519_hex,
+        } => Err((
+            codes::PEER_IDENTITY_MISMATCH,
+            format!(
+                "peers.import_identity: node_id {} is already cached with a different x25519 key",
+                node_id.to_hex()
+            ),
+            Some(json!({
+                "node_id": node_id.to_hex(),
+                "supplied_x25519_pubkey": parsed.x25519_pubkey,
+                "existing_x25519_pubkey": existing_x25519_hex,
+            })),
+        )),
+    }
 }
 
 async fn method_peers_remove(_state: &Arc<DaemonState>, params: Option<&Value>) -> RpcResult {
@@ -1624,6 +1778,7 @@ async fn method_messages_list_conversations(state: &Arc<DaemonState>) -> RpcResu
             "last_message_ts_ms": conv.last_message_ts_ms,
             "unread_count": conv.unread_count,
             "is_connected": is_connected,
+            "x25519_pubkey": conv.x25519_pubkey,
         }));
     }
     Ok(json!({ "conversations": out }))
