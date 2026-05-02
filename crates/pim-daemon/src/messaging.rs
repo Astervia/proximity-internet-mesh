@@ -27,7 +27,8 @@ mod storage;
 pub(crate) mod dispatch;
 
 pub(crate) use storage::{
-    AckKind, ConversationSummary, MessageDirection, MessageRecord, MessageStatus, MessagingStorage,
+    AckKind, ConversationSummary, ImportOutcome, MessageDirection, MessageRecord, MessageStatus,
+    MessagingStorage,
 };
 
 use std::path::PathBuf;
@@ -102,6 +103,57 @@ impl MessagingState {
     /// `messages.history`).
     pub fn storage(&self) -> &Arc<MessagingStorage> {
         &self.storage
+    }
+
+    /// Import a peer's identity from out-of-band material (the
+    /// `peers.import_identity` RPC). Refuses to silently overwrite an
+    /// existing key with a different one — see [`ImportOutcome`] for
+    /// the three possible result states. Emits the same `peer_seen`
+    /// event as a wire-learned `PeerInfo` on Inserted/Refreshed so the
+    /// UI can react identically.
+    pub async fn import_peer_identity(
+        &self,
+        peer: NodeId,
+        x25519_pub: [u8; 32],
+        name_if_set: Option<String>,
+        now_ms: i64,
+    ) -> anyhow::Result<ImportOutcome> {
+        let storage = self.storage.clone();
+        let name_for_storage = name_if_set.clone();
+        let outcome = tokio::task::spawn_blocking(move || -> anyhow::Result<ImportOutcome> {
+            storage.import_peer_identity_if_compatible(
+                &peer,
+                &x25519_pub,
+                name_for_storage.as_deref(),
+                now_ms,
+            )
+        })
+        .await??;
+
+        if matches!(outcome, ImportOutcome::Inserted | ImportOutcome::Refreshed) {
+            // Mirror the event the on-wire PeerInfo path emits so live
+            // UI subscribers refresh their conversation list / identity
+            // cards without polling.
+            let storage_for_lookup = self.storage.clone();
+            let name = match name_if_set.filter(|s| !s.is_empty()) {
+                Some(n) => n,
+                None => {
+                    tokio::task::spawn_blocking(move || storage_for_lookup.lookup_peer_name(&peer))
+                        .await
+                        .ok()
+                        .and_then(|r| r.ok())
+                        .flatten()
+                        .unwrap_or_default()
+                }
+            };
+            let _ = self.events_tx.send(MessageEvent::PeerSeen {
+                peer_node_id: hex_node_id(&peer),
+                name,
+                x25519_known: true,
+            });
+        }
+
+        Ok(outcome)
     }
 
     /// Persist a peer's advertised identity. Returns `true` if a new
