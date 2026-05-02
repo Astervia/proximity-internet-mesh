@@ -41,6 +41,20 @@ use tokio::sync::broadcast;
 /// Maximum plaintext body size accepted by [`MessagingState::send_local`].
 pub const MAX_BODY_BYTES: usize = 8 * 1024;
 
+/// Source of an incoming `PeerInfo` frame — direct (handshake) vs.
+/// routed (multi-hop broadcast). Lets `handle_incoming_peer_info`
+/// apply broadcast gates only to the routed path and lets the
+/// `peer_seen` event payload surface `via` so the UI can section
+/// direct-paired vs. broadcast-discovered peers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PeerInfoSource {
+    /// Direct neighbour over an existing session.
+    Direct,
+    /// Routed via the multi-hop control plane (mesh broadcast).
+    Routed,
+}
+
 /// Event emitted by the messaging subsystem and forwarded over JSON-RPC.
 ///
 /// `MessageReceived` carries `MessageRecord` + `ConversationSummary` boxed
@@ -76,6 +90,10 @@ pub enum MessageEvent {
         name: String,
         /// Whether we now have a usable X25519 public key for them.
         x25519_known: bool,
+        /// How the identity arrived — direct handshake or routed
+        /// broadcast. The UI can use this to section direct-paired
+        /// vs. broadcast-discovered peers.
+        via: PeerInfoSource,
     },
 }
 
@@ -150,6 +168,10 @@ impl MessagingState {
                 peer_node_id: hex_node_id(&peer),
                 name,
                 x25519_known: true,
+                // An import_identity is an explicit user action — surface
+                // it as a "direct" identity so the UI doesn't filter it
+                // through the broadcast-watch toggle.
+                via: PeerInfoSource::Direct,
             });
         }
 
@@ -158,12 +180,23 @@ impl MessagingState {
 
     /// Persist a peer's advertised identity. Returns `true` if a new
     /// peer was inserted (vs. an existing entry refreshed).
+    ///
+    /// `source` discriminates direct vs. routed PeerInfo on the
+    /// emitted `peer_seen` event so subscribers can section paired
+    /// peers from broadcast-discovered ones.
+    ///
+    /// `emit_event` is the "watch incoming broadcasts" gate plumbed
+    /// through from `handle_incoming_peer_info` — when `false`, the
+    /// keystore upsert still runs (replies need the X25519 key) but
+    /// no `peer_seen` event is broadcast.
     pub async fn record_peer_seen(
         &self,
         peer: NodeId,
         x25519_pub: [u8; 32],
         name: String,
         now_ms: i64,
+        source: PeerInfoSource,
+        emit_event: bool,
     ) -> anyhow::Result<bool> {
         let storage = self.storage.clone();
         let storage_name = name.clone();
@@ -172,11 +205,14 @@ impl MessagingState {
         })
         .await??;
 
-        let _ = self.events_tx.send(MessageEvent::PeerSeen {
-            peer_node_id: hex_node_id(&peer),
-            name,
-            x25519_known: true,
-        });
+        if emit_event {
+            let _ = self.events_tx.send(MessageEvent::PeerSeen {
+                peer_node_id: hex_node_id(&peer),
+                name,
+                x25519_known: true,
+                via: source,
+            });
+        }
 
         Ok(inserted)
     }

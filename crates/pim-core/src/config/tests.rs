@@ -1,6 +1,7 @@
 mod bluetooth;
 mod discovery;
 mod general;
+mod messaging;
 mod peers;
 mod relay;
 mod security;
@@ -90,4 +91,9 @@ device_name_prefix = "PIM-"
 outbound_enabled = true
 poll_interval_ms = 30000
 bridge_to_tcp = true
+
+[messaging.broadcast]
+outgoing_interval_s = 300
+watch_incoming = true
+min_peer_interval_s = 60
 "#;

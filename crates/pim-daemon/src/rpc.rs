@@ -86,6 +86,9 @@ mod codes {
     /// supplied value. Caller should confirm with the user before
     /// removing the stale entry and re-issuing the import.
     pub(super) const PEER_IDENTITY_MISMATCH: i32 = -32040;
+    /// `peers.set_broadcast_config` was given an `outgoing_interval_s`
+    /// below `BroadcastConfig::MIN_OUTGOING_INTERVAL_S` (currently 30).
+    pub(super) const PEER_BROADCAST_INTERVAL_TOO_SMALL: i32 = -32041;
 }
 
 /// Format 32 raw bytes (e.g. an X25519 static public key) as 64-char
@@ -404,6 +407,11 @@ async fn dispatch(state: &Arc<DaemonState>, req: &RpcRequest, write_tx: &WriteTx
             None,
         )),
         "peers.import_identity" => method_peers_import_identity(state, req.params.as_ref()).await,
+        "peers.broadcast_identity_now" => method_peers_broadcast_identity_now(state).await,
+        "peers.set_broadcast_config" => {
+            method_peers_set_broadcast_config(state, req.params.as_ref()).await
+        }
+        "peers.get_broadcast_state" => Ok(build_broadcast_state(state).await),
         "peers.subscribe" => Ok(json!({ "subscription_id": new_subscription_id() })),
         "peers.unsubscribe" => Ok(Value::Null),
 
@@ -1270,6 +1278,193 @@ async fn method_peers_import_identity(
             })),
         )),
     }
+}
+
+// ── Broadcast control ────────────────────────────────────────────────────
+
+async fn build_broadcast_state(state: &Arc<DaemonState>) -> Value {
+    let cfg = state.broadcast_config.read().await.clone();
+    let last_ms = state.last_broadcast_ms.load(Ordering::Relaxed);
+    let last_recipients = state.last_broadcast_recipients.load(Ordering::Relaxed);
+    let last_broadcast_ms = if last_ms == i64::MIN {
+        Value::Null
+    } else {
+        json!(last_ms)
+    };
+    let last_recipient_count = if last_ms == i64::MIN {
+        Value::Null
+    } else {
+        json!(last_recipients)
+    };
+    json!({
+        "outgoing_interval_s": cfg.outgoing_interval_s,
+        "watch_incoming": cfg.watch_incoming,
+        "min_peer_interval_s": cfg.min_peer_interval_s,
+        "last_broadcast_ms": last_broadcast_ms,
+        "last_recipient_count": last_recipient_count,
+    })
+}
+
+async fn method_peers_broadcast_identity_now(state: &Arc<DaemonState>) -> RpcResult {
+    let outcome = crate::app::messaging::dispatch::run_broadcast_cycle(state).await;
+    Ok(json!({
+        "recipients": outcome.recipients,
+        "sent_at_ms": state.last_broadcast_ms.load(Ordering::Relaxed),
+    }))
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct PeersSetBroadcastConfigParams {
+    /// `Some(None)` disables; `Some(Some(secs))` sets; `None` leaves
+    /// unchanged. We model the "unset vs explicitly null" distinction
+    /// with `Option<Option<u64>>` because TOML/JSON null is meaningful
+    /// here (it's the way the UI expresses "disable broadcasts").
+    #[serde(default, deserialize_with = "deserialize_some_option")]
+    outgoing_interval_s: Option<Option<u64>>,
+    #[serde(default)]
+    watch_incoming: Option<bool>,
+    #[serde(default)]
+    min_peer_interval_s: Option<u64>,
+}
+
+/// Deserialize `Option<Option<T>>` so a missing key stays `None` (no
+/// change) but an explicit `null` becomes `Some(None)` (clear). serde's
+/// default `Option` deserializer collapses both cases to `None`, which
+/// would make "disable" indistinguishable from "leave unchanged".
+fn deserialize_some_option<'de, D, T>(d: D) -> Result<Option<Option<T>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: serde::Deserialize<'de>,
+{
+    Option::<T>::deserialize(d).map(Some)
+}
+
+async fn method_peers_set_broadcast_config(
+    state: &Arc<DaemonState>,
+    params: Option<&Value>,
+) -> RpcResult {
+    let parsed: PeersSetBroadcastConfigParams = match params {
+        Some(v) => serde_json::from_value(v.clone()).map_err(|e| {
+            (
+                codes::INVALID_PARAMS,
+                format!("peers.set_broadcast_config: invalid params: {e}"),
+                None,
+            )
+        })?,
+        None => PeersSetBroadcastConfigParams::default(),
+    };
+
+    // Validate the proposed outgoing interval before touching state.
+    if let Some(Some(secs)) = parsed.outgoing_interval_s {
+        if secs < pim_core::BroadcastConfig::MIN_OUTGOING_INTERVAL_S {
+            return Err((
+                codes::PEER_BROADCAST_INTERVAL_TOO_SMALL,
+                format!(
+                    "peers.set_broadcast_config: outgoing_interval_s must be >= {} (got {secs})",
+                    pim_core::BroadcastConfig::MIN_OUTGOING_INTERVAL_S,
+                ),
+                None,
+            ));
+        }
+    }
+    if let Some(min) = parsed.min_peer_interval_s {
+        if min == 0 {
+            return Err((
+                codes::INVALID_PARAMS,
+                "peers.set_broadcast_config: min_peer_interval_s must be > 0".into(),
+                None,
+            ));
+        }
+    }
+
+    // Apply in-memory immediately.
+    {
+        let mut guard = state.broadcast_config.write().await;
+        if let Some(v) = parsed.outgoing_interval_s {
+            guard.outgoing_interval_s = v;
+        }
+        if let Some(v) = parsed.watch_incoming {
+            guard.watch_incoming = v;
+        }
+        if let Some(v) = parsed.min_peer_interval_s {
+            guard.min_peer_interval_s = v;
+        }
+    }
+    // Wake the broadcast task so a freshly-enabled / freshly-disabled
+    // schedule takes effect on the next loop iteration instead of
+    // waiting for the current sleep to finish.
+    state.broadcast_notify.notify_one();
+
+    // Persist to pim.toml so the change survives restart. Loses
+    // user-written comments (current `Config::to_toml_string()` is a
+    // serde-rountdrip writer). Acceptable for now; a comment-preserving
+    // editor can land later via `toml_edit`.
+    if let Err(e) = persist_broadcast_config_to_disk(state).await {
+        warn!("peers.set_broadcast_config: in-memory updated, but persistence failed: {e}");
+        // Don't fail the RPC — the user's intent is honoured for this
+        // session; the only loss is restart-survival.
+    }
+
+    Ok(build_broadcast_state(state).await)
+}
+
+/// Re-read pim.toml, splice in the current in-memory broadcast config,
+/// and atomic-write it back. Called after `set_broadcast_config`.
+async fn persist_broadcast_config_to_disk(state: &Arc<DaemonState>) -> anyhow::Result<()> {
+    use anyhow::{anyhow, Context};
+
+    let path = state.config_path.clone();
+    let snapshot = state.broadcast_config.read().await.clone();
+    // Hop into spawn_blocking so std::fs is fine and we don't hold any
+    // tokio executor-side state across the read+parse+write window.
+    let path_for_task = path.clone();
+    tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
+        let mut config = pim_core::Config::load(&path_for_task).map_err(|e| {
+            anyhow!(
+                "re-parse {} for broadcast persistence: {e}",
+                path_for_task.display()
+            )
+        })?;
+        config.messaging.broadcast = snapshot;
+        let serialized = config
+            .to_toml_string()
+            .map_err(|e| anyhow!("serialize config for broadcast persistence: {e}"))?;
+        // The async fs_util::atomic_write requires the tokio runtime; use
+        // its sync sibling here. There isn't one yet, so do a plain
+        // tempfile + rename inline — semantics match atomic_write.
+        let parent = path_for_task
+            .parent()
+            .ok_or_else(|| anyhow!("config path has no parent"))?;
+        let tmp = tempfile_in_same_dir(parent, &path_for_task)?;
+        std::fs::write(&tmp, serialized.as_bytes())
+            .with_context(|| format!("write tmp {}", tmp.display()))?;
+        std::fs::rename(&tmp, &path_for_task)
+            .with_context(|| format!("rename {} -> {}", tmp.display(), path_for_task.display()))?;
+        Ok(())
+    })
+    .await
+    .map_err(|e| anyhow!("persist join: {e}"))??;
+    let _ = path;
+    Ok(())
+}
+
+/// Build a sibling tempfile path next to `final_path` for the inline
+/// rename-into-place writer used by `persist_broadcast_config_to_disk`.
+fn tempfile_in_same_dir(
+    parent: &std::path::Path,
+    final_path: &std::path::Path,
+) -> anyhow::Result<std::path::PathBuf> {
+    use anyhow::anyhow;
+    let stem = final_path
+        .file_name()
+        .ok_or_else(|| anyhow!("config path has no file name"))?
+        .to_string_lossy()
+        .to_string();
+    let nonce = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    Ok(parent.join(format!(".{stem}.tmp.{nonce}")))
 }
 
 async fn method_peers_remove(_state: &Arc<DaemonState>, params: Option<&Value>) -> RpcResult {

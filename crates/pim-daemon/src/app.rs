@@ -80,13 +80,13 @@ mod session;
 
 use std::collections::{HashMap, HashSet};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
-use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicU8, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU32, AtomicU64, AtomicU8, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::{bail, Context, Result};
 use bytes::BytesMut;
-use tokio::sync::{mpsc, Mutex, RwLock};
+use tokio::sync::{mpsc, Mutex, Notify, RwLock};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, warn};
 
@@ -128,7 +128,7 @@ use peer_tasks::{
 use pim_bluetooth::BluetoothDiscovery;
 #[cfg(test)]
 use pim_core::AuthorizationPolicy;
-use pim_core::{Config, DiscoveryConfig, FrameCodec, NodeId};
+use pim_core::{BroadcastConfig, Config, DiscoveryConfig, FrameCodec, NodeId};
 use pim_crypto::{e2e_decrypt_in_place, e2e_encrypt, x25519_public_from_seed, Identity};
 #[cfg(test)]
 use pim_discovery::NodeCapabilities;
@@ -257,6 +257,27 @@ pub(crate) struct DaemonState {
     /// Encrypted peer-to-peer messaging subsystem. Lazily opens a SQLite
     /// database under [`runtime_paths::data_dir`] on daemon startup.
     pub(crate) messaging: Arc<messaging::MessagingState>,
+    /// Live mirror of `[messaging.broadcast]` from pim.toml. Edited via
+    /// `peers.set_broadcast_config` (hot-applied) or `config.save`
+    /// (requires restart for non-broadcast fields). Clones cheaply.
+    pub(crate) broadcast_config: Arc<RwLock<BroadcastConfig>>,
+    /// Per-peer wall-clock of the most recent accepted routed
+    /// `PeerInfo`. Read in `handle_incoming_peer_info` to enforce
+    /// `messaging.broadcast.min_peer_interval_s` — broadcasts arriving
+    /// from the same peer sooner than that are dropped before the
+    /// keystore or the event channel is touched.
+    pub(crate) broadcast_peer_last_seen: Arc<Mutex<HashMap<NodeId, Instant>>>,
+    /// UTC ms of the last completed outbound broadcast cycle, or
+    /// `i64::MIN` if none has run yet. Read by
+    /// `peers.get_broadcast_state`.
+    pub(crate) last_broadcast_ms: Arc<AtomicI64>,
+    /// Recipient count from the last completed outbound broadcast
+    /// cycle.
+    pub(crate) last_broadcast_recipients: Arc<AtomicU64>,
+    /// Notify woken whenever `broadcast_config` is mutated so the
+    /// periodic-broadcast task re-reads the interval immediately
+    /// instead of waiting for its current sleep to elapse.
+    pub(crate) broadcast_notify: Arc<Notify>,
 }
 
 impl DaemonState {
@@ -610,7 +631,20 @@ pub(crate) async fn run() -> Result<()> {
         // next `status` RPC.
         status_events_tx: tokio::sync::broadcast::channel::<serde_json::Value>(64).0,
         messaging,
+        broadcast_config: Arc::new(RwLock::new(config.messaging.broadcast.clone())),
+        broadcast_peer_last_seen: Arc::new(Mutex::new(HashMap::new())),
+        last_broadcast_ms: Arc::new(AtomicI64::new(i64::MIN)),
+        last_broadcast_recipients: Arc::new(AtomicU64::new(0)),
+        broadcast_notify: Arc::new(Notify::new()),
     });
+
+    // ── Identity-broadcast background task ────────────────────────────────
+    // Sleeps when `messaging.broadcast.outgoing_interval_s` is None and
+    // wakes up early when the broadcast config is mutated via the
+    // peers.set_broadcast_config RPC.
+    tokio::spawn(crate::app::messaging::dispatch::run_broadcast_task(
+        state.clone(),
+    ));
 
     // ── Initiate connections to configured peers ───────────────────────────
     for target in configured_targets.startup_targets.iter().copied() {
