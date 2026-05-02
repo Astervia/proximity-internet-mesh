@@ -72,7 +72,7 @@ async fn start_nap_server_auto_creates_bridge_and_invokes_bt_network_with_bridge
     let mut child = svc.start_nap_server().await.unwrap();
     child.wait().await.unwrap();
 
-    let args = fs::read_to_string(fake_args).unwrap();
+    let args = fs::read_to_string(&fake_args).unwrap();
     assert_eq!(args, "-s\nnap\nbr-bt\n");
 
     let ip_log = fs::read_to_string(&fake_ip_log).unwrap();
