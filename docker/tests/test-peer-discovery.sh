@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# test-phase3.sh — Phase 3: Discovery and peer lifecycle tests
+# test-peer-discovery.sh — Phase 3: Discovery and peer lifecycle tests
 #
 # Tests (from implementation-plan.md):
 #   3.1  All three nodes discover each other within 2 broadcast cycles (10 s)
@@ -12,7 +12,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=common.sh
 source "$SCRIPT_DIR/common.sh"
 
-COMPOSE_FILE="phase3-discovery.yml"
+COMPOSE_FILE="peer-discovery.yml"
 
 cleanup() {
     if [ "${DUMP_LOGS_ON_FAIL:-0}" = "1" ] && [ $FAIL -gt 0 ]; then

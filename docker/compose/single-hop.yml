@@ -1,15 +1,13 @@
-# Phase 4 — Connection resilience and store-and-forward
+# Phase 1 — Single-hop tunnel
 # Topology: client ──── gateway ──── internet
 #
-# Tests require network manipulation from outside the container
-# (docker network disconnect/connect, or iptables via a sidecar).
-#
 # Covers:
-#   4.1 Docker: disconnect network → remove → reconnects automatically
-#   4.2 Docker: buffer frames during 5 s outage → delivered after reconnect
-#   4.4 Docker: TCP idle 4 min → still alive; idle 6 min → conntrack expired
+#   1.5 Docker: two containers communicate over bridge network
+#   1.6 Docker: TUN interface comes up, IP configured
+#   1.7 Docker: gateway NATs traffic to external DNS
+#   1.8 Docker: client pings gateway mesh IP; curl internet; DNS resolution; clean shutdown
 
-name: pim-phase4-resilience
+name: pim-single-hop
 
 services:
     gateway:
@@ -17,7 +15,7 @@ services:
             context: ../..
             dockerfile: Dockerfile
         image: pim:latest
-        container_name: pim-p4-gw
+        container_name: pim-single-hop-gw
         hostname: gateway
         volumes:
             - ../configs/gateway.toml:/etc/pim/pim.toml:ro
@@ -31,7 +29,7 @@ services:
             net.ipv4.ip_local_port_range: "60000 65535"
         networks:
             pim-net:
-                ipv4_address: 172.34.0.10
+                ipv4_address: 172.30.0.10
         healthcheck:
             test:
                 [
@@ -48,7 +46,7 @@ services:
             context: ../..
             dockerfile: Dockerfile
         image: pim:latest
-        container_name: pim-p4-client
+        container_name: pim-single-hop-client
         hostname: client
         volumes:
             - ../configs/client.toml:/etc/pim/pim.toml:ro
@@ -61,7 +59,7 @@ services:
                 condition: service_healthy
         networks:
             pim-net:
-                ipv4_address: 172.34.0.30
+                ipv4_address: 172.30.0.30
         healthcheck:
             test:
                 [
@@ -79,4 +77,4 @@ networks:
         ipam:
             driver: default
             config:
-                - subnet: 172.34.0.0/24
+                - subnet: 172.30.0.0/24

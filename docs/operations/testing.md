@@ -33,11 +33,11 @@ make test-unit
 Run through the `Makefile`:
 
 ```bash
-make test-p1
-make test-p2
-make test-p3
-make test-p4
-make test-p5
+make test-single-hop
+make test-multi-hop
+make test-peer-discovery
+make test-resilience
+make test-multi-gateway
 make test-debug-cli
 make test-route-cli
 make test-bluetooth
@@ -54,11 +54,11 @@ They validate real daemon startup, TUN interface handling, peer connectivity, ro
 
 ## Phase Coverage
 
-- `test-p1`: single-hop client to gateway path
-- `test-p2`: relay forwarding, routing convergence, and failover
-- `test-p3`: discovery and peer lifecycle
-- `test-p4`: resilience, buffering, congestion, and slow NAT timeout checks
-- `test-p5`: dual-gateway failover and gateway selection behavior
+- `test-single-hop`: single-hop client to gateway path
+- `test-multi-hop`: relay forwarding, routing convergence, and failover
+- `test-peer-discovery`: discovery and peer lifecycle
+- `test-resilience`: resilience, buffering, congestion, and slow NAT timeout checks
+- `test-multi-gateway`: dual-gateway failover and gateway selection behavior
 - `test-debug-cli`: `pim debug` output from the client view in the dual-gateway Docker lab
 - `test-route-cli`: `pim route on|status|off` flow in the single-hop Docker lab
 - `test-bluetooth`: Bluetooth PAN automatic peer discovery seam using fake sysfs and `ip neigh` fixtures in Docker
@@ -76,7 +76,7 @@ Broader validation after daemon, protocol, routing, or gateway changes:
 
 ```bash
 make docker-build
-make test-p2
+make test-multi-hop
 ```
 
 Hardware-adjacent connectivity work without real radios:
@@ -96,11 +96,11 @@ make test-all
 For interactive debugging, start a stack and inspect containers directly:
 
 ```bash
-make up-p1
-make logs-p1
-make sh-p1-client
+make up-single-hop
+make logs-single-hop
+make sh-single-hop-client
 pim status --verbose
-make down-p1
+make down-single-hop
 ```
 
 ## macOS Validation
@@ -137,5 +137,5 @@ That command should bring up the TUN plus gateway dataplane on macOS when the ho
 ## Notes
 
 - Docker scenarios are the source of truth for current end-to-end behavior in this repository.
-- Some phase-4 checks are intentionally slow; `make test-p4` skips the longest timeout path by default, while `make test-p4-full` runs it.
+- Some phase-4 checks are intentionally slow; `make test-resilience` skips the longest timeout path by default, while `make test-resilience-full` runs it.
 - If you need failing container logs automatically, run a script with `DUMP_LOGS_ON_FAIL=1`.

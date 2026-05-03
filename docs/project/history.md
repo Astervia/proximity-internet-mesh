@@ -448,14 +448,14 @@ Wire the fully-implemented `pim-discovery` crate into the running daemon so that
 
 ### 7.4 Docker Test: Zero-Config Auto-Discovery
 
-- [x] New compose `docker/compose/phase7-auto-discovery.yml`: bridge `172.34.0.0/24`, **no `depends_on`** between services
-    - `gateway` service: `172.34.0.10`, `gateway-p7.toml`, `NET_ADMIN + NET_RAW`, `ip_forward=1`
-    - `relay` service: `172.34.0.20`, `relay-p7.toml`, `NET_ADMIN`
-    - `client` service: `172.34.0.30`, `client-p7.toml`, `NET_ADMIN`
-- [x] `docker/configs/gateway-p7.toml`: `gateway.enabled = true`, `[discovery] enabled = true port = 9101`, **no `[[peers]]`**
-- [x] `docker/configs/relay-p7.toml`: `[relay] enabled = true`, mesh IP `10.77.0.10/24`, **no `[[peers]]`**
-- [x] `docker/configs/client-p7.toml`: `mesh_ip = "auto"`, `[discovery] enabled = true`, **no `[[peers]]`**
-- [x] `docker/tests/test-phase7.sh`:
+- [x] New compose `docker/compose/auto-discovery.yml`: bridge `172.34.0.0/24`, **no `depends_on`** between services
+    - `gateway` service: `172.34.0.10`, `gateway-auto-discovery.toml`, `NET_ADMIN + NET_RAW`, `ip_forward=1`
+    - `relay` service: `172.34.0.20`, `relay-auto-discovery.toml`, `NET_ADMIN`
+    - `client` service: `172.34.0.30`, `client-auto-discovery.toml`, `NET_ADMIN`
+- [x] `docker/configs/gateway-auto-discovery.toml`: `gateway.enabled = true`, `[discovery] enabled = true port = 9101`, **no `[[peers]]`**
+- [x] `docker/configs/relay-auto-discovery.toml`: `[relay] enabled = true`, mesh IP `10.77.0.10/24`, **no `[[peers]]`**
+- [x] `docker/configs/client-auto-discovery.toml`: `mesh_ip = "auto"`, `[discovery] enabled = true`, **no `[[peers]]`**
+- [x] `docker/tests/test-auto-discovery.sh`:
     - [x] **7A** `all_nodes_discover_each_other`: start all → wait 20s → `pim status --verbose` shows `peers>=1` on all three nodes
     - [x] **7B** `client_auto_ip_configured`: `pim0` UP → `ip addr` shows `10.77.0.*` → `ping 10.77.0.1` succeeds
     - [x] **7C** `internet_via_discovered_relay`: `curl http://example.com` succeeds from client through discovered relay+gateway chain
@@ -546,5 +546,5 @@ Add Wi-Fi Direct (IEEE 802.11 P2P) as an optional peer-finding layer. After a P2
 ### 8.4 Testing
 
 - **Unit tests**: `cargo test --workspace` — all tests pass (no subprocess invoked)
-- **Docker tests**: Not applicable — Docker containers cannot access physical Wi-Fi hardware. No `test-p8` target.
+- **Docker tests**: Not applicable — Docker containers cannot access physical Wi-Fi hardware. No `test-auto-ip-chain` target.
 - **Manual hardware test**: See `docs/architecture/transports/wifi-direct.md` for the step-by-step procedure on two Linux devices with Wi-Fi hardware.

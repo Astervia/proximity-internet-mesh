@@ -141,8 +141,8 @@ Inside the repository, most end-to-end usage is exercised through Docker Compose
 
 ```bash
 make docker-build
-make up-p1
-make sh-p1-client
+make up-single-hop
+make sh-single-hop-client
 pim status --verbose
-make down-p1
+make down-single-hop
 ```

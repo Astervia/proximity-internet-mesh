@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# test-phase2.sh — Phase 2: Multi-hop relay and routing tests
+# test-multi-hop.sh — Phase 2: Multi-hop relay and routing tests
 #
 # Tests (from implementation-plan.md):
 #   2.1  3-container: client → relay → gateway, curl internet
@@ -26,8 +26,8 @@ cleanup() {
 }
 trap cleanup EXIT
 
-RELAY_FILE="phase2-relay.yml"
-ROUTING_FILE="phase2-routing.yml"
+RELAY_FILE="multi-hop-relay.yml"
+ROUTING_FILE="multi-hop-routing.yml"
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # 2.1 / 2.2 / 2.4 — Three-container relay path
