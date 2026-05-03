@@ -36,6 +36,66 @@ impl BluetoothDiscovery {
         self.run_bluetoothctl_capture(args).await.map(|_| ())
     }
 
+    /// Fire `bluetoothctl <args>` without blocking the caller. The child
+    /// runs to completion (or the configured `bluetoothctl_timeout_s`)
+    /// in a detached tokio task; failures are logged at debug level and
+    /// do not propagate. Used by the discovery loop to re-arm
+    /// `scan on` / `discoverable on` periodically: BlueZ stops scan when
+    /// the issuing client disconnects, and the controller's
+    /// `DiscoverableTimeout` (~3 min) resets the discoverable flag back
+    /// to off — both states have to be refreshed continuously for
+    /// linux↔linux discovery to keep working past the first boot window.
+    #[cfg(target_os = "linux")]
+    pub(super) fn run_bluetoothctl_in_background(&self, args: &[&'static str]) {
+        let bluetoothctl = self.bluetoothctl_command.clone();
+        let timeout = self.config.bluetoothctl_timeout_s;
+        let owned: Vec<&'static str> = args.to_vec();
+        tokio::spawn(async move {
+            let mut cmd = Command::new(&bluetoothctl);
+            cmd.arg("--timeout")
+                .arg(timeout.to_string())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .kill_on_drop(true);
+            for a in owned {
+                cmd.arg(a);
+            }
+            match cmd.spawn() {
+                Ok(mut child) => {
+                    if let Err(err) = child.wait().await {
+                        debug!(%err, "background bluetoothctl child wait failed");
+                    }
+                }
+                Err(err) => {
+                    debug!(%err, "background bluetoothctl spawn failed");
+                }
+            }
+        });
+    }
+
+    /// Resolve the local controller's BD address (`Controller XX:..:XX`).
+    /// Cached after the first successful query — `bluetoothctl show` is
+    /// a non-trivial round-trip and the controller MAC is stable across
+    /// the daemon's lifetime.
+    pub(super) async fn local_controller_mac(&self) -> Option<String> {
+        self.local_controller_mac
+            .get_or_init(|| async {
+                #[cfg(target_os = "linux")]
+                let args = ["show"];
+                #[cfg(target_os = "macos")]
+                let args = ["--list"];
+                match self.run_bluetoothctl_capture(args).await {
+                    Ok(out) => parse_controller_mac(&out),
+                    Err(err) => {
+                        debug!(%err, "failed to query local Bluetooth controller MAC");
+                        None
+                    }
+                }
+            })
+            .await
+            .clone()
+    }
+
     pub(super) async fn run_bluetoothctl_capture<const N: usize>(
         &self,
         args: [&str; N],
@@ -113,10 +173,12 @@ impl BluetoothDiscovery {
         &self,
     ) -> Result<Vec<DiscoveredDevice>, BluetoothError> {
         let output = self.run_bluetoothctl_capture(["devices"]).await?;
+        let local_mac = self.local_controller_mac().await;
         Ok(parse_devices_output(
             &output,
             &self.config.device_name_prefix,
             &self.config.local_alias,
+            local_mac.as_deref(),
         ))
     }
 
@@ -130,10 +192,12 @@ impl BluetoothDiscovery {
                 &self.config.bluetoothctl_timeout_s.to_string(),
             ])
             .await?;
+        let local_mac = self.local_controller_mac().await;
         Ok(parse_blueutil_inquiry_output(
             &output,
             &self.config.device_name_prefix,
             &self.config.local_alias,
+            local_mac.as_deref(),
         ))
     }
 

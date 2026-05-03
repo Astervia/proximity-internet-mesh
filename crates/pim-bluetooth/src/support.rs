@@ -253,6 +253,7 @@ pub(super) fn parse_devices_output(
     output: &str,
     prefix: &str,
     local_alias: &str,
+    local_mac: Option<&str>,
 ) -> Vec<DiscoveredDevice> {
     let mut devices = Vec::new();
     for line in output.lines() {
@@ -264,7 +265,19 @@ pub(super) fn parse_devices_output(
         let _ = parts.next();
         let Some(mac) = parts.next() else { continue };
         let Some(name) = parts.next() else { continue };
-        if !name.starts_with(prefix) || name == local_alias {
+        if !name.starts_with(prefix) {
+            continue;
+        }
+        // MAC-based self-filter is preferred — BD addresses are unique per
+        // controller, while names are stickily cached by BlueZ and can
+        // collide with our local alias when a remote controller previously
+        // broadcast that alias. Alias check stays as a fallback when MAC
+        // discovery hasn't completed yet.
+        if let Some(self_mac) = local_mac {
+            if mac.eq_ignore_ascii_case(self_mac) {
+                continue;
+            }
+        } else if name == local_alias {
             continue;
         }
         devices.push(DiscoveredDevice {
@@ -275,11 +288,31 @@ pub(super) fn parse_devices_output(
     devices
 }
 
+/// Extract a Bluetooth controller BD address from the first line of
+/// `bluetoothctl show`, which looks like
+/// `Controller 00:15:83:3D:0A:57 (public)`. Returns the MAC verbatim
+/// (uppercase, colon-separated) or `None` when the output doesn't match.
+#[cfg(any(test, target_os = "linux", target_os = "macos"))]
+pub(super) fn parse_controller_mac(output: &str) -> Option<String> {
+    for line in output.lines() {
+        let line = line.trim();
+        let Some(rest) = line.strip_prefix("Controller ") else {
+            continue;
+        };
+        let mac = rest.split_whitespace().next()?;
+        if mac.split(':').count() == 6 && mac.len() == 17 {
+            return Some(mac.to_string());
+        }
+    }
+    None
+}
+
 #[cfg(any(test, target_os = "macos"))]
 pub(super) fn parse_blueutil_inquiry_output(
     output: &str,
     prefix: &str,
     local_alias: &str,
+    local_mac: Option<&str>,
 ) -> Vec<DiscoveredDevice> {
     let mut devices = Vec::new();
 
@@ -303,12 +336,20 @@ pub(super) fn parse_blueutil_inquiry_output(
             continue;
         };
         let name = &name_value[..name_end];
-        if !name.starts_with(prefix) || name == local_alias {
+        if !name.starts_with(prefix) {
+            continue;
+        }
+        let normalised_mac = mac.trim().replace('-', ":").to_uppercase();
+        if let Some(self_mac) = local_mac {
+            if normalised_mac.eq_ignore_ascii_case(self_mac) {
+                continue;
+            }
+        } else if name == local_alias {
             continue;
         }
 
         devices.push(DiscoveredDevice {
-            mac: mac.trim().replace('-', ":").to_uppercase(),
+            mac: normalised_mac,
             name: name.to_string(),
         });
     }
