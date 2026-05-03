@@ -79,7 +79,7 @@ This map is the default orientation for agent work in this repository.
 - Full-image build:
   `make docker-build`
 - End-to-end phases:
-  `make test-p1` through `make test-p5`
+  `make test-single-hop` through `make test-multi-gateway`
 
 For broader repository context, use `core/DOCS_MAP.md` to navigate `./docs`
 before adding new summary material under `.agent/`.

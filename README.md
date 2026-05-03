@@ -69,10 +69,10 @@ Full instructions:
 make docker-build      # build container image
 make test-unit         # run unit tests
 make test-all          # run all Docker integration phases (p1–p5)
-make up-p1             # bring up phase-1 lab manually
-make logs-p1           # tail logs
-make sh-p1-client      # shell into client container
-make down-p1           # tear down
+make up-single-hop             # bring up single-hop lab manually
+make logs-single-hop           # tail logs
+make sh-single-hop-client      # shell into client container
+make down-single-hop           # tear down
 ```
 
 For full details see [docs/operations/docker-labs.md](docs/operations/docker-labs.md).

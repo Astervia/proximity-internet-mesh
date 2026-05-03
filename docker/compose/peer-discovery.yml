@@ -10,7 +10,7 @@
 #   3.3 Docker: kill a container → other nodes detect within 15 s; routes update
 #   3.3 Docker: restart killed container → re-discovers and rejoins
 
-name: pim-phase3-discovery
+name: pim-peer-discovery
 
 services:
     gateway:
@@ -18,7 +18,7 @@ services:
             context: ../..
             dockerfile: Dockerfile
         image: pim:latest
-        container_name: pim-p3-gw
+        container_name: pim-peer-discovery-gw
         hostname: gateway
         volumes:
             - ../configs/gateway.toml:/etc/pim/pim.toml:ro
@@ -49,7 +49,7 @@ services:
             context: ../..
             dockerfile: Dockerfile
         image: pim:latest
-        container_name: pim-p3-relay
+        container_name: pim-peer-discovery-relay
         hostname: relay
         volumes:
             - ../configs/relay.toml:/etc/pim/pim.toml:ro
@@ -79,7 +79,7 @@ services:
             context: ../..
             dockerfile: Dockerfile
         image: pim:latest
-        container_name: pim-p3-client
+        container_name: pim-peer-discovery-client
         hostname: client
         volumes:
             - ../configs/client-relay.toml:/etc/pim/pim.toml:ro

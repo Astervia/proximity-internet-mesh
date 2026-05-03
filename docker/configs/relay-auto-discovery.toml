@@ -1,14 +1,13 @@
-# Phase 7 — Auto-discovery client config.
+# Phase 7 — Auto-discovery relay config.
 # NO [[peers]] — all connections formed via UDP broadcast discovery.
-# mesh_ip = "auto" → requests IP assignment from the discovered gateway.
-# Advertises: CLIENT (capabilities 0x01)
+# Advertises: CLIENT | RELAY (capabilities 0x03)
 
 [node]
-name = "client-p7"
+name = "relay-auto-discovery"
 data_dir = "/var/lib/pim"
 
 [interface]
-mesh_ip = "auto"
+mesh_ip = "10.77.0.10/24"
 mtu = 1400
 
 [discovery]
@@ -18,6 +17,9 @@ broadcast_interval_ms = 5000
 peer_timeout_ms = 30000
 connect_relays = true
 connect_gateways = true
+
+[relay]
+enabled = true
 
 [transport]
 listen_port = 9100

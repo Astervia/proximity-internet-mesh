@@ -137,5 +137,5 @@ Docker image and multi-node lab:
 
 ```bash
 make docker-build
-make test-p1
+make test-single-hop
 ```

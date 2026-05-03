@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# test-phase1.sh — Phase 1: Single-hop tunnel tests
+# test-single-hop.sh — Phase 1: Single-hop tunnel tests
 #
 # Tests (from implementation-plan.md):
 #   1.5  Two containers communicate over bridge network
@@ -17,7 +17,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=common.sh
 source "$SCRIPT_DIR/common.sh"
 
-COMPOSE_FILE="phase1-single-hop.yml"
+COMPOSE_FILE="single-hop.yml"
 
 cleanup() {
     if [ "${DUMP_LOGS_ON_FAIL:-0}" = "1" ] && [ $FAIL -gt 0 ]; then

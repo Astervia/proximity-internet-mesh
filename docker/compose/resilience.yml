@@ -1,12 +1,15 @@
-# Phase 2 — Multi-hop relay
-# Topology: client ──── relay ──── gateway ──── internet
+# Phase 4 — Connection resilience and store-and-forward
+# Topology: client ──── gateway ──── internet
+#
+# Tests require network manipulation from outside the container
+# (docker network disconnect/connect, or iptables via a sidecar).
 #
 # Covers:
-#   2.1 Docker: client → relay → gateway, client curls internet
-#   2.2 Docker: packet capture on relay shows only encrypted E2E payload
-#   2.4 Docker: 10 KB payload transferred intact through the mesh
+#   4.1 Docker: disconnect network → remove → reconnects automatically
+#   4.2 Docker: buffer frames during 5 s outage → delivered after reconnect
+#   4.4 Docker: TCP idle 4 min → still alive; idle 6 min → conntrack expired
 
-name: pim-phase2-relay
+name: pim-resilience
 
 services:
     gateway:
@@ -14,7 +17,7 @@ services:
             context: ../..
             dockerfile: Dockerfile
         image: pim:latest
-        container_name: pim-p2-gw
+        container_name: pim-resilience-gw
         hostname: gateway
         volumes:
             - ../configs/gateway.toml:/etc/pim/pim.toml:ro
@@ -28,7 +31,7 @@ services:
             net.ipv4.ip_local_port_range: "60000 65535"
         networks:
             pim-net:
-                ipv4_address: 172.31.0.10
+                ipv4_address: 172.34.0.10
         healthcheck:
             test:
                 [
@@ -40,15 +43,15 @@ services:
             retries: 25
             start_period: 5s
 
-    relay:
+    client:
         build:
             context: ../..
             dockerfile: Dockerfile
         image: pim:latest
-        container_name: pim-p2-relay
-        hostname: relay
+        container_name: pim-resilience-client
+        hostname: client
         volumes:
-            - ../configs/relay.toml:/etc/pim/pim.toml:ro
+            - ../configs/client.toml:/etc/pim/pim.toml:ro
         cap_add:
             - NET_ADMIN
         devices:
@@ -58,7 +61,7 @@ services:
                 condition: service_healthy
         networks:
             pim-net:
-                ipv4_address: 172.31.0.20
+                ipv4_address: 172.34.0.30
         healthcheck:
             test:
                 [
@@ -70,40 +73,10 @@ services:
             retries: 25
             start_period: 8s
 
-    client:
-        build:
-            context: ../..
-            dockerfile: Dockerfile
-        image: pim:latest
-        container_name: pim-p2-client
-        hostname: client
-        volumes:
-            - ../configs/client-relay.toml:/etc/pim/pim.toml:ro
-        cap_add:
-            - NET_ADMIN
-        devices:
-            - /dev/net/tun:/dev/net/tun
-        depends_on:
-            relay:
-                condition: service_healthy
-        networks:
-            pim-net:
-                ipv4_address: 172.31.0.30
-        healthcheck:
-            test:
-                [
-                    "CMD-SHELL",
-                    "test -f /run/pim.pid && kill -0 $(cat /run/pim.pid) 2>/dev/null && ip link show pim0 2>/dev/null | grep -q UP",
-                ]
-            interval: 2s
-            timeout: 4s
-            retries: 25
-            start_period: 12s
-
 networks:
     pim-net:
         driver: bridge
         ipam:
             driver: default
             config:
-                - subnet: 172.31.0.0/24
+                - subnet: 172.34.0.0/24

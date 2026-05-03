@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# test-phase4.sh — Phase 4: Resilience, flow control, and NAT timeout tests
+# test-resilience.sh — Phase 4: Resilience, flow control, and NAT timeout tests
 #
 # Tests (from implementation-plan.md):
 #   4.1  Disconnect network → reconnect → mesh recovers automatically
@@ -16,8 +16,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=common.sh
 source "$SCRIPT_DIR/common.sh"
 
-RESILIENCE_FILE="phase4-resilience.yml"
-FLOW_FILE="phase4-flow-control.yml"
+RESILIENCE_FILE="resilience.yml"
+FLOW_FILE="flow-control.yml"
 SKIP_SLOW="${SKIP_SLOW:-0}"
 RESILIENCE_GATEWAY_IP="172.34.0.10"
 
@@ -50,15 +50,15 @@ log_section "4.1 Network disconnect and reconnect"
 log_info "Disconnecting gateway from pim-net..."
 NETWORK_NAME=$(docker compose -f "$COMPOSE_DIR/$RESILIENCE_FILE" \
     ps --format '{{.Networks}}' gateway 2>/dev/null | head -1 || \
-    echo "pim-phase4-resilience_pim-net")
-docker network disconnect "$NETWORK_NAME" pim-p4-gw 2>/dev/null || \
+    echo "pim-resilience_pim-net")
+docker network disconnect "$NETWORK_NAME" pim-resilience-gw 2>/dev/null || \
     log_warn "network disconnect failed (may need --privileged or host network mode)"
 
 log_info "Waiting 5 s during outage..."
 sleep 5
 
 log_info "Reconnecting gateway to pim-net..."
-docker network connect --ip "$RESILIENCE_GATEWAY_IP" "$NETWORK_NAME" pim-p4-gw 2>/dev/null || \
+docker network connect --ip "$RESILIENCE_GATEWAY_IP" "$NETWORK_NAME" pim-resilience-gw 2>/dev/null || \
     log_warn "network reconnect failed"
 
 log_info "Waiting 40 s for reconnect and re-handshake (backoff up to 30 s)..."
@@ -75,14 +75,14 @@ log_section "4.2 Store-and-forward during outage"
 
 # Disconnect gateway, immediately trigger some traffic on client, then reconnect.
 log_info "Disconnecting gateway for store-and-forward test..."
-docker network disconnect "$NETWORK_NAME" pim-p4-gw 2>/dev/null || true
+docker network disconnect "$NETWORK_NAME" pim-resilience-gw 2>/dev/null || true
 
 log_info "Sending traffic from client (will be buffered)..."
 in_svc "$RESILIENCE_FILE" client ping -c 3 -W 1 10.77.0.1 >/dev/null 2>&1 || true
 
 log_info "Reconnecting gateway after 5 s..."
 sleep 5
-docker network connect --ip "$RESILIENCE_GATEWAY_IP" "$NETWORK_NAME" pim-p4-gw 2>/dev/null || true
+docker network connect --ip "$RESILIENCE_GATEWAY_IP" "$NETWORK_NAME" pim-resilience-gw 2>/dev/null || true
 
 log_info "Waiting 35 s for buffer flush and route recovery..."
 sleep 35

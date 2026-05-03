@@ -40,24 +40,24 @@ docker/
   compose/
     bluetooth-seam.yml          — single-node Bluetooth fake-sysfs seam test
     bluetooth-seam-enx.yml      — single-node Bluetooth dynamic-enx fallback seam
-    phase1-single-hop.yml        — gateway + client
-    phase2-relay.yml             — gateway + relay + client
-    phase2-routing.yml           — gateway + relay1 + relay2 + client
-    phase3-discovery.yml         — gateway + relay + client (peer lifecycle)
-    phase4-resilience.yml        — gateway + client (network disruption)
-    phase4-flow-control.yml      — gateway + flood-sender
-    phase5-multigateway.yml      — gateway1 + gateway2 + relay + client
+    single-hop.yml        — gateway + client
+    multi-hop-relay.yml             — gateway + relay + client
+    multi-hop-routing.yml           — gateway + relay1 + relay2 + client
+    peer-discovery.yml         — gateway + relay + client (peer lifecycle)
+    resilience.yml        — gateway + client (network disruption)
+    flow-control.yml      — gateway + flood-sender
+    multi-gateway.yml      — gateway1 + gateway2 + relay + client
   tests/
     test-bluetooth.sh           — Bluetooth seam test runner
     test-bluetooth-enx.sh       — Bluetooth dynamic-enx seam test runner
     test-debug-cli.sh           — debug CLI output runner
     test-route-cli.sh           — split-default route CLI runner
     common.sh                    — shared assertion and lifecycle helpers
-    test-phase1.sh               — phase 1 test runner
-    test-phase2.sh               — phase 2 test runner
-    test-phase3.sh               — phase 3 test runner
-    test-phase4.sh               — phase 4 test runner
-    test-phase5.sh               — phase 5 test runner
+    test-single-hop.sh               — phase 1 test runner
+    test-multi-hop.sh               — phase 2 test runner
+    test-peer-discovery.sh               — phase 3 test runner
+    test-resilience.sh               — phase 4 test runner
+    test-multi-gateway.sh               — phase 5 test runner
 docs/
   operations/docker-labs.md   — this file
 ```
@@ -124,27 +124,27 @@ make docker-build
 make test-all
 
 # Run a single phase
-make test-p1
-make test-p2
+make test-single-hop
+make test-multi-hop
 make test-debug-cli
 make test-route-cli
 make test-bluetooth
 
 # Interactive: bring up a stack and poke around
-make up-p1
-make sh-p1-client     # bash shell in the client container
+make up-single-hop
+make sh-single-hop-client     # bash shell in the client container
 pim status --verbose  # inside the container
-make down-p1
+make down-single-hop
 
 # Tail logs while the stack is running
-make logs-p1
+make logs-single-hop
 ```
 
 Set `DUMP_LOGS_ON_FAIL=1` before running a test script to dump container logs
 when an assertion fails:
 
 ```bash
-DUMP_LOGS_ON_FAIL=1 make test-p2
+DUMP_LOGS_ON_FAIL=1 make test-multi-hop
 ```
 
 ## Component Seam Tests
@@ -179,7 +179,7 @@ live `enx*` interface instead. Together they assert that the daemon:
 ## Debug CLI Test Lane
 
 `make test-debug-cli` validates operator-facing output for the new `pim debug`
-commands from the client container in `phase5-multigateway.yml`.
+commands from the client container in `multi-gateway.yml`.
 
 That single stack is enough to cover:
 
@@ -195,7 +195,7 @@ multiple gateways.
 
 ## Route CLI Test Lane
 
-`make test-route-cli` reuses `phase1-single-hop.yml` to validate the operator
+`make test-route-cli` reuses `single-hop.yml` to validate the operator
 workflow around split-default routing from inside the client container:
 
 - `pim route status` starts disabled
@@ -321,15 +321,15 @@ plan. Status: **[x] implemented** / **[ ] pending**.
 
 | Test | Scenario                                       | Status             |
 | ---- | ---------------------------------------------- | ------------------ |
-| 1.5  | Two containers communicate over bridge network | [x] test-phase1.sh |
-| 1.6  | TUN interface up with correct address          | [x] test-phase1.sh |
-| 1.7  | Gateway resolves external DNS and reaches HTTP | [x] test-phase1.sh |
-| 1.8  | Client pings gateway mesh IP                   | [x] test-phase1.sh |
-| 1.8  | Client curl http://example.com through mesh    | [x] test-phase1.sh |
-| 1.8  | Client HTTPS through mesh                      | [x] test-phase1.sh |
-| 1.8  | Client DNS resolution through mesh             | [x] test-phase1.sh |
-| 1.8  | Daemon exits cleanly on SIGTERM                | [x] test-phase1.sh |
-| 1.9  | pim status reports running state               | [x] test-phase1.sh |
+| 1.5  | Two containers communicate over bridge network | [x] test-single-hop.sh |
+| 1.6  | TUN interface up with correct address          | [x] test-single-hop.sh |
+| 1.7  | Gateway resolves external DNS and reaches HTTP | [x] test-single-hop.sh |
+| 1.8  | Client pings gateway mesh IP                   | [x] test-single-hop.sh |
+| 1.8  | Client curl http://example.com through mesh    | [x] test-single-hop.sh |
+| 1.8  | Client HTTPS through mesh                      | [x] test-single-hop.sh |
+| 1.8  | Client DNS resolution through mesh             | [x] test-single-hop.sh |
+| 1.8  | Daemon exits cleanly on SIGTERM                | [x] test-single-hop.sh |
+| 1.9  | pim status reports running state               | [x] test-single-hop.sh |
 
 ### Component Seams
 
@@ -344,43 +344,43 @@ plan. Status: **[x] implemented** / **[ ] pending**.
 
 | Test | Scenario                                             | Status                        |
 | ---- | ---------------------------------------------------- | ----------------------------- |
-| 2.1  | client → relay → gateway, curl internet              | [x] test-phase2.sh            |
+| 2.1  | client → relay → gateway, curl internet              | [x] test-multi-hop.sh            |
 | 2.1  | Frame with TTL=1 arriving at relay is dropped        | [ ] pending                   |
-| 2.2  | Relay TUN carries only encrypted frames (pcap check) | [x] test-phase2.sh            |
-| 2.3  | Routing table visible on each node (pim status)      | [x] test-phase2.sh            |
-| 2.3  | Kill relay1 → traffic reroutes via relay2            | [x] test-phase2.sh            |
-| 2.4  | 10 KB payload transferred intact                     | [x] test-phase2.sh (loopback) |
-| 2.5  | 4-container full mesh connectivity                   | [x] test-phase2.sh            |
+| 2.2  | Relay TUN carries only encrypted frames (pcap check) | [x] test-multi-hop.sh            |
+| 2.3  | Routing table visible on each node (pim status)      | [x] test-multi-hop.sh            |
+| 2.3  | Kill relay1 → traffic reroutes via relay2            | [x] test-multi-hop.sh            |
+| 2.4  | 10 KB payload transferred intact                     | [x] test-multi-hop.sh (loopback) |
+| 2.5  | 4-container full mesh connectivity                   | [x] test-multi-hop.sh            |
 
 ### Phase 3 — Discovery and Mesh Join
 
 | Test | Scenario                                              | Status             |
 | ---- | ----------------------------------------------------- | ------------------ |
-| 3.1  | 3 nodes discover each other within 2 broadcast cycles | [x] test-phase3.sh |
-| 3.2  | Client auto-discovers, gets IP, pings gateway         | [x] test-phase3.sh |
-| 3.2  | 3-container: client → relay → gateway, internet       | [x] test-phase3.sh |
-| 3.3  | Kill container → peers detect within 15 s             | [x] test-phase3.sh |
-| 3.3  | Restart killed container → rejoin mesh                | [x] test-phase3.sh |
+| 3.1  | 3 nodes discover each other within 2 broadcast cycles | [x] test-peer-discovery.sh |
+| 3.2  | Client auto-discovers, gets IP, pings gateway         | [x] test-peer-discovery.sh |
+| 3.2  | 3-container: client → relay → gateway, internet       | [x] test-peer-discovery.sh |
+| 3.3  | Kill container → peers detect within 15 s             | [x] test-peer-discovery.sh |
+| 3.3  | Restart killed container → rejoin mesh                | [x] test-peer-discovery.sh |
 
 ### Phase 4 — Reliability and Performance
 
 | Test | Scenario                                                    | Status                           |
 | ---- | ----------------------------------------------------------- | -------------------------------- |
-| 4.1  | Network disconnect → reconnect → mesh recovers              | [x] test-phase4.sh               |
+| 4.1  | Network disconnect → reconnect → mesh recovers              | [x] test-resilience.sh               |
 | 4.1  | Reconnection establishes new session key                    | [ ] pending                      |
-| 4.2  | Buffer frames during 5 s outage → delivered after reconnect | [x] test-phase4.sh               |
-| 4.3  | Flood sender → backpressure, bounded memory                 | [x] test-phase4.sh               |
-| 4.4  | TCP idle 4 min → still alive                                | [x] test-phase4.sh (SKIP_SLOW=0) |
-| 4.4  | TCP idle 6 min → conntrack expired, new connection works    | [x] test-phase4.sh (SKIP_SLOW=0) |
+| 4.2  | Buffer frames during 5 s outage → delivered after reconnect | [x] test-resilience.sh               |
+| 4.3  | Flood sender → backpressure, bounded memory                 | [x] test-resilience.sh               |
+| 4.4  | TCP idle 4 min → still alive                                | [x] test-resilience.sh (SKIP_SLOW=0) |
+| 4.4  | TCP idle 6 min → conntrack expired, new connection works    | [x] test-resilience.sh (SKIP_SLOW=0) |
 
 ### Phase 5 — Multi-Gateway and Load Balancing
 
 | Test | Scenario                                               | Status                           |
 | ---- | ------------------------------------------------------ | -------------------------------- |
-| 5.1  | Kill preferred gateway → failover to gateway2          | [x] test-phase5.sh               |
-| 5.1  | Restore gateway1 → routing re-converges                | [x] test-phase5.sh               |
-| 5.2  | Saturate gateway1 → new flows observed on gateway2     | [x] test-phase5.sh (heuristic)   |
-| 5.3  | tc netem latency on gateway1 → client prefers gateway2 | [x] test-phase5.sh (requires tc) |
+| 5.1  | Kill preferred gateway → failover to gateway2          | [x] test-multi-gateway.sh               |
+| 5.1  | Restore gateway1 → routing re-converges                | [x] test-multi-gateway.sh               |
+| 5.2  | Saturate gateway1 → new flows observed on gateway2     | [x] test-multi-gateway.sh (heuristic)   |
+| 5.3  | tc netem latency on gateway1 → client prefers gateway2 | [x] test-multi-gateway.sh (requires tc) |
 
 ## Pending / Future Scenarios
 
@@ -402,9 +402,9 @@ additional tooling:
 ### Daemon won't start
 
 ```bash
-make up-p1
-docker logs pim-p1-gw          # read daemon startup errors
-docker exec -it pim-p1-gw bash
+make up-single-hop
+docker logs pim-single-hop-gw          # read daemon startup errors
+docker exec -it pim-single-hop-gw bash
 cat /etc/pim/pim.toml           # verify config was mounted
 ```
 
@@ -413,7 +413,7 @@ cat /etc/pim/pim.toml           # verify config was mounted
 The container needs `CAP_NET_ADMIN`. Verify it is present:
 
 ```bash
-docker inspect pim-p1-gw | grep CapAdd
+docker inspect pim-single-hop-gw | grep CapAdd
 ```
 
 Also check that the kernel TUN module is loaded on the host:
@@ -428,7 +428,7 @@ modprobe tun
 
 1. Check that both TUN interfaces are UP: `ip link show pim0`
 2. Check routing: `ip route show` — there should be a route to `10.77.0.0/24` via `pim0`
-3. Tail the daemon log for errors: `RUST_LOG=debug make up-p1` then `make logs-p1`
+3. Tail the daemon log for errors: `RUST_LOG=debug make up-single-hop` then `make logs-single-hop`
 4. Run `pim status --verbose` inside each container
 
 ### Container unhealthy / health check failing
@@ -443,15 +443,15 @@ Common causes of failure:
 ### Viewing live stats
 
 ```bash
-docker exec pim-p1-client pim status --verbose
+docker exec pim-single-hop-client pim status --verbose
 # or watch it:
-docker exec pim-p1-client bash -c 'while true; do pim status --verbose; sleep 5; done'
+docker exec pim-single-hop-client bash -c 'while true; do pim status --verbose; sleep 5; done'
 ```
 
 ### Running a single assertion manually
 
 ```bash
 source docker/tests/common.sh
-assert_ping "phase1-single-hop.yml" client "10.77.0.1" "manual ping test"
+assert_ping "single-hop.yml" client "10.77.0.1" "manual ping test"
 print_summary
 ```

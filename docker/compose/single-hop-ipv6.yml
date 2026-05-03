@@ -1,6 +1,6 @@
 # Phase 1 IPv6 lane — single-hop tunnel with local IPv6 internet simulation.
 
-name: pim-phase1-ipv6-single-hop
+name: pim-single-hop-ipv6
 
 services:
     gateway:
@@ -8,7 +8,7 @@ services:
             context: ../..
             dockerfile: Dockerfile
         image: pim:latest
-        container_name: pim-p1-v6-gw
+        container_name: pim-single-hop-ipv6-gw
         hostname: gateway
         volumes:
             - ../configs/gateway-ipv6.toml:/etc/pim/pim.toml:ro
@@ -47,7 +47,7 @@ services:
             context: ../..
             dockerfile: Dockerfile
         image: pim:latest
-        container_name: pim-p1-v6-client
+        container_name: pim-single-hop-ipv6-client
         hostname: client
         volumes:
             - ../configs/client-ipv6.toml:/etc/pim/pim.toml:ro
@@ -74,7 +74,7 @@ services:
 
     internet6:
         image: python:3.12-alpine
-        container_name: pim-p1-v6-internet
+        container_name: pim-single-hop-ipv6-internet
         hostname: internet6
         command:
             [

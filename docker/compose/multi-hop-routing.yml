@@ -8,7 +8,7 @@
 #   2.3 Docker: verify routing table on each node via `pim status`
 #   2.3 Docker: kill a relay mid-test → traffic reroutes via alternate path
 
-name: pim-phase2-routing
+name: pim-multi-hop-routing
 
 services:
     gateway:
@@ -16,7 +16,7 @@ services:
             context: ../..
             dockerfile: Dockerfile
         image: pim:latest
-        container_name: pim-p2r-gw
+        container_name: pim-multi-hop-routing-gw
         hostname: gateway
         volumes:
             - ../configs/gateway.toml:/etc/pim/pim.toml:ro
@@ -47,7 +47,7 @@ services:
             context: ../..
             dockerfile: Dockerfile
         image: pim:latest
-        container_name: pim-p2r-relay1
+        container_name: pim-multi-hop-routing-relay1
         hostname: relay1
         volumes:
             - ../configs/relay1.toml:/etc/pim/pim.toml:ro
@@ -77,7 +77,7 @@ services:
             context: ../..
             dockerfile: Dockerfile
         image: pim:latest
-        container_name: pim-p2r-relay2
+        container_name: pim-multi-hop-routing-relay2
         hostname: relay2
         volumes:
             - ../configs/relay2.toml:/etc/pim/pim.toml:ro
@@ -107,7 +107,7 @@ services:
             context: ../..
             dockerfile: Dockerfile
         image: pim:latest
-        container_name: pim-p2r-client
+        container_name: pim-multi-hop-routing-client
         hostname: client
         volumes:
             - ../configs/client-dual-relay.toml:/etc/pim/pim.toml:ro

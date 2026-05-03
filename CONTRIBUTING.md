@@ -39,14 +39,14 @@ make test-all
 Or run a single phase:
 
 ```bash
-make test-p1          # phase 1 – single-hop connectivity
+make test-single-hop          # phase 1 – single-hop connectivity
 make test-ipv6        # phase 1 IPv6 variant
-make test-p2          # phase 2 – relay / routing
-make test-p3          # phase 3 – discovery
-make test-p4          # phase 4 – resilience (SKIP_SLOW=1 by default)
-make test-p5          # phase 5 – multi-gateway
-make test-p7          # phase 7 – auto-discovery
-make test-p8          # phase 8 – auto IP chain
+make test-multi-hop          # phase 2 – relay / routing
+make test-peer-discovery          # phase 3 – discovery
+make test-resilience          # phase 4 – resilience (SKIP_SLOW=1 by default)
+make test-multi-gateway          # phase 5 – multi-gateway
+make test-auto-discovery          # phase 7 – auto-discovery
+make test-auto-ip-chain          # phase 8 – auto IP chain
 make test-auth        # authorization flows
 make test-debug-cli   # debug CLI smoke tests
 make test-route-cli   # route CLI smoke tests
@@ -57,7 +57,7 @@ make test-bluetooth-enx  # Bluetooth ENX seam
 To run phase 4 with the full 6-minute NAT timeout test:
 
 ```bash
-make test-p4-full
+make test-resilience-full
 ```
 
 ## Branches
