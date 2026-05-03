@@ -407,6 +407,7 @@ async fn dispatch(state: &Arc<DaemonState>, req: &RpcRequest, write_tx: &WriteTx
             None,
         )),
         "peers.import_identity" => method_peers_import_identity(state, req.params.as_ref()).await,
+        "peers.forget" => method_peers_forget(state, req.params.as_ref()).await,
         "peers.broadcast_identity_now" => method_peers_broadcast_identity_now(state).await,
         "peers.set_broadcast_config" => {
             method_peers_set_broadcast_config(state, req.params.as_ref()).await
@@ -443,6 +444,10 @@ async fn dispatch(state: &Arc<DaemonState>, req: &RpcRequest, write_tx: &WriteTx
         "messages.history" => method_messages_history(state, req.params.as_ref()).await,
         "messages.send" => method_messages_send(state, req.params.as_ref()).await,
         "messages.mark_read" => method_messages_mark_read(state, req.params.as_ref()).await,
+        "messages.delete_conversation" => {
+            method_messages_delete_conversation(state, req.params.as_ref()).await
+        }
+        "messages.delete_all" => method_messages_delete_all(state).await,
         "messages.subscribe" => Ok(json!({ "subscription_id": new_subscription_id() })),
         "messages.unsubscribe" => Ok(Value::Null),
 
@@ -1278,6 +1283,124 @@ async fn method_peers_import_identity(
             })),
         )),
     }
+}
+
+// ── Delete utilities ─────────────────────────────────────────────────────
+
+#[derive(Debug, Deserialize)]
+struct PeersForgetParams {
+    /// 32-char lowercase hex NodeId.
+    node_id: String,
+    /// When true, also wipes the message history for this peer.
+    /// Defaults to false (less destructive).
+    #[serde(default)]
+    also_delete_messages: bool,
+}
+
+async fn method_peers_forget(state: &Arc<DaemonState>, params: Option<&Value>) -> RpcResult {
+    let parsed: PeersForgetParams = match params {
+        Some(v) => serde_json::from_value(v.clone()).map_err(|e| {
+            (
+                codes::INVALID_PARAMS,
+                format!("peers.forget: invalid params: {e}"),
+                None,
+            )
+        })?,
+        None => {
+            return Err((
+                codes::INVALID_PARAMS,
+                "peers.forget: params required".into(),
+                None,
+            ))
+        }
+    };
+    let node_id: NodeId = parsed.node_id.parse().map_err(|e| {
+        (
+            codes::INVALID_PARAMS,
+            format!("peers.forget: invalid node_id: {e}"),
+            None,
+        )
+    })?;
+    let outcome = state
+        .messaging
+        .forget_peer(node_id, parsed.also_delete_messages)
+        .await
+        .map_err(|e| {
+            (
+                codes::MESSAGE_STORAGE_ERROR,
+                format!("peers.forget: {e}"),
+                None,
+            )
+        })?;
+    Ok(json!({
+        "forgot_identity": outcome.forgot_identity,
+        "deleted_messages": outcome.deleted_messages,
+        "deleted_conversation": outcome.deleted_conversation,
+    }))
+}
+
+#[derive(Debug, Deserialize)]
+struct MessagesDeleteConversationParams {
+    peer_node_id: String,
+}
+
+async fn method_messages_delete_conversation(
+    state: &Arc<DaemonState>,
+    params: Option<&Value>,
+) -> RpcResult {
+    let parsed: MessagesDeleteConversationParams = match params {
+        Some(v) => serde_json::from_value(v.clone()).map_err(|e| {
+            (
+                codes::INVALID_PARAMS,
+                format!("messages.delete_conversation: invalid params: {e}"),
+                None,
+            )
+        })?,
+        None => {
+            return Err((
+                codes::INVALID_PARAMS,
+                "messages.delete_conversation: params required".into(),
+                None,
+            ))
+        }
+    };
+    let node_id: NodeId = parsed.peer_node_id.parse().map_err(|e| {
+        (
+            codes::INVALID_PARAMS,
+            format!("messages.delete_conversation: invalid peer_node_id: {e}"),
+            None,
+        )
+    })?;
+    let (deleted_messages, deleted_conversation) = state
+        .messaging
+        .delete_conversation(node_id)
+        .await
+        .map_err(|e| {
+            (
+                codes::MESSAGE_STORAGE_ERROR,
+                format!("messages.delete_conversation: {e}"),
+                None,
+            )
+        })?;
+    Ok(json!({
+        "deleted_messages": deleted_messages,
+        "deleted_conversation": deleted_conversation,
+    }))
+}
+
+async fn method_messages_delete_all(state: &Arc<DaemonState>) -> RpcResult {
+    let (deleted_messages, deleted_conversations) =
+        state.messaging.delete_all_messages().await.map_err(|e| {
+            (
+                codes::MESSAGE_STORAGE_ERROR,
+                format!("messages.delete_all: {e}"),
+                None,
+            )
+        })?;
+    Ok(json!({
+        "deleted_messages": deleted_messages,
+        "deleted_conversations": deleted_conversations,
+    }))
 }
 
 // ── Broadcast control ────────────────────────────────────────────────────

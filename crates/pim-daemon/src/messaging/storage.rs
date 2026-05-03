@@ -150,6 +150,19 @@ pub struct ConversationSummary {
     pub x25519_pubkey: Option<String>,
 }
 
+/// Outcome of [`MessagingStorage::forget_peer`]. Reported back through
+/// `peers.forget` so the UI can surface exact counts.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ForgetPeerOutcome {
+    /// True when a `peers_seen` row existed and was removed.
+    pub forgot_identity: bool,
+    /// Number of `messages` rows deleted (only non-zero when the
+    /// caller asked to also wipe message history).
+    pub deleted_messages: usize,
+    /// True when a `conversations_meta` row existed and was removed.
+    pub deleted_conversation: bool,
+}
+
 /// Outcome of an out-of-band identity import
 /// ([`MessagingStorage::import_peer_identity_if_compatible`]).
 ///
@@ -609,6 +622,76 @@ impl MessagingStorage {
         Ok(rows)
     }
 
+    /// Atomic per-peer wipe of `messages` and `conversations_meta`.
+    /// Returns `(deleted_messages, deleted_conversation)` so the
+    /// caller can report exact counts to the RPC client.
+    /// Does NOT touch `peers_seen` — the cached x25519 stays so the
+    /// peer remains messageable.
+    pub fn delete_conversation(&self, peer_id_hex: &str) -> Result<(usize, bool)> {
+        let mut conn = self.conn.lock().unwrap();
+        let tx = conn.transaction()?;
+        let deleted_messages = tx.execute(
+            "DELETE FROM messages WHERE peer_node_id = ?1",
+            params![peer_id_hex],
+        )?;
+        let deleted_meta = tx.execute(
+            "DELETE FROM conversations_meta WHERE peer_node_id = ?1",
+            params![peer_id_hex],
+        )?;
+        tx.commit()?;
+        Ok((deleted_messages, deleted_meta > 0))
+    }
+
+    /// Atomic global wipe of every message + conversation row.
+    /// Identities in `peers_seen` are preserved — that's a separate
+    /// "factory reset" we don't expose yet. Returns
+    /// `(deleted_messages, deleted_conversations)`.
+    pub fn delete_all_messages(&self) -> Result<(usize, usize)> {
+        let mut conn = self.conn.lock().unwrap();
+        let tx = conn.transaction()?;
+        let deleted_messages = tx.execute("DELETE FROM messages", [])?;
+        let deleted_meta = tx.execute("DELETE FROM conversations_meta", [])?;
+        tx.commit()?;
+        Ok((deleted_messages, deleted_meta))
+    }
+
+    /// Drop a peer's identity row from `peers_seen`. Returns whether
+    /// a row was actually removed (false ⇒ peer was already unknown).
+    /// `also_delete_messages` extends the same transaction with a
+    /// per-peer `delete_conversation` so the wipe is atomic across
+    /// all three tables.
+    pub fn forget_peer(
+        &self,
+        peer_id_hex: &str,
+        also_delete_messages: bool,
+    ) -> Result<ForgetPeerOutcome> {
+        let mut conn = self.conn.lock().unwrap();
+        let tx = conn.transaction()?;
+        let (deleted_messages, deleted_conversation) = if also_delete_messages {
+            let m = tx.execute(
+                "DELETE FROM messages WHERE peer_node_id = ?1",
+                params![peer_id_hex],
+            )?;
+            let c = tx.execute(
+                "DELETE FROM conversations_meta WHERE peer_node_id = ?1",
+                params![peer_id_hex],
+            )?;
+            (m, c > 0)
+        } else {
+            (0, false)
+        };
+        let forgot_identity = tx.execute(
+            "DELETE FROM peers_seen WHERE node_id = ?1",
+            params![peer_id_hex],
+        )? > 0;
+        tx.commit()?;
+        Ok(ForgetPeerOutcome {
+            forgot_identity,
+            deleted_messages,
+            deleted_conversation,
+        })
+    }
+
     /// Mark every message at-or-before `up_to_ts_ms` as read for the peer.
     /// Returns the new `unread_count` (always 0).
     pub fn mark_read_up_to(&self, peer_id_hex: &str, up_to_ts_ms: i64) -> Result<i64> {
@@ -831,5 +914,154 @@ mod tests {
             .find(|c| c.peer_node_id == peer_hex)
             .expect("have one");
         assert_eq!(convo.x25519_pubkey.as_deref(), Some(hex32(&key).as_str()));
+    }
+
+    /// Helper: insert one inbound row + bump the conversations_meta
+    /// counter for the given peer so the delete tests have something
+    /// concrete to wipe.
+    fn seed_one_inbound(storage: &MessagingStorage, peer: &NodeId, body: &str, ts: i64, id: &str) {
+        let peer_hex = hex_node_id(peer);
+        let _ = storage
+            .bump_conversation_after_remote_receive(&peer_hex, id, ts, body, None)
+            .unwrap();
+        // bump_conversation_after_remote_receive doesn't insert into the
+        // `messages` table itself; do it explicitly so deletion has a row.
+        let record = MessageRecord {
+            id: id.to_string(),
+            peer_node_id: peer_hex,
+            direction: MessageDirection::Received,
+            body: body.to_string(),
+            timestamp_ms: ts,
+            status: MessageStatus::Delivered,
+            failure_reason: None,
+            delivered_at_ms: Some(ts),
+            read_at_ms: None,
+        };
+        storage.insert_message(&record).expect("insert");
+    }
+
+    #[test]
+    fn delete_conversation_wipes_messages_and_meta_for_peer() {
+        let (_d, storage) = open_temp_storage();
+        let key = [0xaau8; 32];
+        storage
+            .import_peer_identity_if_compatible(&node_a(), &key, Some("alice"), 100)
+            .unwrap();
+        seed_one_inbound(&storage, &node_a(), "hello", 200, "aaaa1111aaaa1111");
+        seed_one_inbound(&storage, &node_a(), "world", 300, "bbbb2222bbbb2222");
+
+        let (deleted_messages, deleted_conversation) = storage
+            .delete_conversation(&hex_node_id(&node_a()))
+            .unwrap();
+        assert_eq!(deleted_messages, 2);
+        assert!(deleted_conversation);
+
+        // Cached x25519 identity must remain so the peer stays messageable.
+        let cached = storage
+            .lookup_x25519_pub(&node_a())
+            .expect("lookup")
+            .expect("present");
+        assert_eq!(cached, key);
+        // Conversation list no longer contains the peer.
+        let convos = storage.list_conversations().expect("list");
+        assert!(convos
+            .iter()
+            .all(|c| c.peer_node_id != hex_node_id(&node_a())));
+        // History page is empty.
+        let (rows, _) = storage.history(&hex_node_id(&node_a()), None, 100).unwrap();
+        assert!(rows.is_empty());
+    }
+
+    #[test]
+    fn delete_conversation_on_unknown_peer_is_noop() {
+        let (_d, storage) = open_temp_storage();
+        let (deleted_messages, deleted_conversation) = storage
+            .delete_conversation(&hex_node_id(&node_a()))
+            .unwrap();
+        assert_eq!(deleted_messages, 0);
+        assert!(!deleted_conversation);
+    }
+
+    #[test]
+    fn delete_all_messages_wipes_every_conversation_but_keeps_identities() {
+        let (_d, storage) = open_temp_storage();
+        let key_a = [0xbbu8; 32];
+        let key_b = [0xccu8; 32];
+        storage
+            .import_peer_identity_if_compatible(&node_a(), &key_a, Some("alice"), 100)
+            .unwrap();
+        storage
+            .import_peer_identity_if_compatible(&node_b(), &key_b, Some("bob"), 100)
+            .unwrap();
+        seed_one_inbound(
+            &storage,
+            &node_a(),
+            "hi from alice",
+            200,
+            "aaaa1111aaaa1111",
+        );
+        seed_one_inbound(&storage, &node_b(), "hi from bob", 200, "bbbb2222bbbb2222");
+        seed_one_inbound(&storage, &node_b(), "again", 250, "cccc3333cccc3333");
+
+        let (deleted_messages, deleted_conversations) = storage.delete_all_messages().unwrap();
+        assert_eq!(deleted_messages, 3);
+        assert_eq!(deleted_conversations, 2);
+
+        // Identities preserved.
+        assert_eq!(storage.lookup_x25519_pub(&node_a()).unwrap(), Some(key_a));
+        assert_eq!(storage.lookup_x25519_pub(&node_b()).unwrap(), Some(key_b));
+        // Conversation list empty.
+        assert!(storage.list_conversations().unwrap().is_empty());
+    }
+
+    #[test]
+    fn forget_peer_default_keeps_messages() {
+        let (_d, storage) = open_temp_storage();
+        let key = [0xddu8; 32];
+        storage
+            .import_peer_identity_if_compatible(&node_a(), &key, Some("alice"), 100)
+            .unwrap();
+        seed_one_inbound(&storage, &node_a(), "hi", 200, "aaaa1111aaaa1111");
+
+        let outcome = storage.forget_peer(&hex_node_id(&node_a()), false).unwrap();
+        assert!(outcome.forgot_identity);
+        assert_eq!(outcome.deleted_messages, 0);
+        assert!(!outcome.deleted_conversation);
+
+        // Identity is gone …
+        assert!(storage.lookup_x25519_pub(&node_a()).unwrap().is_none());
+        // … but messages stay (the conversation row falls back to short_id
+        // for `name` because the peers_seen JOIN now misses).
+        let (rows, _) = storage.history(&hex_node_id(&node_a()), None, 100).unwrap();
+        assert_eq!(rows.len(), 1);
+    }
+
+    #[test]
+    fn forget_peer_with_messages_flag_wipes_everything() {
+        let (_d, storage) = open_temp_storage();
+        let key = [0xeeu8; 32];
+        storage
+            .import_peer_identity_if_compatible(&node_a(), &key, Some("alice"), 100)
+            .unwrap();
+        seed_one_inbound(&storage, &node_a(), "hi", 200, "aaaa1111aaaa1111");
+        seed_one_inbound(&storage, &node_a(), "again", 300, "bbbb2222bbbb2222");
+
+        let outcome = storage.forget_peer(&hex_node_id(&node_a()), true).unwrap();
+        assert!(outcome.forgot_identity);
+        assert_eq!(outcome.deleted_messages, 2);
+        assert!(outcome.deleted_conversation);
+
+        assert!(storage.lookup_x25519_pub(&node_a()).unwrap().is_none());
+        let (rows, _) = storage.history(&hex_node_id(&node_a()), None, 100).unwrap();
+        assert!(rows.is_empty());
+    }
+
+    #[test]
+    fn forget_peer_unknown_returns_false_flags() {
+        let (_d, storage) = open_temp_storage();
+        let outcome = storage.forget_peer(&hex_node_id(&node_a()), true).unwrap();
+        assert!(!outcome.forgot_identity);
+        assert_eq!(outcome.deleted_messages, 0);
+        assert!(!outcome.deleted_conversation);
     }
 }
