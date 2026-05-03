@@ -1,0 +1,40 @@
+# RFCOMM-only seam test config.
+#
+# pim-bluetooth (PAN/NAP) is OFF — only the bluetooth_rfcomm service
+# runs. The lab fakes `bluetoothctl devices Paired` so the daemon's
+# outbound discovery loop sees a single PIM-prefixed peer; the dial
+# always fails with ENODEV (no real HCI in the container) and the
+# point of the lab is to verify the daemon survives that failure
+# cleanly and keeps polling.
+
+[node]
+name = "rfcomm-discovery"
+data_dir = "/var/lib/pim"
+
+[interface]
+mesh_ip = "10.77.0.42/24"
+mtu = 1400
+
+[discovery]
+enabled = false
+
+[transport]
+listen_port = 9100
+
+[security]
+key_file = "/var/lib/pim/node.key"
+
+[bluetooth]
+enabled = false
+
+[bluetooth_rfcomm]
+enabled = true
+channel = 22
+device_name_prefix = "PIM-"
+outbound_enabled = true
+# Polled fast so the lab doesn't waste wall-clock waiting for the first
+# scan. Production default is 30 s.
+poll_interval_ms = 1500
+# Bridge to TCP loopback is OFF here — without a real RFCOMM peer there's
+# no traffic to bridge, and turning it on adds extra log noise.
+bridge_to_tcp = false

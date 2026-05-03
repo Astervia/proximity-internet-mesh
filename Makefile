@@ -16,7 +16,7 @@ docker-build:
 .PHONY: test-single-hop test-single-hop-ipv6 test-multi-hop test-peer-discovery \
         test-resilience test-resilience-full test-multi-gateway test-auto-discovery \
         test-auto-ip-chain test-auth test-debug-cli test-route-cli \
-        test-bluetooth test-bluetooth-enx test-all
+        test-bluetooth test-bluetooth-enx test-rfcomm-discovery test-all
 
 test-single-hop: docker-build         ## phase 1: TUN, NAT, gateway/client baseline
 	bash $(TEST_DIR)/test-single-hop.sh
@@ -59,6 +59,9 @@ test-bluetooth: docker-build
 
 test-bluetooth-enx: docker-build
 	bash $(TEST_DIR)/test-bluetooth-enx.sh
+
+test-rfcomm-discovery: docker-build  ## RFCOMM listener + outbound dial-failure resilience
+	bash $(TEST_DIR)/test-rfcomm-discovery.sh
 
 test-all: docker-build
 	@bash $(TEST_DIR)/test-single-hop.sh && \
@@ -267,6 +270,7 @@ help:
 	@echo "  make test-route-cli         Split-default route CLI flow in the single-hop Docker lab"
 	@echo "  make test-bluetooth         Bluetooth fake-sysfs seam test in Docker"
 	@echo "  make test-bluetooth-enx     Bluetooth dynamic enx PAN fallback seam test in Docker"
+	@echo "  make test-rfcomm-discovery  RFCOMM listener + outbound dial-failure seam"
 	@echo "  make test-all               All labs (slow tests skipped)"
 	@echo "  make test-unit              Rust unit tests (no Docker)"
 	@echo ""
