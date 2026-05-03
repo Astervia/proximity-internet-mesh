@@ -10,7 +10,7 @@ use tokio::process::Command;
 use tokio::sync::{mpsc, Mutex};
 use tokio::time::sleep;
 use tokio_util::sync::CancellationToken;
-use tracing::{debug, warn};
+use tracing::{debug, info, warn};
 
 use super::socket;
 use super::{parse_bdaddr, session, BdAddr, LocalIdentity, RfcommConfig, RfcommEvent};
@@ -42,6 +42,14 @@ pub fn spawn(
                     continue;
                 }
             };
+            // Diagnostic — without this it's impossible to tell whether
+            // the outbound loop is alive at all. Logged once per poll
+            // tick at INFO so the bench operator sees the cadence.
+            info!(
+                target: "pim-bluetooth-rfcomm",
+                paired_count = paired.len(),
+                "rfcomm outbound poll"
+            );
             for (bd_addr_str, name) in paired {
                 let bd_addr = match parse_bdaddr(&bd_addr_str) {
                     Some(a) => a,
@@ -57,6 +65,13 @@ pub fn spawn(
                     let mut set = active.lock().await;
                     set.insert(bd_addr);
                 }
+                info!(
+                    target: "pim-bluetooth-rfcomm",
+                    bd_addr = %bd_addr_str,
+                    name = %name,
+                    channel = cfg.channel,
+                    "rfcomm dialing peer"
+                );
                 let stream = match socket::connect(bd_addr, cfg.channel).await {
                     Ok(s) => s,
                     Err(e) => {

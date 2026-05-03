@@ -839,7 +839,11 @@ pub(crate) async fn run() -> Result<()> {
                             RfcommEvent::OpenFailed {
                                 bd_addr, reason, ..
                             } => {
-                                debug!(bd_addr = %bd_addr, reason = %reason, "rfcomm open failed")
+                                // Promoted from debug → warn while debugging the
+                                // linux↔linux RFCOMM bench. Open failures are
+                                // the most useful signal we have right now and
+                                // hiding them at debug stalls iteration.
+                                warn!(bd_addr = %bd_addr, reason = %reason, "rfcomm open failed")
                             }
                             RfcommEvent::Error { code, message } => {
                                 warn!(code = *code, message = %message, "rfcomm error")
