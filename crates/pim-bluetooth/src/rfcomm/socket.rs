@@ -146,14 +146,16 @@ pub async fn connect(bd_addr: BdAddr, channel: u8) -> io::Result<RfcommStream> {
         if err.raw_os_error() != Some(libc::EINPROGRESS) {
             return Err(err);
         }
-        let async_fd = AsyncFd::with_interest(fd, Interest::WRITABLE)?;
-        let _ = async_fd.writable().await?;
+        // Watch only WRITABLE while waiting for connect to finish —
+        // the kernel signals connection completion via writability.
+        let waiter = AsyncFd::with_interest(fd, Interest::WRITABLE)?;
+        let _ = waiter.writable().await?;
         // Check SO_ERROR.
         let mut so_error: libc::c_int = 0;
         let mut so_len = mem::size_of::<libc::c_int>() as libc::socklen_t;
         let rc = unsafe {
             libc::getsockopt(
-                async_fd.as_raw_fd(),
+                waiter.as_raw_fd(),
                 libc::SOL_SOCKET,
                 libc::SO_ERROR,
                 &mut so_error as *mut libc::c_int as *mut libc::c_void,
@@ -166,7 +168,19 @@ pub async fn connect(bd_addr: BdAddr, channel: u8) -> io::Result<RfcommStream> {
         if so_error != 0 {
             return Err(io::Error::from_raw_os_error(so_error));
         }
-        return Ok(RfcommStream { fd: async_fd });
+        // Re-register the fd with READABLE | WRITABLE for the
+        // post-connect lifetime. Before this fix the stream stayed
+        // registered as WRITABLE-only and `read()` (via
+        // `self.fd.readable().await`) never resolved — every dialer-
+        // side RFCOMM session deadlocked at the first post-Hello
+        // read, so neither the rfcomm Hello/HelloAck-completion
+        // event nor the bridge::run loop on the dialer side ever
+        // fired. Rewrap by extracting the inner OwnedFd from `waiter`
+        // and creating a fresh AsyncFd with both interests.
+        let inner = waiter.into_inner();
+        return Ok(RfcommStream {
+            fd: AsyncFd::new(inner)?,
+        });
     }
     Ok(RfcommStream {
         fd: AsyncFd::new(fd)?,
