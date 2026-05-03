@@ -23,7 +23,17 @@ pub const BTPROTO_RFCOMM: libc::c_int = 3;
 
 /// Linux kernel's `sockaddr_rc` layout — `sa_family_t` + 6-byte
 /// `bdaddr_t` (little-endian) + 1-byte channel.
-#[repr(C, packed)]
+///
+/// MUST be `repr(C)` (not `packed`). The kernel's userspace header
+/// declares only `bdaddr_t` packed; the outer `sockaddr_rc` keeps
+/// natural alignment, so its `sizeof` is 10 bytes (2 + 6 + 1 + 1
+/// trailing pad to align to `sa_family_t`'s alignment of 2).
+/// `rfcomm_sock_connect` enforces `addr_len < sizeof(sockaddr_rc)`
+/// strictly — passing the packed 9-byte size returns EINVAL.
+/// Verified against a header-free C reference: same MAC, same
+/// channel, the C connect succeeds with `sizeof = 10` while the
+/// packed-9 Rust call fails synchronously with `Invalid argument`.
+#[repr(C)]
 struct SockaddrRc {
     rc_family: libc::sa_family_t,
     rc_bdaddr: [u8; 6],
