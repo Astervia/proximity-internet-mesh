@@ -215,14 +215,26 @@ impl RfcommService {
         #[cfg(target_os = "linux")]
         {
             let cancel = CancellationToken::new();
+            // Shared session-dedup set: a single Arc<Mutex<HashSet<BdAddr>>>
+            // checked atomically by both listener and outbound before they
+            // spawn a session for a given peer. Without this, both sides
+            // can simultaneously dial each other and both can also accept
+            // each other's inbound — yielding 2 sessions per pair, where
+            // the second `register_peer` clobbers the first and the first
+            // session's bridge dies with `Connection reset by peer`. With
+            // it, whichever side acts first (outbound dial OR inbound
+            // accept) wins the slot and the other path skips.
+            let active: std::sync::Arc<tokio::sync::Mutex<std::collections::HashSet<BdAddr>>> =
+                std::sync::Arc::new(tokio::sync::Mutex::new(std::collections::HashSet::new()));
             listener::spawn(
                 cfg.clone(),
                 identity.clone(),
                 events_tx.clone(),
                 cancel.clone(),
+                active.clone(),
             )?;
             if cfg.outbound_enabled {
-                outbound::spawn(cfg, identity, events_tx, cancel.clone());
+                outbound::spawn(cfg, identity, events_tx, cancel.clone(), active);
             }
             Ok(Self { cancel })
         }
