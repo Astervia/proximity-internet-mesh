@@ -17,14 +17,19 @@ use super::{parse_bdaddr, session, BdAddr, LocalIdentity, RfcommConfig, RfcommEv
 
 /// Spawn the outbound discovery task. Cancels cleanly on the cancel
 /// token; never returns errors directly (errors become RfcommEvent).
+///
+/// `active` is shared with `listener::spawn` so the inbound accept and
+/// the outbound dial cooperate on dedup. Without that, simultaneous
+/// poll cycles on both peers' daemons each insert into their own local
+/// set, both dial through, both accept the inbound, and the resulting
+/// duplicate sessions clobber each other in `register_peer`.
 pub fn spawn(
     cfg: RfcommConfig,
     identity: LocalIdentity,
     events_tx: mpsc::Sender<RfcommEvent>,
     cancel: CancellationToken,
+    active: Arc<Mutex<HashSet<BdAddr>>>,
 ) {
-    let active: Arc<Mutex<HashSet<BdAddr>>> = Arc::new(Mutex::new(HashSet::new()));
-
     tokio::spawn(async move {
         loop {
             tokio::select! {

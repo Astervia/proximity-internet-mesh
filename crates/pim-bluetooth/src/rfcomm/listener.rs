@@ -13,20 +13,22 @@ use super::{session, BdAddr, LocalIdentity, RfcommConfig, RfcommError, RfcommEve
 
 /// Spawn the acceptor task. Errors at bind time are propagated; runtime
 /// errors are surfaced as `RfcommEvent::Error` and the task continues.
+///
+/// `active` is shared with `outbound::spawn` so the inbound accept and
+/// the outbound dial cooperate on dedup — first-arriving wins, the
+/// other path skips its session for the same peer.
 pub fn spawn(
     cfg: RfcommConfig,
     identity: LocalIdentity,
     events_tx: mpsc::Sender<RfcommEvent>,
     cancel: CancellationToken,
+    active: Arc<Mutex<std::collections::HashSet<BdAddr>>>,
 ) -> Result<(), RfcommError> {
     let listener = RfcommListener::bind(cfg.channel).map_err(|e| RfcommError::BindFailed {
         channel: cfg.channel,
         source: e,
     })?;
     info!(target: "pim-bluetooth-rfcomm", channel = cfg.channel, "listening");
-
-    let active: Arc<Mutex<std::collections::HashSet<BdAddr>>> =
-        Arc::new(Mutex::new(std::collections::HashSet::new()));
 
     // Notify the daemon we're up so the UI can mark the service alive.
     let tx0 = events_tx.clone();

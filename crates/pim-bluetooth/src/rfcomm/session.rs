@@ -45,47 +45,39 @@ pub async fn run(
     local_bridge_addr: Option<std::net::SocketAddr>,
 ) {
     let bd_str = format_bdaddr(&peer_addr);
-    if let Err(e) = handshake(&stream, &bd_str, initiator, &identity, &events_tx).await {
-        let _ = events_tx
-            .send(RfcommEvent::Lost {
-                bd_addr: bd_str.clone(),
-                reason: format!("handshake_failed: {e}"),
-            })
-            .await;
-        return;
-    }
+    let peer_node_id = match handshake(&stream, &bd_str, initiator, &identity, &events_tx).await {
+        Ok(id) => id,
+        Err(e) => {
+            let _ = events_tx
+                .send(RfcommEvent::Lost {
+                    bd_addr: bd_str.clone(),
+                    reason: format!("handshake_failed: {e}"),
+                })
+                .await;
+            return;
+        }
+    };
 
     let stream = Arc::new(stream);
     let close_reason = match local_bridge_addr {
         Some(addr) => {
-            // Decode the local node_id (32-char hex) into raw 16 bytes
-            // for the bridge's NodeId prelude. Treat parse failure as a
-            // teardown reason — the daemon-supplied identity should
-            // always be 32 hex chars; if it isn't the bridge can't
-            // identify itself to the peer's listener anyway.
-            let mut self_node_id = [0u8; 16];
-            match hex_to_node_id(&identity.node_id_hex, &mut self_node_id) {
-                Ok(()) => {
-                    debug!(
-                        target: "pim-bluetooth-rfcomm",
-                        peer = %bd_str,
-                        bridge = %addr,
-                        "session: handshake OK, bridging to loopback TCP",
-                    );
-                    match bridge::run(
-                        stream.clone(),
-                        addr,
-                        bd_str.clone(),
-                        self_node_id,
-                        cancel.clone(),
-                    )
-                    .await
-                    {
-                        Ok(()) => "bridge_closed".to_string(),
-                        Err(e) => format!("bridge_io_error: {e}"),
-                    }
-                }
-                Err(e) => format!("identity_decode_error: {e}"),
+            debug!(
+                target: "pim-bluetooth-rfcomm",
+                peer = %bd_str,
+                bridge = %addr,
+                "session: handshake OK, bridging to loopback TCP",
+            );
+            match bridge::run(
+                stream.clone(),
+                addr,
+                bd_str.clone(),
+                peer_node_id,
+                cancel.clone(),
+            )
+            .await
+            {
+                Ok(()) => "bridge_closed".to_string(),
+                Err(e) => format!("bridge_io_error: {e}"),
             }
         }
         None => discovery_only_loop(stream, &bd_str, cancel).await,
@@ -158,13 +150,20 @@ fn hex_to_node_id(hex: &str, out: &mut [u8; 16]) -> Result<(), String> {
     Ok(())
 }
 
+/// Run the RFCOMM session-level Hello / HelloAck handshake. Returns
+/// the peer's 16-byte raw NodeId on success — the caller forwards it
+/// to the bridge so the loopback TCP listener can be told *who* this
+/// connection is from without having to send the bytes back over
+/// RFCOMM (which would race with the post-handshake byte stream and
+/// cause `decode_frame` to choke on binary NodeId bytes that look
+/// like absurd length prefixes).
 async fn handshake(
     stream: &RfcommStream,
     bd_str: &str,
     initiator: bool,
     identity: &LocalIdentity,
     events_tx: &mpsc::Sender<RfcommEvent>,
-) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+) -> Result<[u8; 16], Box<dyn std::error::Error + Send + Sync>> {
     let local_caps = identity.caps.clone();
     let local_node_hex = identity.node_id_hex.clone();
     let local_name = identity.name.clone();
@@ -245,6 +244,14 @@ async fn handshake(
             let frame = send_msg("hello-ack")?;
             stream.write_all(&frame).await?;
         }
+        // Decode the peer's hex NodeId now so the caller can hand the
+        // raw 16-byte form to the bridge. Errors here mean the peer
+        // sent us a Hello with a malformed `node_id` field; treat as
+        // a handshake failure so we don't bridge with garbage.
+        let mut peer_node_id = [0u8; 16];
+        if let Err(msg) = hex_to_node_id(&their_node, &mut peer_node_id) {
+            return Err(format!("invalid peer node_id `{their_node}`: {msg}").into());
+        }
         let _ = events_tx
             .send(RfcommEvent::Discovered {
                 bd_addr: bd_str.to_string(),
@@ -256,6 +263,6 @@ async fn handshake(
                 since: now_iso(),
             })
             .await;
-        return Ok(());
+        return Ok(peer_node_id);
     }
 }
