@@ -1,0 +1,42 @@
+name: pim-rfcomm-discovery
+
+# AF_BLUETOOTH is per-network-namespace on Linux. A bridge-mode Docker
+# container can't bind RFCOMM sockets — `bind RFCOMM channel 22:
+# Address family not supported by protocol`. The lab uses that failure
+# on purpose: it asserts the daemon survives RFCOMM bind failure and
+# keeps the rest of the stack running. End-to-end RFCOMM peering needs
+# a hardware bench (see docs/research/).
+
+services:
+  node:
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+    image: pim:latest
+    container_name: pim-rfcomm-discovery-node
+    hostname: node
+    environment:
+      RUST_LOG: pim_bluetooth=debug,pim_daemon=info,info
+    volumes:
+      - ../configs/rfcomm-discovery.toml:/etc/pim/pim.toml:ro
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    networks:
+      pim-net:
+        ipv4_address: 172.40.0.10
+    healthcheck:
+      test: ["CMD-SHELL", "test -f /run/pim.pid && kill -0 $(cat /run/pim.pid) 2>/dev/null && ip link show pim0 2>/dev/null | grep -q UP"]
+      interval: 2s
+      timeout: 4s
+      retries: 25
+      start_period: 5s
+
+networks:
+  pim-net:
+    driver: bridge
+    ipam:
+      driver: default
+      config:
+        - subnet: 172.40.0.0/24
