@@ -57,7 +57,13 @@ pub fn spawn(
                         }
                         let identity = identity.clone();
                         let events_tx = events_tx.clone();
-                        let cancel = cancel.clone();
+                        // Defense in depth: hand the session a CHILD
+                        // token. The bridge inside `session::run` may
+                        // cancel its own token to tear down its r2t/t2r
+                        // pumps (see session.rs) — if that token were
+                        // a clone of `cancel`, the cancellation would
+                        // bubble up and shut down THIS acceptor task.
+                        let cancel = cancel.child_token();
                         let active = active.clone();
                         let bridge_addr = cfg.local_bridge_addr;
                         tokio::spawn(async move {

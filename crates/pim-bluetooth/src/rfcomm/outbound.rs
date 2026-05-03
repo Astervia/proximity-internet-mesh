@@ -94,7 +94,11 @@ pub fn spawn(
                 };
                 let identity = identity.clone();
                 let events_tx = events_tx.clone();
-                let cancel = cancel.clone();
+                // Defense in depth: hand the session a CHILD token —
+                // see the matching comment in listener.rs. A clone here
+                // would let the bridge's per-session cancel propagate
+                // back up and kill the outbound poll loop.
+                let cancel = cancel.child_token();
                 let active = active.clone();
                 let bridge_addr = cfg.local_bridge_addr;
                 tokio::spawn(async move {

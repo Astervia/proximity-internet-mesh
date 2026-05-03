@@ -67,12 +67,22 @@ pub async fn run(
                 bridge = %addr,
                 "session: handshake OK, bridging to loopback TCP",
             );
+            // Hand the bridge a CHILD token, not a clone. `bridge::run`
+            // calls `cancel.cancel()` from inside its r2t/t2r select to
+            // unwind the second pump when the first exits — if that
+            // call landed on the parent token (a clone of the listener
+            // / outbound token), one peer disconnecting would also
+            // cancel the acceptor + outbound poll, and every future
+            // dial against this daemon would hit
+            // `Connection refused (os error 111)` until restart.
+            // Child tokens cascade parent → child cancellation but not
+            // child → parent.
             match bridge::run(
                 stream.clone(),
                 addr,
                 bd_str.clone(),
                 peer_node_id,
-                cancel.clone(),
+                cancel.child_token(),
             )
             .await
             {
