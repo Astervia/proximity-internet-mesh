@@ -27,8 +27,8 @@ mod storage;
 pub(crate) mod dispatch;
 
 pub(crate) use storage::{
-    AckKind, ConversationSummary, ImportOutcome, MessageDirection, MessageRecord, MessageStatus,
-    MessagingStorage,
+    AckKind, ConversationSummary, ForgetPeerOutcome, ImportOutcome, MessageDirection,
+    MessageRecord, MessageStatus, MessagingStorage,
 };
 
 use std::path::PathBuf;
@@ -95,6 +95,27 @@ pub enum MessageEvent {
         /// vs. broadcast-discovered peers.
         via: PeerInfoSource,
     },
+    /// Message history was wiped — `scope: "peer"` carries
+    /// `peer_node_id`; `scope: "all"` clears everything. Lets live
+    /// UIs flush their per-peer message buffers + conversation rows
+    /// without an extra refetch.
+    HistoryCleared {
+        peer_node_id: Option<String>,
+        scope: HistoryScope,
+        /// Number of message rows the daemon actually deleted.
+        deleted_messages: i64,
+    },
+}
+
+/// Discriminator for `HistoryCleared` — `peer` (one conversation)
+/// vs. `all` (everything).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HistoryScope {
+    /// One conversation cleared; `peer_node_id` is set.
+    Peer,
+    /// All conversations cleared; `peer_node_id` is `None`.
+    All,
 }
 
 /// Daemon-side messaging facade exposed via [`crate::app::DaemonState`].
@@ -175,6 +196,77 @@ impl MessagingState {
             });
         }
 
+        Ok(outcome)
+    }
+
+    /// Atomic per-peer wipe — see [`MessagingStorage::delete_conversation`].
+    /// Emits `HistoryCleared { scope: Peer }` on success so live UIs
+    /// drop the buffer + sidebar row without polling.
+    pub async fn delete_conversation(&self, peer: NodeId) -> anyhow::Result<(usize, bool)> {
+        let storage = self.storage.clone();
+        let peer_hex = hex_node_id(&peer);
+        let peer_hex_for_storage = peer_hex.clone();
+        let outcome = tokio::task::spawn_blocking(move || -> anyhow::Result<(usize, bool)> {
+            storage.delete_conversation(&peer_hex_for_storage)
+        })
+        .await??;
+        let _ = self.events_tx.send(MessageEvent::HistoryCleared {
+            peer_node_id: Some(peer_hex),
+            scope: HistoryScope::Peer,
+            deleted_messages: outcome.0 as i64,
+        });
+        Ok(outcome)
+    }
+
+    /// Atomic global wipe — see [`MessagingStorage::delete_all_messages`].
+    /// Emits `HistoryCleared { scope: All }`.
+    pub async fn delete_all_messages(&self) -> anyhow::Result<(usize, usize)> {
+        let storage = self.storage.clone();
+        let outcome = tokio::task::spawn_blocking(move || -> anyhow::Result<(usize, usize)> {
+            storage.delete_all_messages()
+        })
+        .await??;
+        let _ = self.events_tx.send(MessageEvent::HistoryCleared {
+            peer_node_id: None,
+            scope: HistoryScope::All,
+            deleted_messages: outcome.0 as i64,
+        });
+        Ok(outcome)
+    }
+
+    /// Drop the cached identity for a peer (and optionally its
+    /// message history). Emits `peer_seen { x25519_known: false }`
+    /// so the discovered/known sidebar drops the row immediately,
+    /// plus `HistoryCleared { scope: Peer }` when messages were
+    /// also wiped.
+    pub async fn forget_peer(
+        &self,
+        peer: NodeId,
+        also_delete_messages: bool,
+    ) -> anyhow::Result<ForgetPeerOutcome> {
+        let storage = self.storage.clone();
+        let peer_hex = hex_node_id(&peer);
+        let peer_hex_for_storage = peer_hex.clone();
+        let outcome = tokio::task::spawn_blocking(move || -> anyhow::Result<ForgetPeerOutcome> {
+            storage.forget_peer(&peer_hex_for_storage, also_delete_messages)
+        })
+        .await??;
+
+        if outcome.forgot_identity {
+            let _ = self.events_tx.send(MessageEvent::PeerSeen {
+                peer_node_id: peer_hex.clone(),
+                name: String::new(),
+                x25519_known: false,
+                via: PeerInfoSource::Direct,
+            });
+        }
+        if also_delete_messages && outcome.deleted_messages > 0 {
+            let _ = self.events_tx.send(MessageEvent::HistoryCleared {
+                peer_node_id: Some(peer_hex),
+                scope: HistoryScope::Peer,
+                deleted_messages: outcome.deleted_messages as i64,
+            });
+        }
         Ok(outcome)
     }
 
