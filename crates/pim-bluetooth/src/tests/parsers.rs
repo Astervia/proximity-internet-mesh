@@ -44,10 +44,49 @@ Device AA:BB:CC:DD:EE:01 PIM-gateway
 Device AA:BB:CC:DD:EE:02 Phone
 Device AA:BB:CC:DD:EE:03 PIM-client
 ";
-    let parsed = parse_devices_output(output, "PIM-", "PIM-self");
+    let parsed = parse_devices_output(output, "PIM-", "PIM-self", None);
     assert_eq!(parsed.len(), 2);
     assert_eq!(parsed[0].mac, "AA:BB:CC:DD:EE:01");
     assert_eq!(parsed[1].name, "PIM-client");
+}
+
+#[test]
+fn devices_output_filters_self_by_mac_when_provided() {
+    // Cached name collides with our local alias (the BlueZ-cache bug
+    // we hit linux↔linux). MAC-based self-filter must keep the entry
+    // so we don't drop a real peer.
+    let output = "\
+Device AA:BB:CC:DD:EE:01 PIM-self
+Device AA:BB:CC:DD:EE:02 PIM-other
+";
+    let parsed = parse_devices_output(output, "PIM-", "PIM-self", Some("00:00:00:00:00:01"));
+    assert_eq!(parsed.len(), 2);
+    assert_eq!(parsed[0].mac, "AA:BB:CC:DD:EE:01");
+    assert_eq!(parsed[0].name, "PIM-self");
+}
+
+#[test]
+fn devices_output_drops_self_when_mac_matches() {
+    let output = "\
+Device AA:BB:CC:DD:EE:01 PIM-gateway
+Device AA:BB:CC:DD:EE:02 PIM-other
+";
+    let parsed = parse_devices_output(output, "PIM-", "PIM-self", Some("aa:bb:cc:dd:ee:01"));
+    assert_eq!(parsed.len(), 1);
+    assert_eq!(parsed[0].mac, "AA:BB:CC:DD:EE:02");
+}
+
+#[test]
+fn parse_controller_mac_extracts_first_line_address() {
+    let show_output = "\
+Controller 00:15:83:3D:0A:57 (public)\n\
+\tAlias: PIM-gateway\n\
+\tDiscoverable: yes\n";
+    assert_eq!(
+        parse_controller_mac(show_output),
+        Some("00:15:83:3D:0A:57".to_string())
+    );
+    assert_eq!(parse_controller_mac("nothing useful here"), None);
 }
 
 #[test]
@@ -56,7 +95,7 @@ fn blueutil_inquiry_output_filters_to_matching_prefix() {
 address: aa-bb-cc-dd-ee-01, not connected, not favourite, not paired, name: \"PIM-gateway\", recent access date: -\n\
 address: aa-bb-cc-dd-ee-02, not connected, not favourite, not paired, name: \"Phone\", recent access date: -\n\
 address: aa-bb-cc-dd-ee-03, not connected, not favourite, not paired, name: \"PIM-self\", recent access date: -\n";
-    let parsed = parse_blueutil_inquiry_output(output, "PIM-", "PIM-self");
+    let parsed = parse_blueutil_inquiry_output(output, "PIM-", "PIM-self", None);
     assert_eq!(parsed.len(), 1);
     assert_eq!(parsed[0].mac, "AA:BB:CC:DD:EE:01");
     assert_eq!(parsed[0].name, "PIM-gateway");

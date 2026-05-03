@@ -18,13 +18,14 @@ use std::net::{IpAddr, SocketAddr};
 use std::path::PathBuf;
 #[cfg(target_os = "linux")]
 use std::process::Stdio;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use pim_core::BluetoothConfig;
 #[cfg(target_os = "linux")]
 use tokio::process::Child;
 use tokio::process::Command;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, OnceCell};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
 
@@ -122,6 +123,14 @@ pub struct BluetoothDiscovery {
     #[allow(dead_code)]
     nat_interface: Option<String>,
     peer_tx: mpsc::Sender<SocketAddr>,
+    /// Cached BD address of the local Bluetooth controller, populated
+    /// lazily on first discovery cycle. Used as a self-filter when
+    /// scanning so a remote whose BlueZ-cached name happens to equal our
+    /// `local_alias` isn't mistaken for ourselves. Wrapped in `Arc`
+    /// because the discovery loop holds `&self` and the lookup runs
+    /// inside a `OnceCell::get_or_init` future that may move across
+    /// awaits.
+    local_controller_mac: Arc<OnceCell<Option<String>>>,
 }
 
 impl BluetoothDiscovery {
@@ -204,6 +213,7 @@ impl BluetoothDiscovery {
                 resolv_conf_path: resolv_conf_path.into(),
                 nat_interface: nat_interface.map(Into::into),
                 peer_tx,
+                local_controller_mac: Arc::new(OnceCell::new()),
             },
             peer_rx,
         ))
