@@ -29,6 +29,46 @@ impl BluetoothDiscovery {
         if self.config.radio_discovery_enabled {
             self.prepare_controller().await?;
             self.run_bluetoothctl(["scan", "on"]).await?;
+            // Warm the local controller MAC cache so the very first
+            // scan_interval tick already filters by MAC instead of
+            // alias. Best-effort — failures fall back to alias filter.
+            self.local_controller_mac().await;
+        }
+
+        // Re-arm `discoverable on` well before the controller's
+        // DiscoverableTimeout (default 180 s) expires. Without this, a
+        // peer that comes up minutes after our daemon never finds us
+        // because the controller has stopped responding to inquiry-scan.
+        // Runs as a detached task — the periodic re-arm doesn't need to
+        // coordinate with the main discovery select! loop.
+        #[cfg(target_os = "linux")]
+        if self.config.radio_discovery_enabled {
+            let bluetoothctl = self.bluetoothctl_command.clone();
+            let timeout = self.config.bluetoothctl_timeout_s;
+            let cancel = cancel.clone();
+            tokio::spawn(async move {
+                let mut ticker = tokio::time::interval(Duration::from_secs(60));
+                ticker.tick().await; // skip the immediate first tick (prepare_controller already armed it)
+                loop {
+                    tokio::select! {
+                        _ = cancel.cancelled() => break,
+                        _ = ticker.tick() => {
+                            let mut cmd = Command::new(&bluetoothctl);
+                            cmd.arg("--timeout")
+                                .arg(timeout.to_string())
+                                .arg("discoverable")
+                                .arg("on")
+                                .stdout(Stdio::null())
+                                .stderr(Stdio::null())
+                                .kill_on_drop(true);
+                            match cmd.spawn() {
+                                Ok(mut child) => { let _ = child.wait().await; }
+                                Err(err) => debug!(%err, "discoverable keepalive spawn failed"),
+                            }
+                        }
+                    }
+                }
+            });
         }
 
         #[cfg(target_os = "linux")]
@@ -170,6 +210,16 @@ impl BluetoothDiscovery {
                     }
                 }
                 _ = scan_interval.tick(), if self.config.radio_discovery_enabled && self.config.connect_pan => {
+                    // Re-arm BlueZ inquiry: `bluetoothctl --timeout N
+                    // scan on` from prepare_controller stops issuing
+                    // StartDiscovery once the bluetoothctl client exits
+                    // (after `bluetoothctl_timeout_s`). Without this
+                    // periodic re-fire, the daemon's "scan started"
+                    // log lines below are misleading — they only read
+                    // the cached device list, no fresh inquiry happens.
+                    #[cfg(target_os = "linux")]
+                    self.run_bluetoothctl_in_background(&["scan", "on"]);
+
                     #[cfg(target_os = "linux")]
                     {
                         pan_clients.retain(|mac, child| match child.try_wait() {
