@@ -4,10 +4,19 @@
 //! channel is repurposed as a byte-pipe to the daemon's existing
 //! TCP transport listener. Bytes flow verbatim in both directions —
 //! the daemon's `TcpTransport::handle_incoming` reads the first 16 B
-//! as the peer NodeId (sent by the dialing daemon's
-//! `TcpTransport::connect`) and treats the rest as length-delimited
+//! as the peer NodeId and treats the rest as length-delimited
 //! `pim-protocol` frames, exactly as if a normal TCP peer had
 //! connected.
+//!
+//! Wire choreography: each side's bridge writes the LOCAL node's
+//! 16-byte NodeId to the RFCOMM stream as soon as the bridge opens.
+//! Those bytes flow over RFCOMM to the *peer's* bridge, which pumps
+//! them to the peer's `127.0.0.1:9100` listener — where they are
+//! consumed as the (us-shaped) peer NodeId by `handle_incoming`. So
+//! both sides' listeners observe the correct peer NodeId, even
+//! though both bridges connect AS the TCP-dialer to their own
+//! loopback. Without this injection both listeners block forever
+//! waiting for that 16-byte prefix.
 //!
 //! This avoids refactoring the entire `pim-transport` layer to
 //! understand RFCOMM as a transport: from the daemon's point of
@@ -30,12 +39,16 @@ use super::socket::RfcommStream;
 /// TCP loopback connection to `local_addr`. Returns when either side
 /// closes or `cancel` fires.
 ///
+/// `self_node_id` is the LOCAL daemon's 16-byte NodeId — written into
+/// the RFCOMM stream as the very first bytes after the bridge opens
+/// so the *peer's* `handle_incoming` can consume it as `peer_id`.
 /// `peer_label` is used only in log lines so operators can correlate
 /// kernel logs with the discovery `bd_addr` of the originating peer.
 pub async fn run(
     rfcomm: Arc<RfcommStream>,
     local_addr: SocketAddr,
     peer_label: String,
+    self_node_id: [u8; 16],
     cancel: CancellationToken,
 ) -> std::io::Result<()> {
     debug!(
@@ -53,6 +66,26 @@ pub async fn run(
 
     let rfcomm_r = rfcomm.clone();
     let rfcomm_w = rfcomm;
+
+    // Inject our own NodeId as the first 16 bytes of the RFCOMM
+    // stream. The peer's bridge will pump these bytes to its own
+    // loopback TCP, where the daemon's `handle_incoming` consumes
+    // them as the dialing peer's NodeId. Both sides do this
+    // symmetrically.
+    if let Err(e) = rfcomm_w.write_all(&self_node_id).await {
+        warn!(
+            target: "pim-bluetooth-rfcomm",
+            peer = %peer_label,
+            err = %e,
+            "bridge: failed to write self NodeId prelude",
+        );
+        return Err(e);
+    }
+    debug!(
+        target: "pim-bluetooth-rfcomm",
+        peer = %peer_label,
+        "bridge: wrote self NodeId prelude (16 B)",
+    );
 
     // RFCOMM → TCP
     let cancel_rt = cancel.clone();

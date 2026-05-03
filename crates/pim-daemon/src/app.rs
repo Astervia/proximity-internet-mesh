@@ -106,7 +106,7 @@ use ed25519_dalek::VerifyingKey;
 #[cfg(test)]
 use gateway_tasks::PENDING_PING_TTL;
 use gateway_tasks::{ensure_gateway_ipv6_engine, run_gateway_probes, run_gateway_return};
-use handshake::{decode_handshake_wire, handshake_responder};
+use handshake::{decode_handshake_wire, handshake_initiator, handshake_responder};
 use ip_control::{
     apply_dynamic_ip_assignment, cancel_pending_outbound_for_ip, classify_ip_request,
     maybe_request_dynamic_ip, send_routed_control, IpRequestDisposition, PendingOutbound,
@@ -810,6 +810,7 @@ pub(crate) async fn run() -> Result<()> {
         match RfcommService::start(rfcomm_cfg, local_identity, events_tx) {
             Ok(svc) => {
                 info!("Bluetooth RFCOMM service started");
+                let state_for_rfcomm = state.clone();
                 let log_handle = tokio::spawn(async move {
                     while let Some(ev) = events_rx.recv().await {
                         match &ev {
@@ -824,15 +825,21 @@ pub(crate) async fn run() -> Result<()> {
                                 caps,
                                 initiator,
                                 ..
-                            } => info!(
-                                bd_addr = %bd_addr,
-                                node_id = %&node_id[..16.min(node_id.len())],
-                                name = %name,
-                                platform = %platform,
-                                caps = ?caps,
-                                initiator = *initiator,
-                                "rfcomm peer discovered"
-                            ),
+                            } => {
+                                info!(
+                                    bd_addr = %bd_addr,
+                                    node_id = %&node_id[..16.min(node_id.len())],
+                                    name = %name,
+                                    platform = %platform,
+                                    caps = ?caps,
+                                    initiator = *initiator,
+                                    "rfcomm peer discovered"
+                                );
+                                spawn_rfcomm_initiator_if_lower(
+                                    state_for_rfcomm.clone(),
+                                    node_id.clone(),
+                                );
+                            }
                             RfcommEvent::Lost { bd_addr, reason } => {
                                 info!(bd_addr = %bd_addr, reason = %reason, "rfcomm peer lost")
                             }
@@ -900,6 +907,72 @@ pub(crate) async fn run() -> Result<()> {
     }
 
     event_result
+}
+
+/// When an RFCOMM-bridged peer is discovered, only ONE side should
+/// drive the pim-transport Noise initiator handshake — otherwise both
+/// sides idle as responders and the bridge never reaches a registered
+/// peer. We elect the side with the lexicographically lower NodeId.
+///
+/// The bridge already injects each side's local NodeId as the first 16
+/// bytes of the RFCOMM stream (see `pim-bluetooth::rfcomm::bridge`),
+/// so when this fires the loopback TCP listener has typically already
+/// `register_peer`'d the peer in `state.transport`'s session map.
+/// We poll briefly for that registration to land, then call
+/// `handshake_initiator` — exactly what the regular UDP-discovery
+/// dialer path does after `transport.connect`.
+#[cfg(target_os = "linux")]
+fn spawn_rfcomm_initiator_if_lower(state: Arc<DaemonState>, peer_node_id_hex: String) {
+    use std::str::FromStr;
+    tokio::spawn(async move {
+        let peer_node_id = match NodeId::from_str(&peer_node_id_hex) {
+            Ok(id) => id,
+            Err(e) => {
+                warn!(peer = %peer_node_id_hex, "rfcomm: invalid peer NodeId hex: {e}");
+                return;
+            }
+        };
+        if state.self_id.as_bytes() >= peer_node_id.as_bytes() {
+            debug!(
+                %peer_node_id,
+                "rfcomm: not initiator (self id ≥ peer id) — letting responder fire on incoming Init"
+            );
+            return;
+        }
+        info!(%peer_node_id, "rfcomm: electing this side as Noise initiator");
+
+        // Wait for the bridge to deliver the peer's 16-byte NodeId
+        // prelude into our loopback listener and for `register_peer`
+        // to land in transport.session_map.
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            if state
+                .transport
+                .connected_peers()
+                .iter()
+                .any(|id| id == &peer_node_id)
+            {
+                break;
+            }
+            if Instant::now() >= deadline {
+                warn!(
+                    %peer_node_id,
+                    "rfcomm: peer never registered in transport within 5 s; aborting initiator"
+                );
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+
+        let (tx, rx) = mpsc::channel(8);
+        state.hs_channels.lock().await.insert(peer_node_id, tx);
+        let result = handshake_initiator(&state, peer_node_id, rx).await;
+        state.hs_channels.lock().await.remove(&peer_node_id);
+        match result {
+            Ok(real_id) => info!(%real_id, "rfcomm-bridged handshake_initiator complete"),
+            Err(e) => warn!(%peer_node_id, "rfcomm-bridged handshake_initiator failed: {e}"),
+        }
+    });
 }
 
 // ── Unit tests ────────────────────────────────────────────────────────────────

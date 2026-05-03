@@ -58,15 +58,34 @@ pub async fn run(
     let stream = Arc::new(stream);
     let close_reason = match local_bridge_addr {
         Some(addr) => {
-            debug!(
-                target: "pim-bluetooth-rfcomm",
-                peer = %bd_str,
-                bridge = %addr,
-                "session: handshake OK, bridging to loopback TCP",
-            );
-            match bridge::run(stream.clone(), addr, bd_str.clone(), cancel.clone()).await {
-                Ok(()) => "bridge_closed".to_string(),
-                Err(e) => format!("bridge_io_error: {e}"),
+            // Decode the local node_id (32-char hex) into raw 16 bytes
+            // for the bridge's NodeId prelude. Treat parse failure as a
+            // teardown reason — the daemon-supplied identity should
+            // always be 32 hex chars; if it isn't the bridge can't
+            // identify itself to the peer's listener anyway.
+            let mut self_node_id = [0u8; 16];
+            match hex_to_node_id(&identity.node_id_hex, &mut self_node_id) {
+                Ok(()) => {
+                    debug!(
+                        target: "pim-bluetooth-rfcomm",
+                        peer = %bd_str,
+                        bridge = %addr,
+                        "session: handshake OK, bridging to loopback TCP",
+                    );
+                    match bridge::run(
+                        stream.clone(),
+                        addr,
+                        bd_str.clone(),
+                        self_node_id,
+                        cancel.clone(),
+                    )
+                    .await
+                    {
+                        Ok(()) => "bridge_closed".to_string(),
+                        Err(e) => format!("bridge_io_error: {e}"),
+                    }
+                }
+                Err(e) => format!("identity_decode_error: {e}"),
             }
         }
         None => discovery_only_loop(stream, &bd_str, cancel).await,
@@ -123,6 +142,20 @@ async fn discovery_only_loop(
             }
         }
     }
+}
+
+/// Decode a 32-char lowercase hex NodeId into 16 bytes. Returns the
+/// concrete `String` reason on parse failure so the caller can pass it
+/// up the `RfcommEvent::Lost` reason field unchanged.
+fn hex_to_node_id(hex: &str, out: &mut [u8; 16]) -> Result<(), String> {
+    if hex.len() != 32 {
+        return Err(format!("expected 32 hex chars, got {}", hex.len()));
+    }
+    for (i, chunk) in hex.as_bytes().chunks_exact(2).enumerate() {
+        let s = std::str::from_utf8(chunk).map_err(|e| e.to_string())?;
+        out[i] = u8::from_str_radix(s, 16).map_err(|e| e.to_string())?;
+    }
+    Ok(())
 }
 
 async fn handshake(
