@@ -59,7 +59,7 @@ pub(crate) async fn send_single_mesh(
     }
     .encode(&mut mesh_buf);
 
-    match session.encrypt_frame(&mesh_buf) {
+    match session.encrypt_frame(mesh_buf) {
         Ok(frame) => send_frame_buffered(state, &session.peer_id, frame).await,
         Err(e) => warn!(%dst_id, "encrypt failed: {e}"),
     }
