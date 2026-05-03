@@ -12,24 +12,30 @@ pub(crate) struct Session {
 }
 
 impl Session {
-    pub(crate) fn encrypt_frame(&self, plaintext: &[u8]) -> Result<TransportFrame> {
-        let mut payload_buf = plaintext.to_vec();
-        let (nonce, tag) = self.send.encrypt_in_place_detached(&mut payload_buf)?;
+    pub(crate) fn encrypt_frame(&self, mut plaintext: bytes::BytesMut) -> Result<TransportFrame> {
+        // PERFORMANCE: Encrypting the payload in-place inside the `BytesMut` buffer avoids
+        // a runtime memory allocation for the ciphertext on hot network paths.
+        let (nonce, tag) = self.send.encrypt_in_place_detached(&mut plaintext)?;
 
         Ok(TransportFrame {
             frame_type: FrameType::Data,
             nonce,
-            payload: bytes::Bytes::from(payload_buf),
+            payload: plaintext.freeze(), // zero-copy
             tag,
         })
     }
 
     pub(crate) fn decrypt_frame(&self, mut frame: TransportFrame) -> Result<TransportFrame> {
-        let mut payload_buf = frame.payload.to_vec();
+        // PERFORMANCE: Decrypt directly over the uniquely owned `BytesMut` buffer whenever possible
+        // to avoid runtime memory allocation for the plaintext slice.
+        let mut payload_buf = match frame.payload.try_into_mut() {
+            Ok(buf) => buf,
+            Err(payload) => bytes::BytesMut::from(payload.as_ref()), // fallback allocation if shared
+        };
         self.recv
             .decrypt_in_place_detached(&frame.nonce, &mut payload_buf, &frame.tag)?;
 
-        frame.payload = bytes::Bytes::from(payload_buf);
+        frame.payload = payload_buf.freeze(); // zero-copy
         Ok(frame)
     }
 }
