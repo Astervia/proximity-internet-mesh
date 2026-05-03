@@ -7,7 +7,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=common.sh
 source "$SCRIPT_DIR/common.sh"
 
-COMPOSE_FILE="phase1-ipv6-single-hop.yml"
+COMPOSE_FILE="single-hop-ipv6.yml"
 UPLINK_HTTP_V6="http://[2001:db8:1::80]/"
 
 cleanup() {

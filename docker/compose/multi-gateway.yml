@@ -9,7 +9,7 @@
 #   5.2 Docker: saturate gateway1 → new flows use gateway2
 #   5.3 Docker: tc netem latency on gateway1 → client prefers gateway2
 
-name: pim-phase5-multigateway
+name: pim-multi-gateway
 
 services:
     gateway1:
@@ -17,7 +17,7 @@ services:
             context: ../..
             dockerfile: Dockerfile
         image: pim:latest
-        container_name: pim-p5-gw1
+        container_name: pim-multi-gateway-gw1
         hostname: gateway1
         volumes:
             - ../configs/gateway1.toml:/etc/pim/pim.toml:ro
@@ -48,7 +48,7 @@ services:
             context: ../..
             dockerfile: Dockerfile
         image: pim:latest
-        container_name: pim-p5-gw2
+        container_name: pim-multi-gateway-gw2
         hostname: gateway2
         volumes:
             - ../configs/gateway2.toml:/etc/pim/pim.toml:ro
@@ -79,7 +79,7 @@ services:
             context: ../..
             dockerfile: Dockerfile
         image: pim:latest
-        container_name: pim-p5-relay
+        container_name: pim-multi-gateway-relay
         hostname: relay
         volumes:
             - ../configs/relay-multigateway.toml:/etc/pim/pim.toml:ro
@@ -111,7 +111,7 @@ services:
             context: ../..
             dockerfile: Dockerfile
         image: pim:latest
-        container_name: pim-p5-client
+        container_name: pim-multi-gateway-client
         hostname: client
         volumes:
             - ../configs/client-relay.toml:/etc/pim/pim.toml:ro

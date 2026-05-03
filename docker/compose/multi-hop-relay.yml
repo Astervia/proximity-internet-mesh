@@ -1,13 +1,12 @@
-# Phase 1 — Single-hop tunnel
-# Topology: client ──── gateway ──── internet
+# Phase 2 — Multi-hop relay
+# Topology: client ──── relay ──── gateway ──── internet
 #
 # Covers:
-#   1.5 Docker: two containers communicate over bridge network
-#   1.6 Docker: TUN interface comes up, IP configured
-#   1.7 Docker: gateway NATs traffic to external DNS
-#   1.8 Docker: client pings gateway mesh IP; curl internet; DNS resolution; clean shutdown
+#   2.1 Docker: client → relay → gateway, client curls internet
+#   2.2 Docker: packet capture on relay shows only encrypted E2E payload
+#   2.4 Docker: 10 KB payload transferred intact through the mesh
 
-name: pim-phase1-single-hop
+name: pim-multi-hop-relay
 
 services:
     gateway:
@@ -15,7 +14,7 @@ services:
             context: ../..
             dockerfile: Dockerfile
         image: pim:latest
-        container_name: pim-p1-gw
+        container_name: pim-multi-hop-relay-gw
         hostname: gateway
         volumes:
             - ../configs/gateway.toml:/etc/pim/pim.toml:ro
@@ -29,7 +28,7 @@ services:
             net.ipv4.ip_local_port_range: "60000 65535"
         networks:
             pim-net:
-                ipv4_address: 172.30.0.10
+                ipv4_address: 172.31.0.10
         healthcheck:
             test:
                 [
@@ -41,15 +40,15 @@ services:
             retries: 25
             start_period: 5s
 
-    client:
+    relay:
         build:
             context: ../..
             dockerfile: Dockerfile
         image: pim:latest
-        container_name: pim-p1-client
-        hostname: client
+        container_name: pim-multi-hop-relay-relay
+        hostname: relay
         volumes:
-            - ../configs/client.toml:/etc/pim/pim.toml:ro
+            - ../configs/relay.toml:/etc/pim/pim.toml:ro
         cap_add:
             - NET_ADMIN
         devices:
@@ -59,7 +58,7 @@ services:
                 condition: service_healthy
         networks:
             pim-net:
-                ipv4_address: 172.30.0.30
+                ipv4_address: 172.31.0.20
         healthcheck:
             test:
                 [
@@ -71,10 +70,40 @@ services:
             retries: 25
             start_period: 8s
 
+    client:
+        build:
+            context: ../..
+            dockerfile: Dockerfile
+        image: pim:latest
+        container_name: pim-multi-hop-relay-client
+        hostname: client
+        volumes:
+            - ../configs/client-relay.toml:/etc/pim/pim.toml:ro
+        cap_add:
+            - NET_ADMIN
+        devices:
+            - /dev/net/tun:/dev/net/tun
+        depends_on:
+            relay:
+                condition: service_healthy
+        networks:
+            pim-net:
+                ipv4_address: 172.31.0.30
+        healthcheck:
+            test:
+                [
+                    "CMD-SHELL",
+                    "test -f /run/pim.pid && kill -0 $(cat /run/pim.pid) 2>/dev/null && ip link show pim0 2>/dev/null | grep -q UP",
+                ]
+            interval: 2s
+            timeout: 4s
+            retries: 25
+            start_period: 12s
+
 networks:
     pim-net:
         driver: bridge
         ipam:
             driver: default
             config:
-                - subnet: 172.30.0.0/24
+                - subnet: 172.31.0.0/24

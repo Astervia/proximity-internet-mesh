@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# test-phase7.sh — Phase 7: Zero-config auto-discovery integration tests
+# test-auto-discovery.sh — Phase 7: Zero-config auto-discovery integration tests
 #
 # Tests (from implementation-plan.md §7.4):
 #   7A  All nodes discover each other via UDP broadcast only (no static [[peers]])
@@ -10,8 +10,8 @@
 #   7F  Relay loss + recovery: stop relay → peer timeout → restart → re-discovers
 #
 # Usage:
-#   bash docker/tests/test-phase7.sh
-#   DUMP_LOGS_ON_FAIL=1 bash docker/tests/test-phase7.sh
+#   bash docker/tests/test-auto-discovery.sh
+#   DUMP_LOGS_ON_FAIL=1 bash docker/tests/test-auto-discovery.sh
 
 set -uo pipefail
 
@@ -19,7 +19,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=common.sh
 source "$SCRIPT_DIR/common.sh"
 
-COMPOSE_FILE="phase7-auto-discovery.yml"
+COMPOSE_FILE="auto-discovery.yml"
 
 cleanup() {
     if [ "${DUMP_LOGS_ON_FAIL:-0}" = "1" ] && [ "$FAIL" -gt 0 ]; then

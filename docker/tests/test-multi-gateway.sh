@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# test-phase5.sh — Phase 5: Multi-gateway, load balancing, and failover tests
+# test-multi-gateway.sh — Phase 5: Multi-gateway, load balancing, and failover tests
 #
 # Tests (from implementation-plan.md):
 #   5.1  Kill preferred gateway → failover to gateway2; restore → may shift back
@@ -15,7 +15,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=common.sh
 source "$SCRIPT_DIR/common.sh"
 
-COMPOSE_FILE="phase5-multigateway.yml"
+COMPOSE_FILE="multi-gateway.yml"
 
 cleanup() {
     if [ "${DUMP_LOGS_ON_FAIL:-0}" = "1" ] && [ $FAIL -gt 0 ]; then

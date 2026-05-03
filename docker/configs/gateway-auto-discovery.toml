@@ -3,7 +3,7 @@
 # Advertises: CLIENT | RELAY | GATEWAY (capabilities 0x07)
 
 [node]
-name = "gateway-p7"
+name = "gateway-auto-discovery"
 data_dir = "/var/lib/pim"
 
 [interface]

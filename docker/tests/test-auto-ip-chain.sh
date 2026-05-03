@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# test-phase8.sh — Routed auto-IP chain with late gateway join
+# test-auto-ip-chain.sh — Routed auto-IP chain with late gateway join
 #
 # Topology:
 #   gateway <-> relay1 <-> relay2 <-> client
@@ -16,7 +16,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=common.sh
 source "$SCRIPT_DIR/common.sh"
 
-COMPOSE_FILE="phase8-auto-ip-chain.yml"
+COMPOSE_FILE="auto-ip-chain.yml"
 
 cleanup() {
     if [ "${DUMP_LOGS_ON_FAIL:-0}" = "1" ] && [ "$FAIL" -gt 0 ]; then

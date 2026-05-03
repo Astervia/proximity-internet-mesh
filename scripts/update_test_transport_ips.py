@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Rewrite Docker test transport IPs from a single phase mapping.
+"""Rewrite Docker test transport IPs from a single per-lab mapping.
 
-This keeps the phase compose files on distinct Docker bridge subnets so test
+This keeps the lab compose files on distinct Docker bridge subnets so test
 stacks do not collide when stale networks still exist on the host.
 """
 
@@ -15,15 +15,15 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
-PHASE_NETWORKS = {
-    "phase1-single-hop.yml": {
+LAB_NETWORKS = {
+    "single-hop.yml": {
         "subnet": "172.30.0.0/24",
         "ips": {
             "gateway": "172.30.0.10",
             "client": "172.30.0.30",
         },
     },
-    "phase2-relay.yml": {
+    "multi-hop-relay.yml": {
         "subnet": "172.31.0.0/24",
         "ips": {
             "gateway": "172.31.0.10",
@@ -31,7 +31,7 @@ PHASE_NETWORKS = {
             "client": "172.31.0.30",
         },
     },
-    "phase2-routing.yml": {
+    "multi-hop-routing.yml": {
         "subnet": "172.32.0.0/24",
         "ips": {
             "gateway": "172.32.0.10",
@@ -40,7 +40,7 @@ PHASE_NETWORKS = {
             "client": "172.32.0.30",
         },
     },
-    "phase3-discovery.yml": {
+    "peer-discovery.yml": {
         "subnet": "172.33.0.0/24",
         "ips": {
             "gateway": "172.33.0.10",
@@ -48,21 +48,21 @@ PHASE_NETWORKS = {
             "client": "172.33.0.30",
         },
     },
-    "phase4-resilience.yml": {
+    "resilience.yml": {
         "subnet": "172.34.0.0/24",
         "ips": {
             "gateway": "172.34.0.10",
             "client": "172.34.0.30",
         },
     },
-    "phase4-flow-control.yml": {
+    "flow-control.yml": {
         "subnet": "172.35.0.0/24",
         "ips": {
             "gateway": "172.35.0.10",
             "flood-sender": "172.35.0.30",
         },
     },
-    "phase5-multigateway.yml": {
+    "multi-gateway.yml": {
         "subnet": "172.36.0.0/24",
         "ips": {
             "gateway1": "172.36.0.10",
@@ -123,7 +123,7 @@ def rewrite_compose(path: Path, subnet: str, service_ips: dict[str, str]) -> boo
     return changed
 
 
-def rewrite_phase4_test(path: Path, resilience_gateway_ip: str) -> bool:
+def rewrite_resilience_test(path: Path, resilience_gateway_ip: str) -> bool:
     original = path.read_text()
     updated = re.sub(
         r'RESILIENCE_GATEWAY_IP="[^"]+"',
@@ -147,19 +147,19 @@ def main() -> int:
 
     changed_paths: list[Path] = []
 
-    for filename, config in PHASE_NETWORKS.items():
+    for filename, config in LAB_NETWORKS.items():
         path = REPO_ROOT / "docker" / "compose" / filename
         changed = rewrite_compose(path, config["subnet"], config["ips"])
         if changed:
             changed_paths.append(path)
 
-    phase4_test_path = REPO_ROOT / "docker" / "tests" / "test-phase4.sh"
-    changed = rewrite_phase4_test(
-        phase4_test_path,
-        PHASE_NETWORKS["phase4-resilience.yml"]["ips"]["gateway"],
+    resilience_test_path = REPO_ROOT / "docker" / "tests" / "test-resilience.sh"
+    changed = rewrite_resilience_test(
+        resilience_test_path,
+        LAB_NETWORKS["resilience.yml"]["ips"]["gateway"],
     )
     if changed:
-        changed_paths.append(phase4_test_path)
+        changed_paths.append(resilience_test_path)
 
     if args.check and changed_paths:
         for path in changed_paths:

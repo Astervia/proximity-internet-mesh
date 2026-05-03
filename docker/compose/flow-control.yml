@@ -8,7 +8,7 @@
 # Covers:
 #   4.3 Docker: flood sender → backpressure applied, no OOM
 
-name: pim-phase4-flow-control
+name: pim-flow-control
 
 services:
     gateway:
@@ -16,7 +16,7 @@ services:
             context: ../..
             dockerfile: Dockerfile
         image: pim:latest
-        container_name: pim-p4fc-gw
+        container_name: pim-flow-control-gw
         hostname: gateway
         volumes:
             - ../configs/gateway.toml:/etc/pim/pim.toml:ro
@@ -48,7 +48,7 @@ services:
             context: ../..
             dockerfile: Dockerfile
         image: pim:latest
-        container_name: pim-p4fc-flood
+        container_name: pim-flow-control-flood
         hostname: flood-sender
         volumes:
             - ../configs/client.toml:/etc/pim/pim.toml:ro
