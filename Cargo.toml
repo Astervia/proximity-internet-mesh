@@ -66,7 +66,7 @@ uuid = { version = "1", features = ["v4"] }
 
 # Internal crates
 pim-core = { path = "crates/pim-core", version = "0.1.6" }
-pim-bluetooth = { path = "crates/pim-bluetooth", version = "0.1.5" }
+pim-bluetooth = { path = "crates/pim-bluetooth", version = "0.1.6" }
 pim-crypto = { path = "crates/pim-crypto", version = "0.1.4" }
 pim-protocol = { path = "crates/pim-protocol", version = "0.1.4" }
 pim-transport = { path = "crates/pim-transport", version = "0.1.5" }
