@@ -826,7 +826,7 @@ dependencies = [
 
 [[package]]
 name = "pim-cli"
-version = "0.1.17"
+version = "0.1.18"
 dependencies = [
  "anyhow",
  "clap",
@@ -843,7 +843,7 @@ dependencies = [
 
 [[package]]
 name = "pim-core"
-version = "0.1.5"
+version = "0.1.6"
 dependencies = [
  "bytes",
  "serde",
@@ -872,7 +872,7 @@ dependencies = [
 
 [[package]]
 name = "pim-daemon"
-version = "0.1.11"
+version = "0.1.12"
 dependencies = [
  "anyhow",
  "bytes",
@@ -933,7 +933,7 @@ dependencies = [
 
 [[package]]
 name = "pim-protocol"
-version = "0.1.3"
+version = "0.1.4"
 dependencies = [
  "bitflags 2.11.1",
  "byteorder",
@@ -958,7 +958,7 @@ dependencies = [
 
 [[package]]
 name = "pim-transport"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "async-trait",
  "bytes",
