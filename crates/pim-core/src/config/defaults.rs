@@ -72,6 +72,20 @@ pub(super) fn default_route_expiry_s() -> u64 {
     300
 }
 
+/// Public anycast resolvers handed to the system resolver
+/// (`resolvectl dns pim0 …`) when the daemon engages split-default
+/// routing. Cloudflare 1.1.1.1 + 1.0.0.1 (privacy-conscious, fast,
+/// global anycast) plus Google 8.8.8.8 as a third opinion so a
+/// single-provider outage doesn't break name resolution while the
+/// mesh is the only egress. Lifted from the previous hard-coded
+/// `MESH_DNS_SERVERS` constant in `pim-daemon::route_installer` —
+/// users who want to override (corporate split-DNS, pi-hole on the
+/// gateway, IPv6-only resolvers) edit `[routing].dns_servers` and
+/// the route installer picks them up on the next reconcile tick.
+pub(super) fn default_dns_servers() -> Vec<String> {
+    vec!["1.1.1.1".into(), "1.0.0.1".into(), "8.8.8.8".into()]
+}
+
 pub(super) fn default_nat_interface() -> String {
     "eth0".into()
 }

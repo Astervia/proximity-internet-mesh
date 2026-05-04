@@ -259,6 +259,35 @@ fn push_routing(out: &mut String) {
         "# How long learned routes survive before being re-advertised (seconds).",
     );
     push_line(out, "route_expiry_s = 300");
+    push_line(
+        out,
+        "# DNS resolvers handed to the system resolver (`resolvectl dns pim0 \u{2026}`)",
+    );
+    push_line(
+        out,
+        "# while split-default routing is engaged. Without this list the resolver",
+    );
+    push_line(
+        out,
+        "# keeps its DHCP-provided upstream, which becomes unreachable the moment",
+    );
+    push_line(
+        out,
+        "# the local uplink (wifi / wired) goes down — name resolution then fails",
+    );
+    push_line(
+        out,
+        "# even though the IP path through the mesh is live. Empty list = skip DNS",
+    );
+    push_line(
+        out,
+        "# management entirely (corporate VPN tooling / NetworkManager dispatchers /",
+    );
+    push_line(
+        out,
+        "# hand-managed /etc/resolv.conf own the resolver instead).",
+    );
+    push_line(out, "dns_servers = [\"1.1.1.1\", \"1.0.0.1\", \"8.8.8.8\"]");
     push_blank(out);
 }
 
