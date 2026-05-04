@@ -102,28 +102,6 @@ pub(crate) fn parse_ipv6_cidr(s: &str) -> Result<(Ipv6Addr, u8)> {
     Ok((ip, prefix))
 }
 
-pub(crate) fn first_host_in_subnet(network: Ipv4Addr, prefix_len: u8) -> Ipv4Addr {
-    let n = u32::from(network);
-    let mask: u32 = if prefix_len >= 32 {
-        0xffff_ffff
-    } else {
-        !((1u32 << (32 - prefix_len)) - 1)
-    };
-    Ipv4Addr::from((n & mask) | 1)
-}
-
-pub(crate) fn first_host_in_subnet_v6(network: Ipv6Addr, prefix_len: u8) -> Ipv6Addr {
-    let n = u128::from(network);
-    let mask: u128 = if prefix_len == 0 {
-        0
-    } else if prefix_len >= 128 {
-        u128::MAX
-    } else {
-        !((1u128 << (128 - prefix_len)) - 1)
-    };
-    Ipv6Addr::from((n & mask) | 1)
-}
-
 pub(crate) async fn install_signal_handler(cancel: CancellationToken) {
     #[cfg(unix)]
     {
