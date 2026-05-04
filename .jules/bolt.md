@@ -36,3 +36,8 @@
 
 **Learning:** `bytes::Bytes` holds a reference-counted buffer but its contents cannot be mutated via `.to_vec()` without forcing a clone and full allocation. However, if the network code owns the sole reference to the buffer (e.g. immediately after decoding), `.try_into_mut()` can safely reclaim mutable access to the underlying `BytesMut` with zero allocations. In high-throughput network daemons like PIM, allocating memory for every frame on the read path becomes a major performance bottleneck.
 **Action:** When a frame buffer needs to be mutated directly (like in `decrypt_in_place_detached`), avoid `.to_vec()`. Instead, attempt to use `.try_into_mut()` when we know the `Bytes` object is uniquely owned to recover zero-copy mutability.
+
+## 2024-05-18 - Pre-allocate vector capacity to avoid reallocation
+
+**Learning:** When fragmenting payloads or dynamically appending to arrays, initializing with `Vec::new()` requires the memory allocator to repeatedly resize the array as elements are pushed. This dynamic reallocation overhead introduces unnecessary latency in hot paths.
+**Action:** When the maximum number of elements is known or can be calculated (e.g., using `div_ceil`), pre-allocate the required capacity with `Vec::with_capacity(...)` to ensure a single, contiguous memory allocation.

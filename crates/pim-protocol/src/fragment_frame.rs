@@ -85,7 +85,9 @@ pub fn fragment_packet(data: &[u8], fragment_id: u32) -> Vec<FragmentFrame> {
     }
 
     let total_length = data.len() as u16;
-    let mut frames = Vec::new();
+    // Pre-allocate the exact number of fragments required to prevent
+    // dynamic reallocation overhead during the fragmentation loop.
+    let mut frames = Vec::with_capacity(data.len().div_ceil(MAX_FRAGMENT_PAYLOAD));
     let mut offset = 0usize;
 
     while offset < data.len() {
