@@ -68,29 +68,35 @@ pub(crate) fn init() -> LogsLayer {
     LogsLayer
 }
 
-/// Atomically take a snapshot of the history buffer AND subscribe to
-/// the live broadcast. Lock ordering is critical:
+/// Subscribe to the live broadcast WITHOUT taking a history snapshot.
+/// Used by the per-connection logs forwarder, which is spawned at
+/// connect time and forwards every event for the lifetime of the
+/// connection. History replay is owned by `logs.subscribe` (gated by a
+/// per-connection `history_replayed` flag so it fires exactly once per
+/// connection regardless of how many subscribers the UI registers).
 ///
-///   * `on_event` holds the history lock for the entire duration of
-///     `push_back` + `broadcast::send`.
-///   * `subscribe_with_history` also holds the history lock from
-///     snapshot until `subscribe()`.
-///
-/// Because `on_event` cannot interleave with `subscribe_with_history`
-/// (they contend on the same mutex), there is NO window in which an
-/// event could be both in the snapshot AND received by the new
-/// receiver — replay and live stream don't overlap, no duplicates.
-///
-/// Returns `None` if `init()` hasn't been called yet (only in tests
-/// that skip tracing setup).
-pub(crate) fn subscribe_with_history() -> Option<(Vec<Value>, broadcast::Receiver<Value>)> {
-    let sender = SENDER.get()?;
+/// Splitting `subscribe_with_history` into "live only" + "history only"
+/// is what lets a single `logs.subscribe` call be a no-op-with-history
+/// instead of spawning a fresh forwarder task — every extra forwarder
+/// per connection used to write a duplicate copy of every log line, so
+/// StrictMode double-mount, HMR module replacement, or any second
+/// `logs.subscribe` call on the same connection multiplied every event
+/// the UI rendered.
+pub(crate) fn live_subscribe() -> Option<broadcast::Receiver<Value>> {
+    SENDER.get().map(|s| s.subscribe())
+}
+
+/// Take a snapshot of the history ring buffer without subscribing to
+/// the live broadcast. Caller is responsible for sequencing this
+/// against the live forwarder if it wants no overlap (the live
+/// forwarder subscribes once at connect time, before the first
+/// `logs.subscribe`, so a tiny overlap window with replay is possible
+/// but the entries are identical and the UI dedupes consecutive
+/// duplicates anyway).
+pub(crate) fn history_snapshot() -> Option<Vec<Value>> {
     let history = HISTORY.get()?;
     let buf = history.lock().ok()?;
-    let snapshot: Vec<Value> = buf.iter().cloned().collect();
-    let rx = sender.subscribe();
-    drop(buf);
-    Some((snapshot, rx))
+    Some(buf.iter().cloned().collect())
 }
 
 pub(crate) struct LogsLayer;
@@ -237,12 +243,13 @@ mod tests {
     }
 
     #[test]
-    fn subscribe_with_history_returns_none_before_init() {
+    fn live_subscribe_and_history_snapshot_return_none_before_init() {
         // SENDER + HISTORY are process-global; this only holds in a
         // fresh test process. `cargo test` provides one per integration
         // test. We skip if SENDER happens to already be set.
         if SENDER.get().is_none() {
-            assert!(subscribe_with_history().is_none());
+            assert!(live_subscribe().is_none());
+            assert!(history_snapshot().is_none());
         }
     }
 }

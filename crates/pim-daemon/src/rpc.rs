@@ -44,7 +44,7 @@
 use std::collections::HashMap;
 use std::net::Ipv4Addr;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -238,6 +238,53 @@ async fn handle_connection(stream: UnixStream, state: Arc<DaemonState>) -> Resul
         }
     });
 
+    // ONE logs forwarder per connection. Same shape as the status
+    // forwarder above: subscribe to the global `logs_subscriber`
+    // broadcast and pump every event onto this connection's write
+    // channel as a `logs.event` notification. UIs filter by level /
+    // source on their side.
+    //
+    // History replay is owned separately by `logs.subscribe` (see
+    // `start_logs_subscription`) and gated by the per-connection
+    // `logs_history_replayed` AtomicBool below so the daemon emits the
+    // historical buffer exactly once per connection no matter how many
+    // times the UI calls `logs.subscribe` (StrictMode double-mount,
+    // Vite HMR module replacement, simple↔advanced shell remount, …).
+    // Before this refactor each `logs.subscribe` call spawned its own
+    // forwarder + history-replay task — N calls per connection meant
+    // every log line arrived N times in the UI buffer.
+    let logs_history_replayed = Arc::new(AtomicBool::new(false));
+    let logs_forwarder = match logs_subscriber::live_subscribe() {
+        Some(mut logs_rx) => {
+            let logs_write_tx = write_tx.clone();
+            Some(tokio::spawn(async move {
+                loop {
+                    match logs_rx.recv().await {
+                        Ok(event) => {
+                            let notif = json!({
+                                "jsonrpc": "2.0",
+                                "method": "logs.event",
+                                "params": event,
+                            });
+                            if push_value(&logs_write_tx, &notif).is_err() {
+                                break;
+                            }
+                        }
+                        Err(broadcast::error::RecvError::Lagged(n)) => {
+                            debug!(lagged = n, "logs forwarder lagged; resyncing");
+                            continue;
+                        }
+                        Err(broadcast::error::RecvError::Closed) => break,
+                    }
+                }
+            }))
+        }
+        None => {
+            warn!("logs_subscriber not initialised; logs.event will be silent on this connection");
+            None
+        }
+    };
+
     // Single per-connection messaging forwarder. Same shape as the status
     // forwarder above: subscribe to the messaging broadcast channel and
     // pump every event onto the write channel as a `messages.event`
@@ -321,7 +368,7 @@ async fn handle_connection(stream: UnixStream, state: Arc<DaemonState>) -> Resul
             continue;
         }
 
-        let outcome = dispatch(&state, &req, &write_tx).await;
+        let outcome = dispatch(&state, &req, &write_tx, &logs_history_replayed).await;
         let response = match outcome {
             Ok(result) => json!({"jsonrpc": "2.0", "id": id, "result": result}),
             Err((code, message, data)) => error_response(id, code, &message, data),
@@ -339,6 +386,9 @@ async fn handle_connection(stream: UnixStream, state: Arc<DaemonState>) -> Resul
     drop(write_tx);
     status_forwarder.abort();
     messaging_forwarder.abort();
+    if let Some(handle) = logs_forwarder {
+        handle.abort();
+    }
     let _ = writer_handle.await;
     Ok(())
 }
@@ -372,7 +422,12 @@ fn error_response(id: Value, code: i32, message: &str, data: Option<Value>) -> V
 
 type RpcResult = std::result::Result<Value, (i32, String, Option<Value>)>;
 
-async fn dispatch(state: &Arc<DaemonState>, req: &RpcRequest, write_tx: &WriteTx) -> RpcResult {
+async fn dispatch(
+    state: &Arc<DaemonState>,
+    req: &RpcRequest,
+    write_tx: &WriteTx,
+    logs_history_replayed: &Arc<AtomicBool>,
+) -> RpcResult {
     match req.method.as_str() {
         // §2.1
         "rpc.hello" => method_hello(req.params.as_ref()),
@@ -432,10 +487,17 @@ async fn dispatch(state: &Arc<DaemonState>, req: &RpcRequest, write_tx: &WriteTx
         "config.get" => method_config_get(state, req.params.as_ref()).await,
         "config.save" => method_config_save(state, req.params.as_ref()).await,
 
-        // §5.6 logs
+        // §5.6 logs — `logs.event` notifications are pumped by the
+        // per-connection forwarder spawned in `handle_connection`.
+        // `logs.subscribe` only triggers the one-shot history replay
+        // (gated by `logs_history_replayed` so it fires exactly once
+        // per connection no matter how often the UI re-subscribes);
+        // `logs.unsubscribe` is a no-op because the live forwarder is
+        // tied to the connection's lifetime, not to subscription IDs.
         "logs.subscribe" => Ok(start_logs_subscription(
             req.params.as_ref(),
             write_tx.clone(),
+            logs_history_replayed,
         )),
         "logs.unsubscribe" => Ok(Value::Null),
 
@@ -463,81 +525,47 @@ async fn dispatch(state: &Arc<DaemonState>, req: &RpcRequest, write_tx: &WriteTx
 // Subscription forwarders.
 // ────────────────────────────────────────────────────────────────────────
 
-#[derive(Debug, Deserialize, Default)]
-struct LogsSubscribeParams {
-    /// Optional minimum level. One of `trace`, `debug`, `info`, `warn`,
-    /// `error`. Events at levels BELOW this are dropped before sending.
-    /// Used for back-compat / "warn and up" simplicity. If `levels` is
-    /// also set, `levels` wins (explicit beats threshold).
-    min_level: Option<String>,
-    /// Explicit allow-list of levels. When `Some(non_empty)`, ONLY events
-    /// at one of these levels are forwarded. Empty/missing falls back to
-    /// `min_level` semantics. Lets the UI pick e.g. `[info, error]`
-    /// without including warn.
-    levels: Option<Vec<String>>,
-    /// Source-prefix allow-list (matches `event.source` via
-    /// `starts_with`). Empty / missing = any source. Lets the UI pick
-    /// e.g. `["pim_daemon", "pim_transport"]` to focus on specific
-    /// crates while ignoring noise from `tao`, `mio`, etc.
-    #[serde(default)]
-    sources: Vec<String>,
-}
-
-fn level_rank(level: &str) -> u8 {
-    match level {
-        "trace" => 0,
-        "debug" => 1,
-        "info" => 2,
-        "warn" => 3,
-        "error" => 4,
-        _ => 2, // unknown → treat as info
-    }
-}
-
-/// Allocate a `subscription_id`, atomically snapshot the daemon's log
-/// history AND get a live broadcast receiver, replay history first
-/// (filtered) and then forward live events (filtered) as `logs.event`
-/// notifications onto this connection. Closes when the writer channel
-/// closes (peer hung up).
+/// Allocate a `subscription_id` and, on the FIRST call per connection,
+/// replay the daemon's log history buffer onto this connection.
+///
+/// Live `logs.event` notifications are NOT spawned here — they're
+/// pumped by the per-connection forwarder in `handle_connection`, so
+/// extra `logs.subscribe` calls from the same connection (StrictMode
+/// double-mount, Vite HMR, AppShell↔SimpleShell remount, ...) collapse
+/// to a single forwarder + at most one history replay. Before this
+/// refactor each call spawned its own forwarder + replay task, so
+/// every log line arrived N times in the UI buffer.
 ///
 /// The history replay covers the daemon's full startup sequence
 /// ("daemon starting" → "TUN up" → "transport listening" → "rpc
 /// listening" → ...) so the UI's Logs view is populated immediately
 /// even though it subscribes well after those events fired.
-fn start_logs_subscription(params: Option<&Value>, write_tx: WriteTx) -> Value {
+///
+/// The legacy `LogsSubscribeParams` filter (`min_level` / `levels` /
+/// `sources`) is intentionally ignored: there is now ONE forwarder per
+/// connection and per-call filters would need to multiplex the stream
+/// at the wire level, which the UI doesn't actually use (it filters
+/// client-side in `useLogsStream`). The CLI's `pim logs` command tails
+/// the on-disk log file directly and never goes through this RPC.
+fn start_logs_subscription(
+    _params: Option<&Value>,
+    write_tx: WriteTx,
+    history_replayed: &Arc<AtomicBool>,
+) -> Value {
     let id = new_subscription_id();
-    let parsed: LogsSubscribeParams = params
-        .and_then(|v| serde_json::from_value(v.clone()).ok())
-        .unwrap_or_default();
-    let min_rank = parsed
-        .min_level
-        .as_deref()
-        .map(|l| level_rank(&l.to_lowercase()))
-        .unwrap_or(0);
-    // Normalise `levels` to a lowercase HashSet for O(1) lookup. Empty
-    // vec is treated as "no level filter" (allow all) so the UI can
-    // distinguish "select nothing → show nothing" client-side from
-    // server-side filtering.
-    let level_allow_list: Option<std::collections::HashSet<String>> = parsed
-        .levels
-        .map(|v| v.into_iter().map(|s| s.to_lowercase()).collect())
-        .filter(|s: &std::collections::HashSet<String>| !s.is_empty());
-    let sources = parsed.sources;
-
-    let (history, mut rx) = match logs_subscriber::subscribe_with_history() {
-        Some(pair) => pair,
+    if history_replayed.swap(true, Ordering::SeqCst) {
+        // Already replayed history on this connection — no extra work.
+        return json!({ "subscription_id": id });
+    }
+    let history = match logs_subscriber::history_snapshot() {
+        Some(h) => h,
         None => {
-            warn!("logs.subscribe: logs_subscriber not initialised; subscription will be silent");
+            warn!("logs.subscribe: logs_subscriber not initialised; history replay skipped");
             return json!({ "subscription_id": id });
         }
     };
-
     tokio::spawn(async move {
-        // Replay history first.
         for event in history {
-            if !passes_filter(&event, min_rank, level_allow_list.as_ref(), &sources) {
-                continue;
-            }
             let notif = json!({
                 "jsonrpc": "2.0",
                 "method": "logs.event",
@@ -547,74 +575,8 @@ fn start_logs_subscription(params: Option<&Value>, write_tx: WriteTx) -> Value {
                 return;
             }
         }
-        // Then live stream.
-        loop {
-            match rx.recv().await {
-                Ok(event) => {
-                    if !passes_filter(&event, min_rank, level_allow_list.as_ref(), &sources) {
-                        continue;
-                    }
-                    let notif = json!({
-                        "jsonrpc": "2.0",
-                        "method": "logs.event",
-                        "params": event,
-                    });
-                    if push_value(&write_tx, &notif).is_err() {
-                        break;
-                    }
-                }
-                Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
-                    debug!("logs.subscribe: lagged, dropped {n} events; resyncing");
-                    continue;
-                }
-                Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
-            }
-        }
     });
     json!({ "subscription_id": id })
-}
-
-/// Apply level + source filter to an event. Returns true if it should
-/// be forwarded.
-///
-/// Level rules:
-///   - If `level_allow_list` is `Some`, the event level must be IN the
-///     set (explicit allow-list, no min-level threshold applies).
-///   - If `level_allow_list` is `None`, the event level must be `>=`
-///     `min_rank`.
-///
-/// Source rules: prefix-match against `sources`. Empty `sources` =
-/// allow any source.
-fn passes_filter(
-    event: &Value,
-    min_rank: u8,
-    level_allow_list: Option<&std::collections::HashSet<String>>,
-    sources: &[String],
-) -> bool {
-    if let Some(level) = event.get("level").and_then(|v| v.as_str()) {
-        match level_allow_list {
-            Some(allow) => {
-                if !allow.contains(level) {
-                    return false;
-                }
-            }
-            None => {
-                if level_rank(level) < min_rank {
-                    return false;
-                }
-            }
-        }
-    }
-    if !sources.is_empty() {
-        let source = event
-            .get("source")
-            .and_then(|v| v.as_str())
-            .unwrap_or_default();
-        if !sources.iter().any(|prefix| source.starts_with(prefix)) {
-            return false;
-        }
-    }
-    true
 }
 
 // ── §2.1 ─────────────────────────────────────────────────────────────────
