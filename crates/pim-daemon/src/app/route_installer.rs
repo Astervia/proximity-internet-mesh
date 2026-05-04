@@ -37,13 +37,6 @@ use tracing::{debug, info, warn};
 
 use crate::app::DaemonState;
 
-/// Public DNS resolvers handed to systemd-resolved when split-default
-/// routing is engaged. Picked because they're (a) anycast — reachable
-/// over any internet uplink the gateway might have, (b) fast on the
-/// global mean, (c) reasonably privacy-conscious. Listing two so a
-/// single resolver outage doesn't break the mesh.
-const MESH_DNS_SERVERS: &[&str] = &["1.1.1.1", "1.0.0.1", "8.8.8.8"];
-
 /// IPv6 split-default routes are `dev pim0`-only — `pim-tun` ignores
 /// the `gateway_ipv6` parameter on Linux/macOS (see
 /// `pim-tun::TunInterface::add_default_ipv6_route`). All we track is
@@ -181,10 +174,15 @@ async fn run(state: Arc<DaemonState>) {
         //        curl by hostname doesn't). Anycast resolvers
         //        (1.1.1.1, 8.8.8.8) flow through the mesh + gateway NAT
         //        like any other internet destination.
-        let desired_dns = current_via_v4.is_some() || current_v6;
+        // Empty `mesh_dns_servers` (operator opted out via config) means
+        // never touch the system resolver — useful when something else
+        // owns DNS (corporate VPN tooling, NetworkManager dispatchers,
+        // a hand-managed `/etc/resolv.conf`).
+        let desired_dns =
+            !state.mesh_dns_servers.is_empty() && (current_via_v4.is_some() || current_v6);
         if desired_dns != current_dns {
             if desired_dns {
-                if set_interface_dns(&iface_name, MESH_DNS_SERVERS) {
+                if set_interface_dns(&iface_name, &state.mesh_dns_servers) {
                     current_dns = true;
                 }
             } else {
@@ -209,9 +207,9 @@ async fn run(state: Arc<DaemonState>) {
 /// daemon today (the route_installer itself is Linux-pim0-only), so
 /// the gating below is mostly defensive.
 #[cfg(target_os = "linux")]
-fn set_interface_dns(iface: &str, servers: &[&str]) -> bool {
+fn set_interface_dns(iface: &str, servers: &[String]) -> bool {
     let mut dns_args: Vec<&str> = vec!["dns", iface];
-    dns_args.extend_from_slice(servers);
+    dns_args.extend(servers.iter().map(String::as_str));
     let dns_status = std::process::Command::new("resolvectl")
         .args(&dns_args)
         .status();
@@ -295,7 +293,7 @@ fn revert_interface_dns(iface: &str) {
 // elsewhere), but keep stub signatures so the rest of the file builds
 // on macOS / Windows daemon configurations.
 #[cfg(not(target_os = "linux"))]
-fn set_interface_dns(_iface: &str, _servers: &[&str]) -> bool {
+fn set_interface_dns(_iface: &str, _servers: &[String]) -> bool {
     false
 }
 

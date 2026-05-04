@@ -142,6 +142,17 @@ pub struct RoutingConfig {
     /// Lifetime of learned routes before expiry, in seconds.
     #[serde(default = "default_route_expiry_s")]
     pub route_expiry_s: u64,
+    /// DNS resolvers handed to the system resolver (`resolvectl dns
+    /// pim0 …` on Linux/systemd-resolved) when split-default routing
+    /// is engaged. Without this list the resolver keeps its
+    /// DHCP-provided upstream — which becomes unreachable the moment
+    /// the user disables their wifi/wired uplink, so `curl gmail.com`
+    /// fails even though the IP path through the mesh is live.
+    /// Defaults to a small public anycast set; override for corporate
+    /// split-DNS (`["10.0.0.53"]`), pi-hole on the gateway
+    /// (`["10.77.0.1"]`), or IPv6-only resolvers.
+    #[serde(default = "default_dns_servers")]
+    pub dns_servers: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -462,6 +473,10 @@ fn default_route_expiry_s() -> u64 {
     300
 }
 
+fn default_dns_servers() -> Vec<String> {
+    vec!["1.1.1.1".into(), "1.0.0.1".into(), "8.8.8.8".into()]
+}
+
 fn default_nat_interface() -> String {
     "eth0".into()
 }
@@ -632,6 +647,7 @@ impl Default for RoutingConfig {
             max_hops: default_max_hops(),
             algorithm: default_route_algorithm(),
             route_expiry_s: default_route_expiry_s(),
+            dns_servers: default_dns_servers(),
         }
     }
 }

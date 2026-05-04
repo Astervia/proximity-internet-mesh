@@ -286,6 +286,16 @@ pub(crate) struct DaemonState {
     /// load / RTT swings, gateway disappearance) get followed
     /// automatically without an explicit event channel.
     pub(crate) route_install_notify: Arc<Notify>,
+    /// DNS resolvers the route installer hands to the system resolver
+    /// (`resolvectl dns pim0 …` on Linux/systemd-resolved) when
+    /// split-default routing engages. Cloned once at startup from
+    /// `[routing].dns_servers`. Editing `pim.toml` and saving via
+    /// `config.save` requires a restart for the new list to take
+    /// effect — same restart-required posture as `[transport]` /
+    /// `[bluetooth]`. The empty case is treated as "skip DNS
+    /// management" so users who rely on systemd's DNS-over-pim0 stub
+    /// or a custom resolver setup can opt out.
+    pub(crate) mesh_dns_servers: Vec<String>,
 }
 
 impl DaemonState {
@@ -646,6 +656,7 @@ pub(crate) async fn run() -> Result<()> {
         last_broadcast_recipients: Arc::new(AtomicU64::new(0)),
         broadcast_notify: Arc::new(Notify::new()),
         route_install_notify: Arc::new(Notify::new()),
+        mesh_dns_servers: config.routing.dns_servers.clone(),
     });
 
     // ── Identity-broadcast background task ────────────────────────────────
