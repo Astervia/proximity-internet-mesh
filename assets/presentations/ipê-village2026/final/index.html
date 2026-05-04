@@ -1,0 +1,1888 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="UTF-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+        <title>PIM — Ipê Village 2026</title>
+        <link rel="preconnect" href="https://fonts.googleapis.com" />
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+        <link
+            href="https://fonts.googleapis.com/css2?family=Geist+Mono:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap"
+            rel="stylesheet"
+        />
+        <style>
+            :root {
+                --bg: #0a0c0a;
+                --bg-card: #0f130f;
+                --fg: #d4d8d4;
+                --fg-dim: #6e7e6e;
+                --fg-deep: #3a4a3a;
+                --green: #22c55e;
+                --green-soft: #4ade80;
+                --green-deep: #15803d;
+                --green-glow: rgba(34, 197, 94, 0.35);
+                --amber: #e8a830;
+                --amber-glow: rgba(232, 168, 48, 0.3);
+                --red: #ff5555;
+                --blue: #4a9eff;
+                --border: #1a2e1a;
+                --border-bright: #2e4e2e;
+                --font-mono: "Geist Mono", ui-monospace, "Cascadia Code", "JetBrains Mono", monospace;
+                --font-code: "JetBrains Mono", ui-monospace, monospace;
+            }
+
+            * {
+                margin: 0;
+                padding: 0;
+                box-sizing: border-box;
+            }
+
+            html,
+            body {
+                background: var(--bg);
+                color: var(--fg);
+                font-family: var(--font-mono);
+                overflow: hidden;
+                height: 100vh;
+                width: 100vw;
+                font-feature-settings: "ss01" on;
+            }
+
+            /* CRT scanline overlay */
+            .scanline {
+                position: fixed;
+                inset: 0;
+                pointer-events: none;
+                background: repeating-linear-gradient(
+                    0deg,
+                    transparent 0px,
+                    transparent 2px,
+                    rgba(34, 197, 94, 0.022) 2px,
+                    rgba(34, 197, 94, 0.022) 4px
+                );
+                z-index: 1000;
+                mix-blend-mode: overlay;
+            }
+
+            /* Subtle vignette */
+            .vignette {
+                position: fixed;
+                inset: 0;
+                pointer-events: none;
+                background: radial-gradient(ellipse at center, transparent 40%, rgba(0, 0, 0, 0.5) 100%);
+                z-index: 999;
+            }
+
+            #deck {
+                position: relative;
+                width: 100vw;
+                height: 100vh;
+            }
+
+            .slide {
+                position: absolute;
+                inset: 0;
+                display: flex;
+                flex-direction: column;
+                padding: 5rem 6rem 4rem;
+                opacity: 0;
+                pointer-events: none;
+                transition: opacity 280ms ease-out;
+            }
+
+            .slide.active {
+                opacity: 1;
+                pointer-events: auto;
+            }
+
+            /* Prompt header (top of every slide) */
+            .prompt {
+                font-family: var(--font-code);
+                color: var(--fg-dim);
+                font-size: 0.85rem;
+                letter-spacing: 0.04em;
+                margin-bottom: auto;
+                opacity: 0.7;
+            }
+            .prompt::before {
+                content: "$ ";
+                color: var(--green);
+                font-weight: 600;
+            }
+
+            /* Headings */
+            h1 {
+                font-size: clamp(3rem, 7vw, 6rem);
+                font-weight: 700;
+                line-height: 1;
+                letter-spacing: -0.025em;
+            }
+            h2 {
+                font-size: clamp(2rem, 4.4vw, 4rem);
+                font-weight: 600;
+                line-height: 1.1;
+                letter-spacing: -0.02em;
+                margin-bottom: 2.5rem;
+            }
+            h3 {
+                font-size: 1.1rem;
+                font-weight: 600;
+                color: var(--green);
+                margin-bottom: 0.75rem;
+                letter-spacing: 0.01em;
+            }
+
+            .hl {
+                color: var(--green);
+            }
+            .hl-amber {
+                color: var(--amber);
+            }
+            .dim {
+                color: var(--fg-dim);
+            }
+            .deep {
+                color: var(--fg-deep);
+            }
+
+            /* Cursor */
+            .cursor {
+                display: inline-block;
+                width: 0.55em;
+                height: 1em;
+                background: var(--green);
+                margin-left: 0.08em;
+                vertical-align: -0.12em;
+                box-shadow: 0 0 10px var(--green-glow);
+                animation: blink 1.05s steps(2, end) infinite;
+            }
+            @keyframes blink {
+                0%,
+                50% {
+                    opacity: 1;
+                }
+                50.01%,
+                100% {
+                    opacity: 0;
+                }
+            }
+
+            /* Divider */
+            .divider {
+                border: 0;
+                height: 1px;
+                background: var(--border);
+                margin: 2rem 0;
+            }
+            .divider-bright {
+                background: var(--border-bright);
+            }
+
+            /* Center utility */
+            .center {
+                flex: 1;
+                display: flex;
+                flex-direction: column;
+                align-items: center;
+                justify-content: center;
+                text-align: center;
+            }
+            .stretch {
+                flex: 1;
+                display: flex;
+                flex-direction: column;
+                justify-content: center;
+            }
+
+            /* ─────────────────────────────────────────────
+       SLIDE 00 — COVER
+       ───────────────────────────────────────────── */
+            #s0 .logo {
+                font-size: clamp(5rem, 12vw, 9rem);
+                color: var(--green);
+                font-weight: 700;
+                letter-spacing: -0.04em;
+                line-height: 1;
+                text-shadow: 0 0 30px var(--green-glow);
+                animation: heroFade 800ms ease-out both;
+            }
+            #s0 .logo .glyph {
+                animation: blink 1.2s steps(2, end) infinite;
+                display: inline-block;
+            }
+            #s0 .logo-sub {
+                margin-top: 1.5rem;
+                font-size: 0.9rem;
+                letter-spacing: 0.4em;
+                color: var(--fg-dim);
+                text-transform: uppercase;
+                animation: heroFade 800ms 200ms ease-out both;
+            }
+            #s0 .meta {
+                position: absolute;
+                bottom: 4rem;
+                left: 6rem;
+                right: 6rem;
+                display: flex;
+                justify-content: space-between;
+                font-size: 0.85rem;
+                color: var(--fg-dim);
+                letter-spacing: 0.05em;
+                animation: heroFade 800ms 400ms ease-out both;
+            }
+            #s0 .meta .label {
+                color: var(--fg-deep);
+                text-transform: uppercase;
+                letter-spacing: 0.2em;
+                font-size: 0.7rem;
+                margin-bottom: 0.4rem;
+                display: block;
+            }
+            #s0 .meta .name {
+                color: var(--green);
+                font-weight: 500;
+            }
+            @keyframes heroFade {
+                from {
+                    opacity: 0;
+                    transform: translateY(8px);
+                }
+                to {
+                    opacity: 1;
+                    transform: translateY(0);
+                }
+            }
+
+            /* ─────────────────────────────────────────────
+       SLIDE 01 — HOOK
+       ───────────────────────────────────────────── */
+            #s1 .typewriter {
+                font-size: clamp(1.5rem, 2.6vw, 2.2rem);
+                line-height: 1.6;
+                color: var(--fg);
+                font-weight: 500;
+            }
+            #s1 .typewriter .row {
+                opacity: 0;
+                transform: translateX(-12px);
+            }
+            #s1 .typewriter .row .marker {
+                color: var(--green);
+                margin-right: 0.6em;
+            }
+            #s1.active .typewriter .row {
+                animation: rowIn 350ms ease-out forwards;
+            }
+            #s1.active .typewriter .row:nth-child(1) {
+                animation-delay: 200ms;
+            }
+            #s1.active .typewriter .row:nth-child(2) {
+                animation-delay: 1200ms;
+            }
+            #s1.active .typewriter .row:nth-child(3) {
+                animation-delay: 2200ms;
+            }
+            @keyframes rowIn {
+                to {
+                    opacity: 1;
+                    transform: translateX(0);
+                }
+            }
+
+            #s1 .punchline {
+                margin-top: 3rem;
+                font-size: clamp(2.5rem, 5.5vw, 4.5rem);
+                line-height: 1.05;
+                color: var(--green);
+                font-weight: 700;
+                letter-spacing: -0.025em;
+                opacity: 0;
+                text-shadow: 0 0 30px var(--green-glow);
+            }
+            #s1.active .punchline {
+                animation: punchIn 600ms 3400ms ease-out forwards;
+            }
+            #s1 .punchline .word-fragile {
+                color: var(--red);
+                text-shadow: 0 0 20px rgba(255, 85, 85, 0.4);
+            }
+            @keyframes punchIn {
+                from {
+                    opacity: 0;
+                    transform: translateY(12px) scale(0.98);
+                    filter: blur(4px);
+                }
+                to {
+                    opacity: 1;
+                    transform: translateY(0) scale(1);
+                    filter: blur(0);
+                }
+            }
+
+            #s1 .sub-fragile {
+                margin-top: 1.5rem;
+                font-size: 1.1rem;
+                color: var(--fg-dim);
+                letter-spacing: 0.05em;
+                opacity: 0;
+            }
+            #s1.active .sub-fragile {
+                animation: rowIn 400ms 4000ms ease-out forwards;
+            }
+
+            /* ─────────────────────────────────────────────
+       SLIDE 02 — MEET PIM
+       ───────────────────────────────────────────── */
+            #s2 .meet {
+                font-size: clamp(2rem, 3.5vw, 3rem);
+                color: var(--fg-dim);
+                font-weight: 400;
+                margin-bottom: 1rem;
+                opacity: 0;
+            }
+            #s2.active .meet {
+                animation: rowIn 400ms 200ms ease-out forwards;
+            }
+            #s2 .pim-hero {
+                font-size: clamp(7rem, 16vw, 14rem);
+                color: var(--green);
+                font-weight: 700;
+                letter-spacing: -0.045em;
+                line-height: 1;
+                padding-bottom: 0.15em;
+                text-shadow: 0 0 40px var(--green-glow);
+                opacity: 0;
+            }
+            #s2.active .pim-hero {
+                animation: pimIn 700ms 600ms ease-out forwards;
+            }
+            #s2 .pim-hero .glyph {
+                animation: blink 1.2s 1400ms steps(2, end) infinite;
+                display: inline-block;
+            }
+            @keyframes pimIn {
+                from {
+                    opacity: 0;
+                    transform: scale(0.9);
+                    filter: blur(8px);
+                }
+                to {
+                    opacity: 1;
+                    transform: scale(1);
+                    filter: blur(0);
+                }
+            }
+            #s2 .pim-tag {
+                margin-top: 3.5rem;
+                font-size: 1rem;
+                letter-spacing: 0.4em;
+                color: var(--fg-dim);
+                text-transform: uppercase;
+                opacity: 0;
+            }
+            #s2.active .pim-tag {
+                animation: rowIn 500ms 1200ms ease-out forwards;
+            }
+
+            /* ─────────────────────────────────────────────
+       SLIDE 03 — TOPOLOGY
+       ───────────────────────────────────────────── */
+            #s3 {
+                padding: 5rem 6rem 3rem;
+            }
+            #s3 h2 {
+                font-size: clamp(1.5rem, 2.8vw, 2.4rem);
+                margin-bottom: 1.5rem;
+            }
+            #s3 .topo-wrap {
+                flex: 1;
+                display: flex;
+                flex-direction: column;
+                align-items: center;
+                justify-content: flex-start;
+                min-height: 0;
+                padding-top: 0;
+            }
+            #s3 svg {
+                width: 100%;
+                max-width: 1180px;
+                height: auto;
+                max-height: 64vh;
+                margin-top: 2.5rem;
+                flex: 0 1 auto;
+                min-height: 0;
+            }
+            #s3 .topo-caption {
+                margin-top: 2rem;
+                font-size: 0.95rem;
+                color: var(--fg-dim);
+                letter-spacing: 0.04em;
+                text-align: center;
+            }
+            #s3 .topo-caption .hl {
+                color: var(--green);
+            }
+
+            .pulse-line {
+                stroke-dasharray: 6 4;
+                animation: dash-flow 1.6s linear infinite;
+            }
+            @keyframes dash-flow {
+                to {
+                    stroke-dashoffset: -20;
+                }
+            }
+            .pulse-line-soft {
+                stroke-dasharray: 5 3;
+                animation: dash-flow-soft 2.2s linear infinite;
+            }
+            @keyframes dash-flow-soft {
+                to {
+                    stroke-dashoffset: -16;
+                }
+            }
+            .pulse-node {
+                animation: nodePulse 2.4s ease-in-out infinite;
+            }
+            @keyframes nodePulse {
+                0%,
+                100% {
+                    filter: drop-shadow(0 0 4px var(--green-glow));
+                }
+                50% {
+                    filter: drop-shadow(0 0 14px var(--amber-glow));
+                }
+            }
+            .pulse-client {
+                animation: clientPulse 3.2s ease-in-out infinite;
+            }
+            @keyframes clientPulse {
+                0%,
+                100% {
+                    filter: drop-shadow(0 0 0 transparent);
+                    opacity: 0.85;
+                }
+                50% {
+                    filter: drop-shadow(0 0 8px var(--green-glow));
+                    opacity: 1;
+                }
+            }
+            .pulse-client.d1 {
+                animation-delay: 0s;
+            }
+            .pulse-client.d2 {
+                animation-delay: 0.6s;
+            }
+            .pulse-client.d3 {
+                animation-delay: 1.2s;
+            }
+            .pulse-client.d4 {
+                animation-delay: 1.8s;
+            }
+            .data-pkt {
+                animation: pktTravel 2.2s linear infinite;
+            }
+            @keyframes pktTravel {
+                from {
+                    offset-distance: 0%;
+                    opacity: 0;
+                }
+                10% {
+                    opacity: 1;
+                }
+                90% {
+                    opacity: 1;
+                }
+                to {
+                    offset-distance: 100%;
+                    opacity: 0;
+                }
+            }
+            .gateway-glow {
+                animation: gatewayPulse 2.8s ease-in-out infinite;
+                transform-origin: 855px 180px;
+            }
+            @keyframes gatewayPulse {
+                0%,
+                100% {
+                    opacity: 0;
+                    transform: scale(1);
+                }
+                50% {
+                    opacity: 0.4;
+                    transform: scale(1.3);
+                }
+            }
+
+            /* ─────────────────────────────────────────────
+       SLIDE 04 — DEMO
+       ───────────────────────────────────────────── */
+            #s4 .demo-tag {
+                font-size: 0.85rem;
+                letter-spacing: 0.4em;
+                text-transform: uppercase;
+                color: var(--amber);
+                margin-bottom: 1.5rem;
+            }
+            #s4 h2 {
+                margin-bottom: 3rem;
+            }
+            #s4 .demo-stage {
+                flex: 1;
+                display: flex;
+                flex-direction: column;
+                align-items: center;
+                justify-content: center;
+                gap: 2rem;
+            }
+            #s4 .laptops {
+                display: flex;
+                align-items: center;
+                gap: clamp(3rem, 8vw, 8rem);
+                position: relative;
+            }
+            #s4 .laptop {
+                width: clamp(160px, 18vw, 220px);
+                aspect-ratio: 1.4;
+                border: 1.5px solid var(--green-deep);
+                background: var(--bg-card);
+                position: relative;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                font-size: 1.6rem;
+                color: var(--green);
+                font-weight: 700;
+                letter-spacing: 0.04em;
+                transition:
+                    border-color 250ms,
+                    box-shadow 250ms;
+            }
+            #s4 .laptop.active {
+                border-color: var(--green);
+                box-shadow:
+                    0 0 24px var(--green-glow),
+                    inset 0 0 24px rgba(34, 197, 94, 0.05);
+            }
+            #s4 .laptop.offline {
+                border-color: var(--red);
+                color: var(--red);
+            }
+            #s4 .laptop::before {
+                content: "A";
+                position: absolute;
+                top: 8px;
+                left: 12px;
+                font-size: 0.7rem;
+                color: var(--fg-dim);
+                letter-spacing: 0.2em;
+            }
+            #s4 .laptop.b::before {
+                content: "B";
+            }
+            #s4 .laptop .label {
+                font-size: 0.75rem;
+                letter-spacing: 0.2em;
+                color: var(--fg-dim);
+                text-transform: uppercase;
+                position: absolute;
+                bottom: 8px;
+                font-weight: 400;
+            }
+            #s4 .link {
+                position: absolute;
+                top: 50%;
+                left: 50%;
+                transform: translate(-50%, -50%);
+                width: clamp(6rem, 12vw, 12rem);
+                height: 2px;
+                background: var(--border-bright);
+                overflow: hidden;
+            }
+            #s4 .link.connected {
+                background: var(--green);
+                box-shadow: 0 0 12px var(--green-glow);
+            }
+            #s4 .link.connected::after {
+                content: "";
+                position: absolute;
+                inset: 0;
+                background: linear-gradient(90deg, transparent, var(--green-soft), transparent);
+                animation: pulse-link 1.4s linear infinite;
+            }
+            @keyframes pulse-link {
+                from {
+                    transform: translateX(-100%);
+                }
+                to {
+                    transform: translateX(100%);
+                }
+            }
+
+            #s4 .demo-status {
+                font-size: 1.1rem;
+                color: var(--fg-dim);
+                letter-spacing: 0.05em;
+                font-family: var(--font-code);
+                min-height: 2rem;
+            }
+            #s4 .demo-status .ok {
+                color: var(--green);
+            }
+            #s4 .demo-status .warn {
+                color: var(--amber);
+            }
+            #s4 .demo-status .err {
+                color: var(--red);
+            }
+
+            #s4 .demo-steps {
+                display: flex;
+                gap: 2rem;
+                font-size: 0.8rem;
+                color: var(--fg-deep);
+                letter-spacing: 0.15em;
+                text-transform: uppercase;
+                margin-top: 1rem;
+            }
+            #s4 .demo-steps .step {
+                opacity: 0.4;
+                transition: all 200ms;
+            }
+            #s4 .demo-steps .step.done {
+                color: var(--green);
+                opacity: 1;
+            }
+            #s4 .demo-steps .step.current {
+                color: var(--amber);
+                opacity: 1;
+            }
+
+            /* ─────────────────────────────────────────────
+       SLIDE 05 — SMART CITY
+       ───────────────────────────────────────────── */
+            #s5 .cards {
+                display: grid;
+                grid-template-columns: repeat(3, 1fr);
+                gap: 1.5rem;
+                flex: 1;
+                align-items: stretch;
+            }
+            #s5 .card {
+                border: 1.5px solid var(--border-bright);
+                background: var(--bg-card);
+                padding: 2rem 1.75rem;
+                display: flex;
+                flex-direction: column;
+                opacity: 0;
+                transform: translateY(12px);
+                position: relative;
+            }
+            #s5.active .card {
+                animation: cardIn 500ms ease-out forwards;
+            }
+            #s5.active .card:nth-child(1) {
+                animation-delay: 300ms;
+            }
+            #s5.active .card:nth-child(2) {
+                animation-delay: 600ms;
+            }
+            #s5.active .card:nth-child(3) {
+                animation-delay: 900ms;
+            }
+            @keyframes cardIn {
+                to {
+                    opacity: 1;
+                    transform: translateY(0);
+                }
+            }
+            #s5 .card .icon {
+                font-size: 2.5rem;
+                color: var(--green);
+                margin-bottom: 1rem;
+                font-weight: 700;
+                line-height: 1;
+            }
+            #s5 .card h3 {
+                font-size: 1.4rem;
+                margin-bottom: 1rem;
+                color: var(--green);
+                letter-spacing: 0.02em;
+            }
+            #s5 .card p {
+                color: var(--fg);
+                line-height: 1.5;
+                font-size: 1rem;
+            }
+            #s5 .card .meta {
+                margin-top: auto;
+                padding-top: 1.5rem;
+                font-size: 0.75rem;
+                color: var(--fg-dim);
+                letter-spacing: 0.15em;
+                text-transform: uppercase;
+            }
+            #s5 .card.amber {
+                border-color: var(--amber);
+            }
+            #s5 .card.amber .icon,
+            #s5 .card.amber h3 {
+                color: var(--amber);
+            }
+
+            /* ─────────────────────────────────────────────
+       SLIDE 06 — DIFFERENTIATOR
+       ───────────────────────────────────────────── */
+            #s6 .tbl {
+                width: 100%;
+                border-collapse: collapse;
+                font-size: 0.95rem;
+            }
+            #s6 .tbl th,
+            #s6 .tbl td {
+                padding: 0.85rem 1rem;
+                text-align: left;
+                border-bottom: 1px solid var(--border);
+            }
+            #s6 .tbl th {
+                font-size: 0.75rem;
+                letter-spacing: 0.15em;
+                text-transform: uppercase;
+                color: var(--fg-dim);
+                font-weight: 500;
+                border-bottom: 1.5px solid var(--border-bright);
+            }
+            #s6 .tbl th.pim {
+                color: var(--green);
+                background: rgba(34, 197, 94, 0.05);
+            }
+            #s6 .tbl td.pim {
+                background: rgba(34, 197, 94, 0.05);
+                color: var(--green);
+                font-weight: 500;
+            }
+            #s6 .tbl .yes {
+                color: var(--green);
+            }
+            #s6 .tbl .no {
+                color: var(--red);
+                opacity: 0.85;
+            }
+            #s6 .tbl .par {
+                color: var(--amber);
+                opacity: 0.85;
+            }
+            #s6 .tbl tr {
+                opacity: 0;
+                transform: translateX(-8px);
+            }
+            #s6.active .tbl tr {
+                animation: rowSlide 280ms ease-out forwards;
+            }
+            #s6.active .tbl tr:nth-child(1) {
+                animation-delay: 100ms;
+            }
+            #s6.active .tbl tr:nth-child(2) {
+                animation-delay: 250ms;
+            }
+            #s6.active .tbl tr:nth-child(3) {
+                animation-delay: 400ms;
+            }
+            #s6.active .tbl tr:nth-child(4) {
+                animation-delay: 550ms;
+            }
+            #s6.active .tbl tr:nth-child(5) {
+                animation-delay: 700ms;
+            }
+            #s6.active .tbl tr:nth-child(6) {
+                animation-delay: 850ms;
+            }
+            #s6.active .tbl tr:nth-child(7) {
+                animation-delay: 1000ms;
+            }
+            @keyframes rowSlide {
+                to {
+                    opacity: 1;
+                    transform: translateX(0);
+                }
+            }
+
+            #s6 .closing-line {
+                margin-top: 2.5rem;
+                font-size: 1.4rem;
+                color: var(--green);
+                letter-spacing: -0.01em;
+                font-weight: 500;
+                opacity: 0;
+            }
+            #s6.active .closing-line {
+                animation: rowIn 400ms 1300ms ease-out forwards;
+            }
+
+            /* ─────────────────────────────────────────────
+       SLIDE 07 — VISION
+       ───────────────────────────────────────────── */
+            #s7 .quad-wrap {
+                flex: 1;
+                display: grid;
+                grid-template-columns: 1fr 1fr;
+                grid-template-rows: 1fr 1fr;
+                gap: 1.5rem;
+                position: relative;
+            }
+            #s7 .quad {
+                border: 1.5px solid var(--border-bright);
+                background: var(--bg-card);
+                padding: 2rem;
+                display: flex;
+                flex-direction: column;
+                justify-content: space-between;
+                opacity: 0;
+                transform: scale(0.96);
+                position: relative;
+            }
+            #s7.active .quad {
+                animation: quadIn 450ms ease-out forwards;
+            }
+            #s7.active .quad:nth-child(1) {
+                animation-delay: 200ms;
+            }
+            #s7.active .quad:nth-child(2) {
+                animation-delay: 400ms;
+            }
+            #s7.active .quad:nth-child(3) {
+                animation-delay: 600ms;
+            }
+            #s7.active .quad:nth-child(4) {
+                animation-delay: 800ms;
+            }
+            @keyframes quadIn {
+                to {
+                    opacity: 1;
+                    transform: scale(1);
+                }
+            }
+            #s7 .quad .num {
+                font-family: var(--font-code);
+                font-size: 0.7rem;
+                letter-spacing: 0.3em;
+                color: var(--fg-deep);
+                margin-bottom: 0.5rem;
+            }
+            #s7 .quad h3 {
+                font-size: 2rem;
+                color: var(--green);
+                margin-bottom: 1rem;
+                letter-spacing: -0.01em;
+                font-weight: 600;
+            }
+            #s7 .quad p {
+                color: var(--fg);
+                line-height: 1.55;
+                font-size: 1rem;
+            }
+            #s7 .quad .glyph {
+                font-size: 1.5rem;
+                color: var(--green);
+                margin-bottom: 0.5rem;
+                font-weight: 700;
+            }
+            #s7 .vision-line {
+                margin-top: 2rem;
+                font-size: 1.3rem;
+                color: var(--fg-dim);
+                text-align: center;
+                letter-spacing: 0.02em;
+                opacity: 0;
+            }
+            #s7.active .vision-line {
+                animation: rowIn 500ms 1100ms ease-out forwards;
+            }
+            #s7 .vision-line .hl {
+                color: var(--green);
+            }
+
+            /* ─────────────────────────────────────────────
+       SLIDE 08 — CLOSE
+       ───────────────────────────────────────────── */
+            #s8 .close-mark {
+                font-size: clamp(2.5rem, 5vw, 4rem);
+                color: var(--green);
+                font-weight: 700;
+                letter-spacing: -0.04em;
+                line-height: 1;
+                text-shadow: 0 0 24px var(--green-glow);
+                margin-bottom: 2.5rem;
+                opacity: 0;
+            }
+            #s8.active .close-mark {
+                animation: heroFade 600ms ease-out forwards;
+            }
+            #s8 .close-mark .glyph {
+                display: inline-block;
+            }
+            #s8 .sov-list {
+                font-size: 1.1rem;
+                color: var(--fg-dim);
+                letter-spacing: 0.15em;
+                text-transform: uppercase;
+                margin-bottom: 2.5rem;
+                opacity: 0;
+                font-weight: 400;
+            }
+            #s8.active .sov-list {
+                animation: rowIn 500ms 600ms ease-out forwards;
+            }
+            #s8 .sov-list .green {
+                color: var(--green);
+                font-weight: 600;
+            }
+            #s8 .slogan {
+                font-size: clamp(2.5rem, 6vw, 5rem);
+                color: var(--green);
+                font-weight: 700;
+                letter-spacing: -0.03em;
+                line-height: 1.05;
+                text-shadow: 0 0 40px var(--green-glow);
+                opacity: 0;
+            }
+            #s8.active .slogan {
+                animation: pimIn 700ms 1100ms ease-out forwards;
+            }
+            #s8 .slogan-cursor {
+                display: inline-block;
+                width: 0.4em;
+                height: 0.85em;
+                background: var(--green);
+                margin-left: 0.1em;
+                vertical-align: -0.05em;
+                box-shadow: 0 0 14px var(--green-glow);
+                animation: blink 1s 1800ms steps(2, end) infinite;
+            }
+            #s8 .contact {
+                margin-top: 4rem;
+                padding: 1.4rem 2.5rem;
+                border: 1.5px solid var(--green);
+                box-shadow: 0 0 32px var(--green-glow);
+                font-size: clamp(1rem, 1.6vw, 1.4rem);
+                color: var(--green-soft);
+                font-weight: 600;
+                letter-spacing: 0.02em;
+                opacity: 0;
+            }
+            #s8.active .contact {
+                animation: rowIn 500ms 2100ms ease-out forwards;
+            }
+            #s8 .contact .label {
+                display: block;
+                font-size: 0.7rem;
+                color: var(--fg-dim);
+                letter-spacing: 0.3em;
+                text-transform: uppercase;
+                margin-bottom: 0.4rem;
+                font-weight: 400;
+            }
+            #s8 .ask {
+                margin-top: 2rem;
+                font-size: 0.85rem;
+                color: var(--fg-dim);
+                letter-spacing: 0.15em;
+                text-transform: uppercase;
+                display: flex;
+                gap: 2rem;
+                opacity: 0;
+            }
+            #s8.active .ask {
+                animation: rowIn 500ms 2500ms ease-out forwards;
+            }
+            #s8 .ask span {
+                color: var(--fg-dim);
+            }
+            #s8 .ask .sep {
+                color: var(--fg-deep);
+            }
+
+            /* ─────────────────────────────────────────────
+       NAV
+       ───────────────────────────────────────────── */
+            #nav {
+                position: fixed;
+                bottom: 1.2rem;
+                left: 50%;
+                transform: translateX(-50%);
+                display: flex;
+                gap: 1.5rem;
+                align-items: center;
+                font-family: var(--font-code);
+                font-size: 0.75rem;
+                color: var(--fg-deep);
+                letter-spacing: 0.1em;
+                z-index: 100;
+            }
+            #nav .counter {
+                color: var(--fg-dim);
+            }
+            #nav .counter .cur {
+                color: var(--green);
+                font-weight: 600;
+            }
+            #nav .hint {
+                color: var(--fg-deep);
+            }
+            #nav button {
+                background: transparent;
+                border: 1px solid var(--border-bright);
+                color: var(--fg-dim);
+                font-family: inherit;
+                font-size: inherit;
+                padding: 0.4rem 0.8rem;
+                cursor: pointer;
+                letter-spacing: 0.1em;
+            }
+            #nav button:hover:not(:disabled) {
+                color: var(--green);
+                border-color: var(--green);
+            }
+            #nav button:disabled {
+                opacity: 0.3;
+                cursor: not-allowed;
+            }
+
+            #progress {
+                position: fixed;
+                top: 0;
+                left: 0;
+                right: 0;
+                height: 2px;
+                background: var(--border);
+                z-index: 100;
+            }
+            #progress-fill {
+                height: 100%;
+                background: var(--green);
+                box-shadow: 0 0 8px var(--green-glow);
+                width: 11.11%;
+                transition: width 280ms ease-out;
+            }
+
+            @media (max-width: 900px) {
+                .slide {
+                    padding: 3rem 2rem 3rem;
+                }
+                #s5 .cards {
+                    grid-template-columns: 1fr;
+                }
+                #s7 .quad-wrap {
+                    grid-template-columns: 1fr;
+                    grid-template-rows: repeat(4, 1fr);
+                }
+            }
+        </style>
+    </head>
+    <body>
+        <div class="scanline"></div>
+        <div class="vignette"></div>
+
+        <div id="progress"><div id="progress-fill"></div></div>
+
+        <div id="deck">
+            <!-- ═══════════════════════════════════════════
+       00 · COVER
+       ═══════════════════════════════════════════ -->
+            <div class="slide active" id="s0">
+                <div class="prompt">./pim --present ipe-village-2026</div>
+                <div class="center">
+                    <div class="logo"><span class="glyph">█</span> pim</div>
+                    <div class="logo-sub">the proximity internet mesh</div>
+                </div>
+                <div class="meta">
+                    <div>
+                        <span class="label">presented by</span>
+                        <span class="name">Pedro Gimenez</span> <span class="dim">·</span>
+                        <span class="name">Ruy Vieira</span>
+                    </div>
+                    <div style="text-align: right">
+                        <span class="label">where</span>
+                        Ipê Village 2026 <span class="dim">·</span> Florianópolis
+                    </div>
+                </div>
+            </div>
+
+            <!-- ═══════════════════════════════════════════
+       01 · HOOK
+       ═══════════════════════════════════════════ -->
+            <div class="slide" id="s1">
+                <div class="prompt">pim diagnose --internet 2026</div>
+                <div class="stretch">
+                    <div class="typewriter">
+                        <div class="row">
+                            <span class="marker">▸</span> bitcoin made <span class="hl">money</span> sovereign.
+                        </div>
+                        <div class="row">
+                            <span class="marker">▸</span> zk made <span class="hl">privacy</span> verifiable.
+                        </div>
+                        <div class="row">
+                            <span class="marker">▸</span> ai agents do our <span class="hl">work</span>.
+                        </div>
+                    </div>
+                    <div class="punchline">
+                        but the <span class="word-fragile">internet itself</span><br />still runs on someone else's
+                        cables.
+                    </div>
+                    <div class="sub-fragile">
+                        still centralized · still rented · one cable cut, one government order, one outage away
+                    </div>
+                </div>
+            </div>
+
+            <!-- ═══════════════════════════════════════════
+       02 · MEET PIM
+       ═══════════════════════════════════════════ -->
+            <div class="slide" id="s2">
+                <div class="prompt">pim --version</div>
+                <div class="center">
+                    <div class="meet">meet</div>
+                    <div class="pim-hero"><span class="glyph">█</span> pim</div>
+                    <div class="pim-tag">the proximity internet mesh</div>
+                </div>
+            </div>
+
+            <!-- ═══════════════════════════════════════════
+       03 · TOPOLOGY
+       ═══════════════════════════════════════════ -->
+            <div class="slide" id="s3">
+                <div class="prompt">pim route status --topology</div>
+                <h2>every device near you <span class="hl">becomes a node.</span></h2>
+                <div class="topo-wrap">
+                    <svg viewBox="0 0 1100 380" xmlns="http://www.w3.org/2000/svg">
+                        <defs>
+                            <marker id="arr" markerWidth="8" markerHeight="8" refX="6" refY="4" orient="auto">
+                                <path d="M0,0 L0,8 L8,4 z" fill="#22c55e" opacity="0.85" />
+                            </marker>
+                            <marker id="arrb" markerWidth="8" markerHeight="8" refX="6" refY="4" orient="auto">
+                                <path d="M0,0 L0,8 L8,4 z" fill="#4a9eff" opacity="0.85" />
+                            </marker>
+                        </defs>
+
+                        <!-- INTERNET -->
+                        <ellipse
+                            cx="1010"
+                            cy="180"
+                            rx="70"
+                            ry="40"
+                            fill="#0d160d"
+                            stroke="#4a9eff"
+                            stroke-width="1.5"
+                            stroke-dasharray="6,4"
+                        />
+                        <text
+                            x="1010"
+                            y="184"
+                            text-anchor="middle"
+                            fill="#4a9eff"
+                            font-family="Geist Mono, monospace"
+                            font-size="13"
+                            font-weight="600"
+                        >
+                            INTERNET
+                        </text>
+
+                        <!-- GATEWAY GLOW HALO -->
+                        <rect
+                            x="780"
+                            y="148"
+                            width="150"
+                            height="64"
+                            fill="none"
+                            stroke="#e8a830"
+                            stroke-width="2"
+                            class="gateway-glow"
+                        />
+
+                        <!-- GATEWAY -->
+                        <rect
+                            x="780"
+                            y="148"
+                            width="150"
+                            height="64"
+                            fill="#0f130f"
+                            stroke="#e8a830"
+                            stroke-width="1.8"
+                            class="pulse-node"
+                        />
+                        <text
+                            x="855"
+                            y="174"
+                            text-anchor="middle"
+                            fill="#e8a830"
+                            font-family="Geist Mono, monospace"
+                            font-size="13"
+                            font-weight="700"
+                            letter-spacing="2"
+                        >
+                            GATEWAY
+                        </text>
+                        <text
+                            x="855"
+                            y="195"
+                            text-anchor="middle"
+                            fill="#6e7e6e"
+                            font-family="Geist Mono, monospace"
+                            font-size="10"
+                        >
+                            shares internet
+                        </text>
+
+                        <!-- Gateway → Internet -->
+                        <line
+                            x1="930"
+                            y1="180"
+                            x2="938"
+                            y2="180"
+                            stroke="#4a9eff"
+                            stroke-width="1.5"
+                            marker-end="url(#arrb)"
+                            opacity="0.8"
+                        />
+
+                        <!-- RELAYS -->
+                        <rect
+                            x="500"
+                            y="80"
+                            width="130"
+                            height="56"
+                            fill="#0f130f"
+                            stroke="#22c55e"
+                            stroke-width="1.4"
+                        />
+                        <text
+                            x="565"
+                            y="105"
+                            text-anchor="middle"
+                            fill="#22c55e"
+                            font-family="Geist Mono, monospace"
+                            font-size="12"
+                            font-weight="700"
+                            letter-spacing="1.5"
+                        >
+                            RELAY
+                        </text>
+                        <text
+                            x="565"
+                            y="123"
+                            text-anchor="middle"
+                            fill="#6e7e6e"
+                            font-family="Geist Mono, monospace"
+                            font-size="10"
+                        >
+                            hop · forward
+                        </text>
+
+                        <rect
+                            x="500"
+                            y="224"
+                            width="130"
+                            height="56"
+                            fill="#0f130f"
+                            stroke="#22c55e"
+                            stroke-width="1.4"
+                        />
+                        <text
+                            x="565"
+                            y="249"
+                            text-anchor="middle"
+                            fill="#22c55e"
+                            font-family="Geist Mono, monospace"
+                            font-size="12"
+                            font-weight="700"
+                            letter-spacing="1.5"
+                        >
+                            RELAY
+                        </text>
+                        <text
+                            x="565"
+                            y="267"
+                            text-anchor="middle"
+                            fill="#6e7e6e"
+                            font-family="Geist Mono, monospace"
+                            font-size="10"
+                        >
+                            hop · forward
+                        </text>
+
+                        <!-- Relay → Gateway -->
+                        <line
+                            x1="630"
+                            y1="108"
+                            x2="778"
+                            y2="170"
+                            stroke="#22c55e"
+                            stroke-width="1.4"
+                            class="pulse-line"
+                            marker-end="url(#arr)"
+                            opacity="0.7"
+                        />
+                        <line
+                            x1="630"
+                            y1="252"
+                            x2="778"
+                            y2="190"
+                            stroke="#22c55e"
+                            stroke-width="1.4"
+                            class="pulse-line"
+                            marker-end="url(#arr)"
+                            opacity="0.7"
+                        />
+
+                        <text
+                            x="700"
+                            y="135"
+                            text-anchor="middle"
+                            fill="#3a4a3a"
+                            font-family="Geist Mono, monospace"
+                            font-size="10"
+                        >
+                            tcp · encrypted
+                        </text>
+                        <text
+                            x="700"
+                            y="240"
+                            text-anchor="middle"
+                            fill="#3a4a3a"
+                            font-family="Geist Mono, monospace"
+                            font-size="10"
+                        >
+                            tcp · encrypted
+                        </text>
+
+                        <!-- CLIENTS (4) -->
+                        <g class="pulse-client d1">
+                            <rect
+                                x="80"
+                                y="30"
+                                width="120"
+                                height="50"
+                                fill="#0f130f"
+                                stroke="#4ade80"
+                                stroke-width="1.1"
+                            />
+                            <text
+                                x="140"
+                                y="52"
+                                text-anchor="middle"
+                                fill="#4ade80"
+                                font-family="Geist Mono, monospace"
+                                font-size="11"
+                                font-weight="600"
+                            >
+                                CLIENT
+                            </text>
+                            <text
+                                x="140"
+                                y="68"
+                                text-anchor="middle"
+                                fill="#6e7e6e"
+                                font-family="Geist Mono, monospace"
+                                font-size="9"
+                            >
+                                phone
+                            </text>
+                        </g>
+                        <g class="pulse-client d2">
+                            <rect
+                                x="80"
+                                y="125"
+                                width="120"
+                                height="50"
+                                fill="#0f130f"
+                                stroke="#4ade80"
+                                stroke-width="1.1"
+                            />
+                            <text
+                                x="140"
+                                y="147"
+                                text-anchor="middle"
+                                fill="#4ade80"
+                                font-family="Geist Mono, monospace"
+                                font-size="11"
+                                font-weight="600"
+                            >
+                                CLIENT
+                            </text>
+                            <text
+                                x="140"
+                                y="163"
+                                text-anchor="middle"
+                                fill="#6e7e6e"
+                                font-family="Geist Mono, monospace"
+                                font-size="9"
+                            >
+                                laptop
+                            </text>
+                        </g>
+                        <g class="pulse-client d3">
+                            <rect
+                                x="80"
+                                y="220"
+                                width="120"
+                                height="50"
+                                fill="#0f130f"
+                                stroke="#4ade80"
+                                stroke-width="1.1"
+                            />
+                            <text
+                                x="140"
+                                y="242"
+                                text-anchor="middle"
+                                fill="#4ade80"
+                                font-family="Geist Mono, monospace"
+                                font-size="11"
+                                font-weight="600"
+                            >
+                                CLIENT
+                            </text>
+                            <text
+                                x="140"
+                                y="258"
+                                text-anchor="middle"
+                                fill="#6e7e6e"
+                                font-family="Geist Mono, monospace"
+                                font-size="9"
+                            >
+                                iot sensor
+                            </text>
+                        </g>
+                        <g class="pulse-client d4">
+                            <rect
+                                x="80"
+                                y="315"
+                                width="120"
+                                height="50"
+                                fill="#0f130f"
+                                stroke="#4ade80"
+                                stroke-width="1.1"
+                            />
+                            <text
+                                x="140"
+                                y="337"
+                                text-anchor="middle"
+                                fill="#4ade80"
+                                font-family="Geist Mono, monospace"
+                                font-size="11"
+                                font-weight="600"
+                            >
+                                CLIENT
+                            </text>
+                            <text
+                                x="140"
+                                y="353"
+                                text-anchor="middle"
+                                fill="#6e7e6e"
+                                font-family="Geist Mono, monospace"
+                                font-size="9"
+                            >
+                                bt radio
+                            </text>
+                        </g>
+
+                        <!-- Clients → Relays -->
+                        <line
+                            x1="200"
+                            y1="55"
+                            x2="497"
+                            y2="100"
+                            stroke="#4ade80"
+                            stroke-width="1"
+                            class="pulse-line-soft"
+                            opacity="0.6"
+                        />
+                        <line
+                            x1="200"
+                            y1="150"
+                            x2="497"
+                            y2="115"
+                            stroke="#4ade80"
+                            stroke-width="1"
+                            class="pulse-line-soft"
+                            opacity="0.6"
+                        />
+                        <line
+                            x1="200"
+                            y1="245"
+                            x2="497"
+                            y2="245"
+                            stroke="#4ade80"
+                            stroke-width="1"
+                            class="pulse-line-soft"
+                            opacity="0.6"
+                        />
+                        <line
+                            x1="200"
+                            y1="340"
+                            x2="497"
+                            y2="262"
+                            stroke="#4ade80"
+                            stroke-width="1"
+                            class="pulse-line-soft"
+                            opacity="0.6"
+                        />
+
+                        <text
+                            x="270"
+                            y="20"
+                            fill="#3a4a3a"
+                            font-family="Geist Mono, monospace"
+                            font-size="10"
+                            letter-spacing="2"
+                        >
+                            wi-fi direct · bluetooth · lan
+                        </text>
+                    </svg>
+                    <div class="topo-caption">
+                        <span class="hl">whoever has internet</span> shares it. <span class="hl">whoever doesn't</span>,
+                        hops peer to peer until it reaches someone who does. end-to-end encrypted. no central server.
+                    </div>
+                </div>
+            </div>
+
+            <!-- ═══════════════════════════════════════════
+       04 · DEMO
+       ═══════════════════════════════════════════ -->
+            <div class="slide" id="s4">
+                <div class="prompt">pim demo --live --on-the-table</div>
+                <div class="demo-tag">live demo</div>
+                <h2>two devices. <span class="hl">no router. no cloud.</span></h2>
+
+                <div class="demo-stage">
+                    <div class="laptops">
+                        <div class="laptop" id="laptop-a">
+                            ◇
+                            <span class="label" id="laptop-a-label">searching</span>
+                        </div>
+                        <div class="link" id="demo-link"></div>
+                        <div class="laptop b" id="laptop-b">
+                            ◇
+                            <span class="label" id="laptop-b-label">searching</span>
+                        </div>
+                    </div>
+
+                    <div class="demo-status" id="demo-status">
+                        <span class="dim">[ press → to advance the demo state ]</span>
+                    </div>
+
+                    <div class="demo-steps">
+                        <div class="step current" data-step="0">01 · discover</div>
+                        <div class="step" data-step="1">02 · connect</div>
+                        <div class="step" data-step="2">03 · kill wi-fi</div>
+                        <div class="step" data-step="3">04 · share gateway</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- ═══════════════════════════════════════════
+       05 · SMART CITY
+       ═══════════════════════════════════════════ -->
+            <div class="slide" id="s5">
+                <div class="prompt">pim apply --domain smart-city</div>
+                <h2>three things this <span class="hl">unlocks for cities.</span></h2>
+                <div class="cards">
+                    <div class="card">
+                        <div class="icon">◢</div>
+                        <h3>festival of 50k</h3>
+                        <p>
+                            cell signal saturated. pim gives the crowd a network of their own — peer to peer, no tower.
+                        </p>
+                        <div class="meta">use case · events</div>
+                    </div>
+                    <div class="card">
+                        <div class="icon">◉</div>
+                        <h3>city sensors</h3>
+                        <p>
+                            pollution, traffic, noise. no 4g, no contract. each sensor hops to the next until a phone
+                            picks up the data.
+                        </p>
+                        <div class="meta">use case · iot</div>
+                    </div>
+                    <div class="card amber">
+                        <div class="icon">⌬</div>
+                        <h3>radio bridge</h3>
+                        <p>
+                            a single node bridged to a lora radio extends the mesh across kilometers — no telecom tower
+                            needed at all.
+                        </p>
+                        <div class="meta">roadmap · long-range</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- ═══════════════════════════════════════════
+       06 · DIFFERENTIATOR
+       ═══════════════════════════════════════════ -->
+            <div class="slide" id="s6">
+                <div class="prompt">pim compare --against alternatives</div>
+                <h2>the missing layer.</h2>
+                <table class="tbl">
+                    <thead>
+                        <tr>
+                            <th>capability</th>
+                            <th>traditional vpn</th>
+                            <th>satellite</th>
+                            <th>mesh apps</th>
+                            <th class="pim">▸ pim</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td>full ip routing</td>
+                            <td class="yes">✓ yes</td>
+                            <td class="yes">✓ yes</td>
+                            <td class="no">✗ text only</td>
+                            <td class="pim yes">✓ yes</td>
+                        </tr>
+                        <tr>
+                            <td>no central server</td>
+                            <td class="no">✗ needs cloud</td>
+                            <td class="no">✗ needs satellite</td>
+                            <td class="par">~ partial</td>
+                            <td class="pim yes">✓ fully serverless</td>
+                        </tr>
+                        <tr>
+                            <td>works without infrastructure</td>
+                            <td class="no">✗</td>
+                            <td class="yes">✓ expensive</td>
+                            <td class="par">~ limited</td>
+                            <td class="pim yes">✓</td>
+                        </tr>
+                        <tr>
+                            <td>proximity-native discovery</td>
+                            <td class="no">✗</td>
+                            <td class="no">✗</td>
+                            <td class="par">~ some</td>
+                            <td class="pim yes">✓ lan · wi-fi direct · bt</td>
+                        </tr>
+                        <tr>
+                            <td>low regulatory footprint</td>
+                            <td class="par">~ medium</td>
+                            <td class="no">✗ high</td>
+                            <td class="yes">✓ low</td>
+                            <td class="pim yes">✓ low</td>
+                        </tr>
+                        <tr>
+                            <td>production-ready daemon</td>
+                            <td class="yes">✓</td>
+                            <td class="yes">✓</td>
+                            <td class="par">~ partial</td>
+                            <td class="pim yes">✓ rust · memory-safe</td>
+                        </tr>
+                    </tbody>
+                </table>
+                <div class="closing-line">we're not iterating on a competitor — we're building the missing layer.</div>
+            </div>
+
+            <!-- ═══════════════════════════════════════════
+       07 · VISION
+       ═══════════════════════════════════════════ -->
+            <div class="slide" id="s7">
+                <div class="prompt">pim roadmap --next</div>
+                <h2>this is just the <span class="hl">network.</span></h2>
+                <div class="quad-wrap">
+                    <div class="quad">
+                        <div>
+                            <div class="num">01</div>
+                            <div class="glyph">◊</div>
+                            <h3>sdk</h3>
+                        </div>
+                        <p>a library for builders. write apps that talk peer to peer with one import.</p>
+                    </div>
+                    <div class="quad">
+                        <div>
+                            <div class="num">02</div>
+                            <div class="glyph">▦</div>
+                            <h3>app store</h3>
+                        </div>
+                        <p>community-built apps that run on the mesh. dao tools, identity, chat, agents — no cloud.</p>
+                    </div>
+                    <div class="quad">
+                        <div>
+                            <div class="num">03</div>
+                            <div class="glyph">⌬</div>
+                            <h3>radio bridge</h3>
+                        </div>
+                        <p>lora and ham bridges to extend the mesh across kilometers. cities without telecom towers.</p>
+                    </div>
+                    <div class="quad">
+                        <div>
+                            <div class="num">04</div>
+                            <div class="glyph">◈</div>
+                            <h3>community</h3>
+                        </div>
+                        <p>open source, mit licensed. ship code, earn reputation, build the city's own internet.</p>
+                    </div>
+                </div>
+                <div class="vision-line">pim is the layer. <span class="hl">the apps are yours.</span></div>
+            </div>
+
+            <!-- ═══════════════════════════════════════════
+       08 · CLOSE
+       ═══════════════════════════════════════════ -->
+            <div class="slide" id="s8">
+                <div class="prompt">pim connect --future</div>
+                <div class="center">
+                    <div class="close-mark"><span class="glyph">█</span> pim</div>
+                    <div class="sov-list">
+                        sovereign money <span class="dim">·</span> sovereign privacy
+                        <span class="dim">·</span> sovereign work <span class="dim">·</span>
+                        <span class="green">sovereign network</span>
+                    </div>
+                    <div class="slogan">
+                        internet that survives<br />the internet.<span class="slogan-cursor"></span>
+                    </div>
+                    <div class="contact">
+                        <span class="label">reach out</span>
+                        pim@astervia.tech
+                    </div>
+                    <div class="ask">
+                        <span>partners</span><span class="sep">·</span> <span>builders</span><span class="sep">·</span>
+                        <span>investors</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <!-- /#deck -->
+
+        <div id="nav">
+            <button id="btn-prev" onclick="go(-1)" disabled>← prev</button>
+            <span class="counter"><span class="cur" id="cur">1</span> / <span id="tot">9</span></span>
+            <button id="btn-next" onclick="go(1)">next →</button>
+            <span class="hint" style="margin-left: 1rem">f · fullscreen</span>
+        </div>
+
+        <script>
+            const slides = Array.from(document.querySelectorAll(".slide"));
+            const total = slides.length;
+            let idx = 0;
+
+            // Demo state machine for slide 4
+            let demoStep = 0;
+            const demoStates = [
+                {
+                    a: { label: "searching", class: "" },
+                    b: { label: "searching", class: "" },
+                    link: "",
+                    status: '<span class="warn">◇ scanning for peers...</span>',
+                    steps: ["current", "", "", ""],
+                },
+                {
+                    a: { label: "connected", class: "active" },
+                    b: { label: "connected", class: "active" },
+                    link: "connected",
+                    status: '<span class="ok">◆ peers paired · end-to-end encrypted</span>',
+                    steps: ["done", "current", "", ""],
+                },
+                {
+                    a: { label: "no wi-fi", class: "active offline" },
+                    b: { label: "connected", class: "active" },
+                    link: "connected",
+                    status: '<span class="err">✗ wi-fi disabled on A · </span><span class="ok">mesh still up</span>',
+                    steps: ["done", "done", "current", ""],
+                },
+                {
+                    a: { label: "online via mesh", class: "active" },
+                    b: { label: "sharing gateway", class: "active" },
+                    link: "connected",
+                    status: '<span class="ok">◉ A reaches the internet through B · this room is its own internet</span>',
+                    steps: ["done", "done", "done", "done"],
+                },
+            ];
+
+            function applyDemoState(step) {
+                const s = demoStates[step];
+                const a = document.getElementById("laptop-a");
+                const b = document.getElementById("laptop-b");
+                const link = document.getElementById("demo-link");
+                const status = document.getElementById("demo-status");
+                a.className = "laptop " + s.a.class;
+                b.className = "laptop b " + s.b.class;
+                document.getElementById("laptop-a-label").textContent = s.a.label;
+                document.getElementById("laptop-b-label").textContent = s.b.label;
+                link.className = "link " + s.link;
+                status.innerHTML = s.status;
+                document.querySelectorAll("#s4 .demo-steps .step").forEach((el, i) => {
+                    el.className = "step " + s.steps[i];
+                });
+            }
+
+            function goTo(n) {
+                slides[idx].classList.remove("active");
+                idx = Math.max(0, Math.min(n, total - 1));
+
+                // restart animations: clone & swap to retrigger CSS animations
+                const next = slides[idx];
+                const nextId = next.id;
+                next.classList.add("active");
+
+                document.getElementById("cur").textContent = idx + 1;
+                document.getElementById("btn-prev").disabled = idx === 0;
+                document.getElementById("btn-next").disabled = idx === total - 1;
+                document.getElementById("progress-fill").style.width = (((idx + 1) / total) * 100).toFixed(2) + "%";
+
+                // reset demo to step 0 when entering slide 4
+                if (nextId === "s4") {
+                    demoStep = 0;
+                    applyDemoState(0);
+                }
+            }
+
+            function go(dir) {
+                // On slide 4, right-arrow advances demo first; left rewinds it
+                if (slides[idx].id === "s4") {
+                    if (dir === 1 && demoStep < demoStates.length - 1) {
+                        demoStep++;
+                        applyDemoState(demoStep);
+                        return;
+                    }
+                    if (dir === -1 && demoStep > 0) {
+                        demoStep--;
+                        applyDemoState(demoStep);
+                        return;
+                    }
+                }
+                goTo(idx + dir);
+            }
+
+            document.addEventListener("keydown", (e) => {
+                switch (e.key) {
+                    case "ArrowRight":
+                    case "ArrowDown":
+                    case " ":
+                    case "Enter":
+                        e.preventDefault();
+                        go(1);
+                        break;
+                    case "ArrowLeft":
+                    case "ArrowUp":
+                        e.preventDefault();
+                        go(-1);
+                        break;
+                    case "Home":
+                        goTo(0);
+                        break;
+                    case "End":
+                        goTo(total - 1);
+                        break;
+                    case "f":
+                    case "F":
+                        if (!document.fullscreenElement) {
+                            document.documentElement.requestFullscreen();
+                        } else {
+                            document.exitFullscreen();
+                        }
+                        break;
+                }
+            });
+
+            // Init
+            applyDemoState(0);
+        </script>
+    </body>
+</html>
