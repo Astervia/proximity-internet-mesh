@@ -756,20 +756,7 @@ pub(super) async fn run_event_loop(state: Arc<DaemonState>) -> Result<()> {
     }
     tokio::time::sleep(Duration::from_millis(50)).await; // let Goodbye flush
 
-    if !state.is_gateway {
-        let mesh_ip = Ipv4Addr::from(state.mesh_ip.load(Ordering::Relaxed));
-        let prefix_len = state.mesh_prefix_len.load(Ordering::Relaxed);
-        let gateway_ip = first_host_in_subnet(mesh_ip, prefix_len);
-        if let Err(e) = state.tun.remove_default_route(gateway_ip) {
-            warn!(%gateway_ip, "default route cleanup failed: {e}");
-        }
-        if let Some((mesh_ipv6, prefix_len_v6)) = *state.mesh_ipv6.read().await {
-            let gateway_ipv6 = first_host_in_subnet_v6(mesh_ipv6, prefix_len_v6);
-            if let Err(e) = state.tun.remove_default_ipv6_route(gateway_ipv6) {
-                warn!(%gateway_ipv6, "IPv6 default route cleanup failed: {e}");
-            }
-        }
-    } else {
+    if state.is_gateway {
         // Gateway: reverse the iptables/ip6tables rules installed by
         // `setup_masquerade` so shutting pim down doesn't leave the host
         // dropping its own reply traffic.
@@ -783,6 +770,12 @@ pub(super) async fn run_event_loop(state: Arc<DaemonState>) -> Result<()> {
             gw_v6.teardown_masquerade();
         }
     }
+    // Non-gateway split-default route cleanup is owned by
+    // `route_installer` (app/route_installer.rs) — it tracks the
+    // selected-gateway mesh IP it actually installed (which matters
+    // under multi-gateway: the legacy code here always assumed the
+    // gateway was the .1 of the local subnet, so the wrong route was
+    // attempted on shutdown when a non-.1 gateway was elected).
 
     // Clean up
     for peer in peers {

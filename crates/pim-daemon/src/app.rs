@@ -153,8 +153,8 @@ use reconnect::ReconnectManager;
 use reconnect_task::run_reconnect_task;
 use reputation::ReputationTracker;
 use runtime_config::{
-    first_host_in_subnet, first_host_in_subnet_v6, icmp_echo_reply, install_signal_handler,
-    node_capabilities, parse_cidr, parse_ipv6_cidr, resolve_configured_peer_targets,
+    icmp_echo_reply, install_signal_handler, node_capabilities, parse_cidr, parse_ipv6_cidr,
+    resolve_configured_peer_targets,
 };
 use send_buffer::{SendBuffer, DEFAULT_CAPACITY, DEFAULT_TIMEOUT};
 use session::Session;
@@ -278,6 +278,14 @@ pub(crate) struct DaemonState {
     /// periodic-broadcast task re-reads the interval immediately
     /// instead of waiting for its current sleep to elapse.
     pub(crate) broadcast_notify: Arc<Notify>,
+    /// Wakes the `route_installer` task whenever `route_on` is mutated
+    /// (via the JSON-RPC `route.set_split_default` handler) so the
+    /// kernel-level split-default routes flip in/out without waiting
+    /// for the next 2 s reconciliation tick. The installer also
+    /// polls on a tick so gateway-selection changes (multi-gateway,
+    /// load / RTT swings, gateway disappearance) get followed
+    /// automatically without an explicit event channel.
+    pub(crate) route_install_notify: Arc<Notify>,
 }
 
 impl DaemonState {
@@ -289,6 +297,7 @@ impl DaemonState {
 // ── Main event loop ───────────────────────────────────────────────────────────
 
 mod event_loop;
+mod route_installer;
 
 use event_loop::run_event_loop;
 
@@ -636,6 +645,7 @@ pub(crate) async fn run() -> Result<()> {
         last_broadcast_ms: Arc::new(AtomicI64::new(i64::MIN)),
         last_broadcast_recipients: Arc::new(AtomicU64::new(0)),
         broadcast_notify: Arc::new(Notify::new()),
+        route_install_notify: Arc::new(Notify::new()),
     });
 
     // ── Identity-broadcast background task ────────────────────────────────
@@ -891,6 +901,9 @@ pub(crate) async fn run() -> Result<()> {
         tokio::spawn(run_gateway_return(state.clone()));
         tokio::spawn(run_conntrack_gc(state.clone()));
     }
+    // Reconciles the kernel's split-default routes against `route_on`
+    // and the routing table's selected gateway. No-op on gateway nodes.
+    route_installer::spawn(state.clone());
 
     // ── Main event loop ───────────────────────────────────────────────────
     let event_result = run_event_loop(state).await;

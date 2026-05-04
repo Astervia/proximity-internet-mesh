@@ -1589,13 +1589,21 @@ struct RouteSetSplitDefaultParams {
     on: bool,
 }
 
-/// Toggle split-default routing. Currently a state-only operation —
-/// the daemon's IP forwarder doesn't yet observe `state.route_on`, so
-/// this RPC's job is to (a) keep an authoritative atomic flag, (b)
-/// broadcast the corresponding `status.event` so subscribed UIs flip
-/// without re-polling, and (c) return the new state to the caller.
-/// Wiring the actual default-route mutation through the forwarder is
-/// a separate follow-up.
+/// Toggle split-default routing.
+///
+/// Three side-effects (in order):
+///   1. Store `parsed.on` into `state.route_on` atomically.
+///   2. Wake the `route_installer` background task so it reconciles
+///      the kernel's `0.0.0.0/1`/`128.0.0.0/1` routes within one async
+///      hop instead of waiting for its 2 s tick. The installer reads
+///      the same atomic + the routing table's selected gateway and
+///      decides what to install/remove — no per-RPC `ip route` call
+///      from this handler so concurrent RPC calls can't race against
+///      each other.
+///   3. Broadcast a discriminated `status.event` (`route_on` /
+///      `route_off`) so subscribed UIs flip the toggle badge without
+///      a follow-up `status` poll. SendError on no-subscribers is fine
+///      — late connections pick up the state via the next `status`.
 fn method_route_set_split_default(state: &Arc<DaemonState>, params: Option<&Value>) -> RpcResult {
     info!(?params, "route.set_split_default invoked");
     let parsed: RouteSetSplitDefaultParams = match params {
@@ -1613,10 +1621,8 @@ fn method_route_set_split_default(state: &Arc<DaemonState>, params: Option<&Valu
     state
         .route_on
         .store(parsed.on, std::sync::atomic::Ordering::SeqCst);
+    state.route_install_notify.notify_one();
 
-    // Broadcast the discriminated `status.event` per pim-ui's rpc-types
-    // contract. SendError on no-subscribers is fine — UIs that connect
-    // later see the current state via the next `status` RPC.
     let kind = if parsed.on { "route_on" } else { "route_off" };
     let send_result = state.status_events_tx.send(json!({
         "jsonrpc": "2.0",

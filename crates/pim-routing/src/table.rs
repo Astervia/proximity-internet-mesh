@@ -538,6 +538,25 @@ impl RoutingTable {
         self.best_gateway_entry().map(|(dst, e)| (dst, e.next_hop))
     }
 
+    /// Mesh IPv4 of the currently-selected best gateway, or `None` when
+    /// this node is itself a gateway / no usable gateway is known / the
+    /// gateway entry doesn't yet carry an advertised `mesh_ip`.
+    ///
+    /// This is the `via <ip>` that the daemon's route installer should
+    /// hand to `ip route replace 0.0.0.0/1 via <ip> dev pim0 onlink`,
+    /// so traffic for the split-default routes lands on the elected
+    /// gateway. Re-reading this on every reconciliation tick is what
+    /// lets the installer follow gateway-selection swings (load /
+    /// RTT changes, hop count drift, gateway disappearance) without
+    /// extra plumbing — no event channel needed because gateway moves
+    /// are rare and the polling cost is one HashMap scan.
+    pub fn nearest_gateway_mesh_ip(&self) -> Option<Ipv4Addr> {
+        if self.is_gateway {
+            return None;
+        }
+        self.best_gateway_entry().and_then(|(_, e)| e.mesh_ip)
+    }
+
     /// All known gateways sorted by composite score (best first).
     pub fn all_gateways(&self) -> Vec<(NodeId, u8)> {
         let mut gateways: Vec<(NodeId, u8)> = self
