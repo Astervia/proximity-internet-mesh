@@ -37,6 +37,13 @@ use tracing::{debug, info, warn};
 
 use crate::app::DaemonState;
 
+/// Public DNS resolvers handed to systemd-resolved when split-default
+/// routing is engaged. Picked because they're (a) anycast — reachable
+/// over any internet uplink the gateway might have, (b) fast on the
+/// global mean, (c) reasonably privacy-conscious. Listing two so a
+/// single resolver outage doesn't break the mesh.
+const MESH_DNS_SERVERS: &[&str] = &["1.1.1.1", "1.0.0.1", "8.8.8.8"];
+
 /// IPv6 split-default routes are `dev pim0`-only — `pim-tun` ignores
 /// the `gateway_ipv6` parameter on Linux/macOS (see
 /// `pim-tun::TunInterface::add_default_ipv6_route`). All we track is
@@ -65,6 +72,13 @@ async fn run(state: Arc<DaemonState>) {
     info!("route installer: started");
     let mut current_via_v4: Option<Ipv4Addr> = None;
     let mut current_v6: bool = false;
+    // Tracks whether we've configured pim0's DNS via systemd-resolved.
+    // Coupled to V4 install state — if either the V4 or V6 routes are
+    // up we want apps to resolve names through the mesh; if both are
+    // down we want the default resolver back. We key on `current_via_v4`
+    // OR `current_v6` below.
+    let mut current_dns: bool = false;
+    let iface_name = state.tun.name().to_string();
 
     loop {
         tokio::select! {
@@ -86,6 +100,9 @@ async fn run(state: Arc<DaemonState>) {
                     } else {
                         info!("route installer shutdown: V6 split-default routes removed");
                     }
+                }
+                if current_dns {
+                    revert_interface_dns(&iface_name);
                 }
                 info!("route installer: stopped");
                 return;
@@ -154,5 +171,133 @@ async fn run(state: Arc<DaemonState>) {
                 current_v6 = false;
             }
         }
+
+        // ── DNS: hand systemd-resolved a public resolver pinned to
+        //        pim0 whenever any mesh route is up; revert when both
+        //        come down. Without this, when the user disables wifi
+        //        the system's DHCP-derived nameserver becomes
+        //        unreachable and apps report "no internet" even though
+        //        the IP path through the mesh is live (curl by IP works,
+        //        curl by hostname doesn't). Anycast resolvers
+        //        (1.1.1.1, 8.8.8.8) flow through the mesh + gateway NAT
+        //        like any other internet destination.
+        let desired_dns = current_via_v4.is_some() || current_v6;
+        if desired_dns != current_dns {
+            if desired_dns {
+                if set_interface_dns(&iface_name, MESH_DNS_SERVERS) {
+                    current_dns = true;
+                }
+            } else {
+                revert_interface_dns(&iface_name);
+                current_dns = false;
+            }
+        }
     }
 }
+
+/// Configure systemd-resolved to use `servers` as the DNS upstream for
+/// queries arriving on `iface`, with a wildcard search domain so it
+/// becomes the *default* resolver while routing is engaged. Returns
+/// `true` on success so the caller can flip its `current_dns` flag;
+/// returns `false` (with a warn log) if `resolvectl` isn't installed
+/// or fails — the routes are still useful for IP-only traffic and the
+/// user can resolve manually with `--dns-servers`.
+///
+/// Linux-only because systemd-resolved is the only major resolver that
+/// exposes a per-interface DNS API. macOS uses scutil/scsetup which
+/// has different ergonomics; Windows uses netsh. Neither runs the
+/// daemon today (the route_installer itself is Linux-pim0-only), so
+/// the gating below is mostly defensive.
+#[cfg(target_os = "linux")]
+fn set_interface_dns(iface: &str, servers: &[&str]) -> bool {
+    let mut dns_args: Vec<&str> = vec!["dns", iface];
+    dns_args.extend_from_slice(servers);
+    let dns_status = std::process::Command::new("resolvectl")
+        .args(&dns_args)
+        .status();
+    match dns_status {
+        Ok(s) if s.success() => {}
+        Ok(s) => {
+            warn!(
+                iface,
+                exit = ?s.code(),
+                "resolvectl dns failed; DNS via mesh will not work until set manually"
+            );
+            return false;
+        }
+        Err(e) => {
+            warn!(
+                iface,
+                "resolvectl unavailable ({e}); DNS via mesh will not work until set manually \
+                 (e.g. `resolvectl dns {iface} 1.1.1.1` and `resolvectl domain {iface} '~.'`)"
+            );
+            return false;
+        }
+    }
+    // The wildcard search domain `~.` makes pim0's resolvers the global
+    // fallback for every query, not just for names ending in a
+    // pim-specific suffix. Without this, only mDNS-style local domains
+    // would route through pim0 and global names (gmail.com, etc.) would
+    // still hit the now-broken DHCP resolver.
+    let dom_status = std::process::Command::new("resolvectl")
+        .args(["domain", iface, "~."])
+        .status();
+    match dom_status {
+        Ok(s) if s.success() => {
+            info!(iface, servers = ?servers, "configured pim0 as default DNS resolver");
+            true
+        }
+        Ok(s) => {
+            warn!(
+                iface,
+                exit = ?s.code(),
+                "resolvectl domain '~.' failed; pim0 DNS set but not promoted to default \
+                 — global hostnames may still hit the wifi resolver"
+            );
+            // The dns assignment did succeed; treat as half-success so
+            // we still revert it on teardown.
+            true
+        }
+        Err(e) => {
+            warn!(iface, "resolvectl domain unavailable ({e})");
+            true
+        }
+    }
+}
+
+/// Revert any per-interface DNS configuration we set on `iface`.
+/// Idempotent + tolerant: if `resolvectl` is missing or the interface
+/// has no overrides, the call no-ops and we log at debug.
+#[cfg(target_os = "linux")]
+fn revert_interface_dns(iface: &str) {
+    match std::process::Command::new("resolvectl")
+        .args(["revert", iface])
+        .status()
+    {
+        Ok(s) if s.success() => {
+            info!(iface, "reverted pim0 DNS overrides");
+        }
+        Ok(s) => {
+            debug!(
+                iface,
+                exit = ?s.code(),
+                "resolvectl revert exited non-zero (probably no overrides to revert)"
+            );
+        }
+        Err(e) => {
+            debug!(iface, "resolvectl revert failed ({e})");
+        }
+    }
+}
+
+// On non-Linux targets the route installer never spawns (route_installer
+// is Linux-only by virtue of pim-tun's add_default_route being a no-op
+// elsewhere), but keep stub signatures so the rest of the file builds
+// on macOS / Windows daemon configurations.
+#[cfg(not(target_os = "linux"))]
+fn set_interface_dns(_iface: &str, _servers: &[&str]) -> bool {
+    false
+}
+
+#[cfg(not(target_os = "linux"))]
+fn revert_interface_dns(_iface: &str) {}
