@@ -5,6 +5,17 @@
 //! and routes the responses back to the originating mesh client.
 
 #![warn(missing_docs)]
+// Phase A android note: gateway/NAT requires `iptables` (linux) or
+// `pfctl` (macos). Neither exists on android, so the gateway role is
+// not available there in v1. The engine still compiles to keep the
+// workspace building for `aarch64-linux-android`; at runtime
+// `setup_masquerade` falls into the explicit unsupported error path
+// in `engine.rs` and `gateway.enabled = true` produces a clear
+// "platform unsupported" error in logs.
+#![cfg_attr(
+    not(any(target_os = "linux", target_os = "macos")),
+    allow(dead_code, unused_imports, unused_variables)
+)]
 
 mod engine;
 mod ipv6;
