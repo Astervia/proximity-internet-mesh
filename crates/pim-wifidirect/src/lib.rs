@@ -120,6 +120,12 @@ impl WifiDirectDiscovery {
     /// 5. Resolves peer IP via [`WifiDirectGroup::from_iface`].
     /// 6. Sends `SocketAddr` on the peer channel.
     pub async fn run(self, cancel: CancellationToken) {
+        // Phase A note: on android this falls into the
+        // `cfg(not(target_os = "macos"))` arm below, which immediately
+        // logs a warn and returns when `wpa_cli p2p_find` fails (the
+        // binary doesn't exist on android). Phase B replaces the linux
+        // wpa_cli backend with a JNI bridge to Java
+        // `WifiP2pManager`, at which point android gets a real path.
         #[cfg(target_os = "macos")]
         {
             if self.config.interface != WifiDirectConfig::default().interface
