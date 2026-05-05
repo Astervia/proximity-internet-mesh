@@ -45,6 +45,15 @@ mod session;
 #[cfg(target_os = "linux")]
 mod socket;
 
+// Phase B note for android: a real backend lives in
+// `pim-bluetooth/src/rfcomm/android.rs` (not yet present — needs
+// Tauri Android plugin from Phase B Step 4 to ship the Java
+// `BluetoothSocket` byte stream over JNI). The current Phase A stub
+// returns `UnsupportedPlatform` from `RfcommService::start` on
+// non-linux; that contract stays the same when the android backend
+// arrives, just the constructor body changes. Existing `frame.rs`
+// codec is platform-agnostic and shared.
+
 mod frame;
 
 #[cfg(test)]
