@@ -8,12 +8,19 @@ mod macos;
 #[cfg(target_os = "macos")]
 pub(crate) use macos::PlatformTunInterface;
 
-// Android falls into the `unsupported` arm in Phase A: the real backend
-// (driven by an FD passed in from `VpnService.establish()`) lands in
-// Phase B. Until then the daemon honestly returns `TunError::Unavailable`
-// at runtime, which keeps the workspace compile gate green for
-// `aarch64-linux-android` without changing Linux/macOS behaviour.
-#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+// Phase B: android receives a TUN fd from the host
+// `VpnService.establish()` call via the JNI bridge in
+// `pim-daemon::jni`, which sets `PIM_TUN_FD`. The android backend
+// adopts that fd; addressing/MTU/routes are configured by Java
+// before `establish()` returns, so the native methods are no-ops.
+#[cfg(target_os = "android")]
+mod android;
+#[cfg(target_os = "android")]
+pub(crate) use android::PlatformTunInterface;
+
+// Targets without a backend (windows, ios, freebsd, etc.) keep
+// returning `TunError::Unavailable` from the unsupported stub.
+#[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "android")))]
 mod unsupported;
-#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+#[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "android")))]
 pub(crate) use unsupported::PlatformTunInterface;
