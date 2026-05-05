@@ -13,6 +13,20 @@ default = ["messaging"]
 # messages.* RPC methods, no messages.db).
 messaging = ["dep:pim-messaging"]
 
+# Phase A: ship both `lib` (rlib) and the existing `bin` so the daemon
+# can be linked in-process by mobile embeddings (Phase B Android, future
+# iOS) without changing the standalone binary path used by Linux/macOS
+# desktop deployments. `cdylib` is intentionally NOT enabled here yet —
+# Phase B turns it on once the JNI bridge is in place.
+[lib]
+name = "pim_daemon"
+path = "src/lib.rs"
+crate-type = ["rlib"]
+
+[[bin]]
+name = "pim-daemon"
+path = "src/main.rs"
+
 [dependencies]
 pim-bluetooth = { workspace = true }
 pim-core = { workspace = true }
