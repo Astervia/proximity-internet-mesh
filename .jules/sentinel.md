@@ -21,3 +21,8 @@
 **Vulnerability:** The daemon's config generation (`pim-cli/src/main.rs`) and identity key generation (`pim-crypto/src/identity.rs`) checked `path.exists()` before calling `create(true).truncate(true)`. This creates a Time-of-Check to Time-of-Use (TOCTOU) race condition where an attacker could replace the file with a symlink between the check and the use, potentially leading to arbitrary file overwrites or key theft.
 **Learning:** Checking for file existence before creating a sensitive file is inherently racy and insecure.
 **Prevention:** Always rely on the filesystem to enforce exclusivity. Use `OpenOptions::new().create_new(true)` to atomically create a file only if it does not already exist, and handle `ErrorKind::AlreadyExists` errors gracefully.
+
+## 2024-05-24 - [Secure File Permissions for Daemon Config Broadcast]
+**Vulnerability:** The daemon's `persist_broadcast_config_to_disk` function in `crates/pim-daemon/src/rpc.rs` used `std::fs::write` to write the updated broadcast configuration to a temporary file before renaming it. This relies on the system's default `umask` and can leave the configuration file world-readable.
+**Learning:** Relying on default file permissions when writing runtime configuration can expose sensitive node information to other local users.
+**Prevention:** Explicitly use `std::fs::OpenOptions` with `OpenOptionsExt::mode(0o600)` on Unix systems to ensure strict file access permissions when saving configuration files.
