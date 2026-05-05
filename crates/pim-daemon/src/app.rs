@@ -52,7 +52,7 @@ pub(crate) mod identity_broadcast;
 #[path = "ip_control.rs"]
 mod ip_control;
 #[path = "logs_subscriber.rs"]
-mod logs_subscriber;
+pub(crate) mod logs_subscriber;
 #[path = "net.rs"]
 mod net;
 #[path = "observability.rs"]
@@ -433,6 +433,48 @@ pub(crate) async fn run() -> Result<()> {
         .await
         .context("failed to write PID file")?;
 
+    // Cancellation lives in the binary entrypoint so the signal-handler
+    // task — itself a Linux/macOS-only concern — stays out of
+    // `run_in_process`. Mobile embeddings (Phase B Android JNI shim)
+    // create their own `CancellationToken` and fire it from the Java
+    // foreground-service lifecycle.
+    let cancel = CancellationToken::new();
+    {
+        let cancel = cancel.clone();
+        tokio::spawn(async move {
+            install_signal_handler(cancel).await;
+        });
+    }
+
+    run_in_process(config, std::path::PathBuf::from(&config_path), cancel).await
+}
+
+/// Library entrypoint for in-process daemon embeddings.
+///
+/// Phase A introduced the `pim_daemon::run_binary()` shim that mirrors
+/// the existing CLI binary contract. Phase B's Android JNI bridge
+/// links against this function directly: the Tauri app loads the
+/// `Config` from `getFilesDir()/pim.toml`, installs a logcat tracing
+/// subscriber, and calls
+/// `run_in_process(config, config_path, cancel)` from a Foreground
+/// Service. The function is deliberately free of:
+///
+/// * argv parsing,
+/// * `tracing_subscriber` setup,
+/// * pid-file management,
+/// * signal handlers,
+///
+/// so it can run inside a host Java process without colliding with
+/// Java's `Runtime.exit` semantics or the system logger.
+///
+/// `config_path` is the on-disk location of the rendered config and is
+/// stored on the `DaemonState` for config-reload RPCs. Mobile callers
+/// should pass the path they wrote to (e.g. `getFilesDir()/pim.toml`).
+pub async fn run_in_process(
+    config: Config,
+    config_path: std::path::PathBuf,
+    cancel: CancellationToken,
+) -> Result<()> {
     let key_path = expand_tilde(&config.security.key_file);
     let identity = Arc::new(
         Identity::load_or_generate(&key_path).context("failed to load/generate identity")?,
@@ -477,8 +519,9 @@ pub(crate) async fn run() -> Result<()> {
         "TUN up"
     );
 
-    // ── Cancellation (created early so transport listeners honour it) ─────
-    let cancel = CancellationToken::new();
+    // Cancellation is owned by the caller (`run` for the binary,
+    // the JNI shim for the Android in-process embedding) so transport
+    // listeners — which capture clones below — already honour it.
 
     // ── Transport ─────────────────────────────────────────────────────────
     let listen_addr: SocketAddr = format!("0.0.0.0:{}", config.transport.listen_port)
@@ -703,7 +746,7 @@ pub(crate) async fn run() -> Result<()> {
         discovery_peer_table: discovery_runtime
             .as_ref()
             .map(|(discovery_svc, _)| discovery_svc.peer_table()),
-        config_path: std::path::PathBuf::from(&config_path),
+        config_path: config_path.clone(),
         route_on: AtomicBool::new(false),
         // 64-frame ring is enough for the typical bursts (interface up,
         // gateway selected, route on/off) without dropping; lagged

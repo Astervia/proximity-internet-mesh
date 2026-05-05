@@ -13,15 +13,16 @@ default = ["messaging"]
 # messages.* RPC methods, no messages.db).
 messaging = ["dep:pim-messaging"]
 
-# Phase A: ship both `lib` (rlib) and the existing `bin` so the daemon
-# can be linked in-process by mobile embeddings (Phase B Android, future
-# iOS) without changing the standalone binary path used by Linux/macOS
-# desktop deployments. `cdylib` is intentionally NOT enabled here yet —
-# Phase B turns it on once the JNI bridge is in place.
+# Phase A added the rlib alongside the existing bin so mobile
+# embeddings (Phase B Android, future iOS) can link the daemon
+# in-process. Phase B adds `cdylib` so the android target produces a
+# `libpim_daemon.so` that Gradle drops into the APK's `jniLibs`. The
+# rlib is still built for desktop callers and tests; `cdylib` is a
+# no-op overhead on host targets that don't link it.
 [lib]
 name = "pim_daemon"
 path = "src/lib.rs"
-crate-type = ["rlib"]
+crate-type = ["rlib", "cdylib"]
 
 [[bin]]
 name = "pim-daemon"
@@ -57,6 +58,15 @@ ed25519-dalek = { workspace = true }
 libc = { workspace = true }
 rusqlite = { workspace = true }
 uuid = { workspace = true }
+
+# Phase B: JNI bridge. Pulled in only for android so the desktop
+# binary build doesn't grow a dep that ships nothing useful on Linux
+# or macOS. `tracing-android` writes to logcat from the same `tracing`
+# events the rest of the daemon emits.
+[target.'cfg(target_os = "android")'.dependencies]
+jni = { version = "0.21", default-features = false }
+tracing-android = "0.2"
+ndk-context = "0.1"
 
 [dev-dependencies]
 tempfile = "3"
