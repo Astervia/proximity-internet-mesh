@@ -10,6 +10,15 @@
 //!    daemon can reuse the normal TCP transport and handshake path unchanged.
 
 #![warn(missing_docs)]
+// Phase A android stub: when neither linux nor macos backend is
+// compiled in, most fields and helpers on `BluetoothDiscovery` go
+// unread (the stub `run` returns immediately). Allow the dead-code
+// lint on those targets so `clippy -D warnings` stays green; the
+// linux + macos host builds still flag genuine dead code.
+#![cfg_attr(
+    not(any(target_os = "linux", target_os = "macos")),
+    allow(dead_code, unused_imports, unused_variables)
+)]
 
 #[cfg(target_os = "linux")]
 use std::collections::HashMap;
@@ -41,12 +50,21 @@ pub const DEFAULT_IP_COMMAND: &str = "ip";
 /// Default command used to inspect Bluetooth PAN neighbors.
 #[cfg(target_os = "macos")]
 pub const DEFAULT_IP_COMMAND: &str = "arp";
+/// Placeholder for platforms (e.g. android) where the Bluetooth PAN
+/// watcher does not run. Phase A keeps the constant defined so
+/// downstream `pim-daemon::bluetooth_env` resolves the symbol; the
+/// watcher returns immediately on these targets so the path is unused.
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+pub const DEFAULT_IP_COMMAND: &str = "";
 /// Default command used for radio discovery and pairing.
 #[cfg(target_os = "linux")]
 pub const DEFAULT_BLUETOOTHCTL_COMMAND: &str = "bluetoothctl";
 /// Default command used for radio discovery and pairing.
 #[cfg(target_os = "macos")]
 pub const DEFAULT_BLUETOOTHCTL_COMMAND: &str = "blueutil";
+/// Placeholder for platforms without a host bluetooth CLI helper.
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+pub const DEFAULT_BLUETOOTHCTL_COMMAND: &str = "";
 /// Default `bt-network` command used to request a PAN/NAP connection.
 pub const DEFAULT_BT_NETWORK_COMMAND: &str = "bt-network";
 /// Default `iptables` command used to install NAT rules for the Bluetooth subnet.
@@ -225,8 +243,19 @@ impl BluetoothDiscovery {
     }
 }
 
+// Platform-specific implementations only compile when there is a real
+// host backend. The `BluetoothDiscovery::run` entry point falls through
+// to an honest no-op stub on other targets (see `service_stub` below)
+// so callers in `pim-daemon` link cleanly without changing their
+// imports. `support` stays compiled everywhere because its individual
+// helpers are already cfg-gated and the in-crate test harness consumes
+// them under `cfg(test)`.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 mod platform_impl;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 mod service;
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+mod service_stub;
 mod support;
 
 /// Phase 7 RFCOMM auto-discovery service. Linux production impl of the
@@ -239,4 +268,8 @@ pub mod rfcomm;
 #[cfg(test)]
 mod tests;
 
+// `support::*` re-export keeps the existing `tests` module compiling
+// on hosts that bring in the cfg(test) variants of those helpers. On
+// android the `tests` submodule still references these names; the
+// helpers exist there too because their inner cfgs include `test`.
 use support::*;
