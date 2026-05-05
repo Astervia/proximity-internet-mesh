@@ -11,6 +11,13 @@
 //!
 //! Both platforms honour `$PIM_RPC_SOCKET` for the socket path so users
 //! can override at run time without recompiling.
+//!
+//! Android (Phase A): falls into the generic `cfg(not(target_os =
+//! "linux"))` arms below. `runtime_dir()` returns `/tmp`, which is fine
+//! for the workspace compile gate but not for a real device — Phase B
+//! must supply the app-private `getFilesDir()` path through the JNI
+//! bridge (e.g. via `$PIM_RPC_SOCKET=@pim.sock` and a daemon-side
+//! `$PIM_DATA_DIR` env override).
 
 use std::path::PathBuf;
 
