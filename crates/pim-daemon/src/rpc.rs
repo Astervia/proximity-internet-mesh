@@ -144,7 +144,10 @@ pub(crate) async fn run_rpc_server(state: Arc<DaemonState>, socket_path: PathBuf
     // Make the socket world-rw-for-its-group so user-mode UIs can connect
     // without being root. The directory permissions still gate access on
     // the system-daemon path; on the user-daemon path the dir is the
-    // user's `$XDG_RUNTIME_DIR` / `$TMPDIR`, already private.
+    // user's `$XDG_RUNTIME_DIR` / `$TMPDIR`, already private. On Phase B
+    // Android the socket lives inside the app's private `filesDir`
+    // (set via `$PIM_RPC_SOCKET` from the JNI bridge), which is already
+    // 0o700 to the app uid, so this chmod is benign.
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
