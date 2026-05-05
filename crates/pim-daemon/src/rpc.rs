@@ -1530,7 +1530,8 @@ async fn persist_broadcast_config_to_disk(state: &Arc<DaemonState>) -> anyhow::R
             options.mode(0o600);
         }
 
-        let mut file = options.open(&tmp)
+        let mut file = options
+            .open(&tmp)
             .with_context(|| format!("open tmp {}", tmp.display()))?;
         use std::io::Write;
         file.write_all(serialized.as_bytes())
