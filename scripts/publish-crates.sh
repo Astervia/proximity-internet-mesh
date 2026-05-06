@@ -37,11 +37,19 @@ cargo +1.94.0 clippy --workspace --all-targets --locked -- -D warnings
 cargo +1.94.0 test --workspace --all-targets --locked
 echo ""
 
-# Topological publish order (each crate after all its internal dependencies)
+# Topological publish order (each crate after all its internal dependencies).
+#
+# pim-plugin    depends on: pim-core, pim-protocol
+# pim-messaging depends on: pim-core, pim-crypto, pim-protocol, pim-plugin
+# pim-daemon    depends on: pim-plugin (and pim-messaging when the
+#                           `messaging` Cargo feature is enabled, which
+#                           is the default)
 CRATES=(
     pim-core
     pim-crypto
     pim-protocol
+    pim-plugin
+    pim-messaging
     pim-gateway
     pim-tun
     pim-bluetooth

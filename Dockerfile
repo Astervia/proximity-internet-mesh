@@ -15,12 +15,15 @@ COPY crates/pim-gateway/Cargo.toml    crates/pim-gateway/
 COPY crates/pim-routing/Cargo.toml    crates/pim-routing/
 COPY crates/pim-discovery/Cargo.toml  crates/pim-discovery/
 COPY crates/pim-wifidirect/Cargo.toml crates/pim-wifidirect/
+COPY crates/pim-plugin/Cargo.toml     crates/pim-plugin/
+COPY crates/pim-messaging/Cargo.toml  crates/pim-messaging/
 COPY crates/pim-daemon/Cargo.toml     crates/pim-daemon/
 COPY crates/pim-cli/Cargo.toml        crates/pim-cli/
 
 # Stub sources so `cargo fetch` and the dependency compile step can run.
 RUN for crate in pim-bluetooth pim-core pim-crypto pim-protocol pim-transport pim-tun \
-        pim-gateway pim-routing pim-discovery pim-wifidirect; do \
+        pim-gateway pim-routing pim-discovery pim-wifidirect \
+        pim-plugin pim-messaging; do \
         mkdir -p crates/$crate/src && \
         printf 'pub fn _stub() {}' > crates/$crate/src/lib.rs; \
     done && \
@@ -52,6 +55,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         netcat-openbsd \
         ca-certificates \
         procps \
+        jq \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /build/target/release/pim-daemon /usr/local/bin/pim-daemon
