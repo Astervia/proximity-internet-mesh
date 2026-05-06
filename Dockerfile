@@ -56,6 +56,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         ca-certificates \
         procps \
         jq \
+        sqlite3 \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /build/target/release/pim-daemon /usr/local/bin/pim-daemon

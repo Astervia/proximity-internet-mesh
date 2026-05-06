@@ -71,6 +71,9 @@ mod reconnect;
 mod reconnect_task;
 #[path = "reputation.rs"]
 mod reputation;
+#[cfg(target_os = "linux")]
+#[path = "rfcomm_cleanup.rs"]
+mod rfcomm_cleanup;
 #[path = "rpc.rs"]
 mod rpc;
 #[path = "runtime_config.rs"]
@@ -984,6 +987,20 @@ pub(crate) async fn run() -> Result<()> {
         debug!("Bluetooth RFCOMM disabled by config");
         None
     };
+
+    // RFCOMM peer cleanup task — opt-in. Phase 2 of
+    // plans/rfcomm-reconnect/plan.md. Spawned only when RFCOMM is
+    // enabled (no point cleaning lifecycle rows we never write to)
+    // and the operator has explicitly enabled cleanup.
+    #[cfg(target_os = "linux")]
+    if config.bluetooth_rfcomm.enabled && config.bluetooth_rfcomm.peer_cleanup_enabled {
+        let cleanup_cfg = rfcomm_cleanup::build_cleanup_config(
+            bluetoothctl_command(),
+            config.bluetooth_rfcomm.max_unreachable_lifetime_s,
+            config.bluetooth_rfcomm.cleanup_interval_s,
+        );
+        rfcomm_cleanup::spawn(cleanup_cfg, state.peer_directory.clone(), cancel.clone());
+    }
 
     // ── Background tasks ──────────────────────────────────────────────────
     tokio::spawn(run_reassembly_gc(state.clone()));
