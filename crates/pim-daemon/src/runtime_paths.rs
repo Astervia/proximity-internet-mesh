@@ -128,8 +128,16 @@ pub(crate) fn data_dir() -> PathBuf {
 }
 
 /// Default messages.db path inside [`data_dir`].
+#[cfg(feature = "messaging")]
 pub(crate) fn messages_db_path() -> PathBuf {
     data_dir().join("messages.db")
+}
+
+/// Default peers.db path inside [`data_dir`]. Owned by the daemon's
+/// peer-directory module — separate from any plugin database so the
+/// keystore survives independently of optional features.
+pub(crate) fn peers_db_path() -> PathBuf {
+    data_dir().join("peers.db")
 }
 
 /// Default config-file path when `pim-daemon` is started without an

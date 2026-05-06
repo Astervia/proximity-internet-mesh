@@ -78,7 +78,9 @@ mod codes {
     pub(super) const INTERNAL_ERROR: i32 = -32603;
     pub(super) const RPC_VERSION_MISMATCH: i32 = -32001;
     pub(super) const GATEWAY_NOT_SUPPORTED: i32 = -32031;
+    #[cfg(feature = "messaging")]
     pub(super) const MESSAGE_PEER_UNKNOWN: i32 = -32060;
+    #[cfg(feature = "messaging")]
     pub(super) const MESSAGE_BODY_TOO_LARGE: i32 = -32061;
     pub(super) const MESSAGE_STORAGE_ERROR: i32 = -32062;
     /// `peers.import_identity` was asked to overwrite an existing
@@ -285,34 +287,99 @@ async fn handle_connection(stream: UnixStream, state: Arc<DaemonState>) -> Resul
         }
     };
 
-    // Single per-connection messaging forwarder. Same shape as the status
-    // forwarder above: subscribe to the messaging broadcast channel and
-    // pump every event onto the write channel as a `messages.event`
-    // notification. UIs filter by event `kind` on their side.
-    let messaging_write_tx = write_tx.clone();
-    let mut messaging_rx = state.messaging.subscribe();
-    let messaging_forwarder = tokio::spawn(async move {
-        loop {
-            match messaging_rx.recv().await {
-                Ok(event) => {
-                    let notif = match serde_json::to_value(&event) {
-                        Ok(v) => v,
-                        Err(e) => {
-                            warn!("rpc: serialize messages.event failed: {e}");
-                            continue;
+    // Per-connection messaging forwarder — only present when the
+    // `messaging` feature is compiled in. Subscribes to the messaging
+    // plugin's broadcast channel and pumps every event onto the
+    // connection's write channel as a `messages.event` notification.
+    #[cfg(feature = "messaging")]
+    let messaging_forwarder = {
+        let messaging_write_tx = write_tx.clone();
+        let messaging_svc = state
+            .messaging
+            .get()
+            .expect("messaging feature on but service not initialized")
+            .clone();
+        let mut messaging_rx = messaging_svc.subscribe();
+        tokio::spawn(async move {
+            loop {
+                match messaging_rx.recv().await {
+                    Ok(event) => {
+                        let notif = match serde_json::to_value(&event) {
+                            Ok(v) => v,
+                            Err(e) => {
+                                warn!("rpc: serialize messages.event failed: {e}");
+                                continue;
+                            }
+                        };
+                        let payload = json!({
+                            "jsonrpc": "2.0",
+                            "method": "messages.event",
+                            "params": notif,
+                        });
+                        if push_value(&messaging_write_tx, &payload).is_err() {
+                            break;
                         }
-                    };
+                    }
+                    Err(broadcast::error::RecvError::Lagged(n)) => {
+                        debug!(lagged = n, "messaging forwarder lagged; resyncing");
+                        continue;
+                    }
+                    Err(broadcast::error::RecvError::Closed) => break,
+                }
+            }
+        })
+    };
+
+    // Per-connection peer-directory forwarder — always on. Translates
+    // [`pim_plugin::PeerDirectoryEvent`] into the `messages.event`
+    // `peer_seen` JSON shape so the UI's existing subscriber sees
+    // identity changes regardless of whether the messaging plugin is
+    // compiled in.
+    let peers_write_tx = write_tx.clone();
+    let mut peers_rx = state.peer_directory.subscribe();
+    let peers_forwarder = tokio::spawn(async move {
+        use pim_plugin::{PeerDirectoryEvent, PeerInfoSource};
+        loop {
+            match peers_rx.recv().await {
+                Ok(PeerDirectoryEvent::Seen {
+                    node_id, name, via, ..
+                }) => {
                     let payload = json!({
                         "jsonrpc": "2.0",
                         "method": "messages.event",
-                        "params": notif,
+                        "params": {
+                            "kind": "peer_seen",
+                            "peer_node_id": crate::app::peer_directory::hex_node_id(&node_id),
+                            "name": name,
+                            "x25519_known": true,
+                            "via": match via {
+                                PeerInfoSource::Direct => "direct",
+                                PeerInfoSource::Routed => "routed",
+                            },
+                        },
                     });
-                    if push_value(&messaging_write_tx, &payload).is_err() {
+                    if push_value(&peers_write_tx, &payload).is_err() {
+                        break;
+                    }
+                }
+                Ok(PeerDirectoryEvent::Forgotten { node_id }) => {
+                    let payload = json!({
+                        "jsonrpc": "2.0",
+                        "method": "messages.event",
+                        "params": {
+                            "kind": "peer_seen",
+                            "peer_node_id": crate::app::peer_directory::hex_node_id(&node_id),
+                            "name": "",
+                            "x25519_known": false,
+                            "via": "direct",
+                        },
+                    });
+                    if push_value(&peers_write_tx, &payload).is_err() {
                         break;
                     }
                 }
                 Err(broadcast::error::RecvError::Lagged(n)) => {
-                    debug!(lagged = n, "messaging forwarder lagged; resyncing");
+                    debug!(lagged = n, "peers forwarder lagged; resyncing");
                     continue;
                 }
                 Err(broadcast::error::RecvError::Closed) => break,
@@ -385,6 +452,8 @@ async fn handle_connection(stream: UnixStream, state: Arc<DaemonState>) -> Resul
     // wait briefly for it to drain its queue.
     drop(write_tx);
     status_forwarder.abort();
+    peers_forwarder.abort();
+    #[cfg(feature = "messaging")]
     messaging_forwarder.abort();
     if let Some(handle) = logs_forwarder {
         handle.abort();
@@ -501,16 +570,26 @@ async fn dispatch(
         )),
         "logs.unsubscribe" => Ok(Value::Null),
 
-        // §5.7 messages
+        // §5.7 messages — gated on the `messaging` Cargo feature so a
+        // daemon built without it returns the standard "method not
+        // found" error to UI clients.
+        #[cfg(feature = "messaging")]
         "messages.list_conversations" => method_messages_list_conversations(state).await,
+        #[cfg(feature = "messaging")]
         "messages.history" => method_messages_history(state, req.params.as_ref()).await,
+        #[cfg(feature = "messaging")]
         "messages.send" => method_messages_send(state, req.params.as_ref()).await,
+        #[cfg(feature = "messaging")]
         "messages.mark_read" => method_messages_mark_read(state, req.params.as_ref()).await,
+        #[cfg(feature = "messaging")]
         "messages.delete_conversation" => {
             method_messages_delete_conversation(state, req.params.as_ref()).await
         }
+        #[cfg(feature = "messaging")]
         "messages.delete_all" => method_messages_delete_all(state).await,
+        #[cfg(feature = "messaging")]
         "messages.subscribe" => Ok(json!({ "subscription_id": new_subscription_id() })),
+        #[cfg(feature = "messaging")]
         "messages.unsubscribe" => Ok(Value::Null),
 
         unknown => Err((
@@ -727,15 +806,14 @@ async fn peer_summaries(state: &Arc<DaemonState>) -> Vec<Value> {
         routing.routes_snapshot().into_iter().collect();
     drop(routing);
 
-    // Bulk-load every known peer's X25519 pubkey in one SQLite read so
-    // each summary entry can attach its own key without a per-peer
+    // Bulk-load every known peer's X25519 pubkey in one read so each
+    // summary entry can attach its own key without a per-peer
     // round-trip from inside the async loop below.
-    let storage = state.messaging.storage().clone();
-    let x25519_by_node_hex: HashMap<String, String> =
-        match tokio::task::spawn_blocking(move || storage.list_known_x25519_pubs()).await {
-            Ok(Ok(m)) => m,
-            _ => HashMap::new(),
-        };
+    let x25519_by_node_hex: HashMap<String, String> = state
+        .peer_directory
+        .list_known_x25519_pubs()
+        .await
+        .unwrap_or_default();
 
     let mut out = Vec::with_capacity(sessions.len());
     for (peer_id, _session) in sessions.iter() {
@@ -1208,8 +1286,8 @@ async fn method_peers_import_identity(
         .unwrap_or(0);
 
     let outcome = state
-        .messaging
-        .import_peer_identity(node_id, x25519, friendly_name, now_ms)
+        .peer_directory
+        .import_identity_if_compatible(node_id, x25519, friendly_name, now_ms)
         .await
         .map_err(|e| {
             (
@@ -1220,17 +1298,17 @@ async fn method_peers_import_identity(
         })?;
 
     match outcome {
-        crate::app::messaging::ImportOutcome::Inserted => Ok(json!({
+        crate::app::peer_directory::ImportOutcome::Inserted => Ok(json!({
             "node_id": node_id.to_hex(),
             "node_id_short": node_id.to_string(),
             "imported": true,
         })),
-        crate::app::messaging::ImportOutcome::Refreshed => Ok(json!({
+        crate::app::peer_directory::ImportOutcome::Refreshed => Ok(json!({
             "node_id": node_id.to_hex(),
             "node_id_short": node_id.to_string(),
             "imported": false,
         })),
-        crate::app::messaging::ImportOutcome::KeyMismatch {
+        crate::app::peer_directory::ImportOutcome::KeyMismatch {
             existing_x25519_hex,
         } => Err((
             codes::PEER_IDENTITY_MISMATCH,
@@ -1253,10 +1331,6 @@ async fn method_peers_import_identity(
 struct PeersForgetParams {
     /// 32-char lowercase hex NodeId.
     node_id: String,
-    /// When true, also wipes the message history for this peer.
-    /// Defaults to false (less destructive).
-    #[serde(default)]
-    also_delete_messages: bool,
 }
 
 async fn method_peers_forget(state: &Arc<DaemonState>, params: Option<&Value>) -> RpcResult {
@@ -1283,29 +1357,38 @@ async fn method_peers_forget(state: &Arc<DaemonState>, params: Option<&Value>) -
             None,
         )
     })?;
-    let outcome = state
-        .messaging
-        .forget_peer(node_id, parsed.also_delete_messages)
-        .await
-        .map_err(|e| {
-            (
-                codes::MESSAGE_STORAGE_ERROR,
-                format!("peers.forget: {e}"),
-                None,
-            )
-        })?;
+    let outcome = state.peer_directory.forget(node_id).await.map_err(|e| {
+        (
+            codes::MESSAGE_STORAGE_ERROR,
+            format!("peers.forget: {e}"),
+            None,
+        )
+    })?;
+
+    // Notify every loaded plugin so they can wipe per-peer state of
+    // their own (e.g. messaging deletes the message history). Plugins
+    // are responsible for emitting their own follow-up events
+    // (`history_cleared` etc.) on whatever channels they own.
+    if outcome.forgot_identity {
+        if let Some(plugins) = state.plugins.get() {
+            for plugin in plugins {
+                plugin.on_peer_forgotten(node_id).await;
+            }
+        }
+    }
+
     Ok(json!({
         "forgot_identity": outcome.forgot_identity,
-        "deleted_messages": outcome.deleted_messages,
-        "deleted_conversation": outcome.deleted_conversation,
     }))
 }
 
+#[cfg(feature = "messaging")]
 #[derive(Debug, Deserialize)]
 struct MessagesDeleteConversationParams {
     peer_node_id: String,
 }
 
+#[cfg(feature = "messaging")]
 async fn method_messages_delete_conversation(
     state: &Arc<DaemonState>,
     params: Option<&Value>,
@@ -1333,8 +1416,7 @@ async fn method_messages_delete_conversation(
             None,
         )
     })?;
-    let (deleted_messages, deleted_conversation) = state
-        .messaging
+    let (deleted_messages, deleted_conversation) = messaging_service(state)
         .delete_conversation(node_id)
         .await
         .map_err(|e| {
@@ -1350,9 +1432,12 @@ async fn method_messages_delete_conversation(
     }))
 }
 
+#[cfg(feature = "messaging")]
 async fn method_messages_delete_all(state: &Arc<DaemonState>) -> RpcResult {
-    let (deleted_messages, deleted_conversations) =
-        state.messaging.delete_all_messages().await.map_err(|e| {
+    let (deleted_messages, deleted_conversations) = messaging_service(state)
+        .delete_all_messages()
+        .await
+        .map_err(|e| {
             (
                 codes::MESSAGE_STORAGE_ERROR,
                 format!("messages.delete_all: {e}"),
@@ -1363,6 +1448,18 @@ async fn method_messages_delete_all(state: &Arc<DaemonState>) -> RpcResult {
         "deleted_messages": deleted_messages,
         "deleted_conversations": deleted_conversations,
     }))
+}
+
+/// Borrow the messaging service handle. Panics when the `messaging`
+/// feature is enabled but the plugin failed to initialize at startup —
+/// that's a programmer error, since `app::run` aborts on plugin start
+/// failure.
+#[cfg(feature = "messaging")]
+fn messaging_service(state: &Arc<DaemonState>) -> &Arc<pim_messaging::MessagingService> {
+    state
+        .messaging
+        .get()
+        .expect("messaging service initialized at daemon startup")
 }
 
 // ── Broadcast control ────────────────────────────────────────────────────
@@ -1391,7 +1488,7 @@ async fn build_broadcast_state(state: &Arc<DaemonState>) -> Value {
 }
 
 async fn method_peers_broadcast_identity_now(state: &Arc<DaemonState>) -> RpcResult {
-    let outcome = crate::app::messaging::dispatch::run_broadcast_cycle(state).await;
+    let outcome = crate::app::identity_broadcast::run_broadcast_cycle(state).await;
     Ok(json!({
         "recipients": outcome.recipients,
         "sent_at_ms": state.last_broadcast_ms.load(Ordering::Relaxed),
@@ -1991,7 +2088,11 @@ mod tests {
 }
 
 // ── §5.7 messages ────────────────────────────────────────────────────────
+//
+// Methods in this section dispatch into the messaging plugin and are
+// only compiled when the `messaging` Cargo feature is enabled.
 
+#[cfg(feature = "messaging")]
 #[derive(Debug, Deserialize)]
 struct MessagesHistoryParams {
     peer_node_id: String,
@@ -2001,18 +2102,21 @@ struct MessagesHistoryParams {
     limit: Option<i64>,
 }
 
+#[cfg(feature = "messaging")]
 #[derive(Debug, Deserialize)]
 struct MessagesSendParams {
     peer_node_id: String,
     body: String,
 }
 
+#[cfg(feature = "messaging")]
 #[derive(Debug, Deserialize)]
 struct MessagesMarkReadParams {
     peer_node_id: String,
     up_to_ts_ms: i64,
 }
 
+#[cfg(feature = "messaging")]
 fn parse_peer_node_id(hex: &str) -> std::result::Result<NodeId, (i32, String, Option<Value>)> {
     parse_node_id_hex(hex)
         .map(NodeId::from_bytes)
@@ -2025,33 +2129,25 @@ fn parse_peer_node_id(hex: &str) -> std::result::Result<NodeId, (i32, String, Op
         })
 }
 
+#[cfg(feature = "messaging")]
 async fn method_messages_list_conversations(state: &Arc<DaemonState>) -> RpcResult {
-    let storage = state.messaging.storage().clone();
     let sessions = state.sessions.read().await;
     let connected: std::collections::HashSet<String> = sessions
         .keys()
-        .map(crate::app::messaging::hex_node_id)
+        .map(crate::app::peer_directory::hex_node_id)
         .collect();
     drop(sessions);
 
-    let conversations =
-        match tokio::task::spawn_blocking(move || storage.list_conversations()).await {
-            Ok(Ok(c)) => c,
-            Ok(Err(e)) => {
-                return Err((
-                    codes::MESSAGE_STORAGE_ERROR,
-                    format!("messages.list_conversations: {e}"),
-                    None,
-                ))
-            }
-            Err(e) => {
-                return Err((
-                    codes::INTERNAL_ERROR,
-                    format!("messages.list_conversations join: {e}"),
-                    None,
-                ))
-            }
-        };
+    let conversations = messaging_service(state)
+        .list_conversations()
+        .await
+        .map_err(|e| {
+            (
+                codes::MESSAGE_STORAGE_ERROR,
+                format!("messages.list_conversations: {e}"),
+                None,
+            )
+        })?;
 
     let mut out: Vec<Value> = Vec::with_capacity(conversations.len());
     for conv in conversations {
@@ -2070,6 +2166,7 @@ async fn method_messages_list_conversations(state: &Arc<DaemonState>) -> RpcResu
     Ok(json!({ "conversations": out }))
 }
 
+#[cfg(feature = "messaging")]
 async fn method_messages_history(state: &Arc<DaemonState>, params: Option<&Value>) -> RpcResult {
     let parsed: MessagesHistoryParams = match params {
         Some(v) => serde_json::from_value(v.clone()).map_err(|e| {
@@ -2098,7 +2195,7 @@ async fn method_messages_history(state: &Arc<DaemonState>, params: Option<&Value
     let peer_hex = parsed.peer_node_id;
     let limit = parsed.limit.unwrap_or(100).clamp(1, 500);
     let before = parsed.before_ts_ms;
-    let storage = state.messaging.storage().clone();
+    let storage = messaging_service(state).storage().clone();
 
     let result = tokio::task::spawn_blocking(move || storage.history(&peer_hex, before, limit))
         .await
@@ -2124,6 +2221,7 @@ async fn method_messages_history(state: &Arc<DaemonState>, params: Option<&Value
     }))
 }
 
+#[cfg(feature = "messaging")]
 async fn method_messages_send(state: &Arc<DaemonState>, params: Option<&Value>) -> RpcResult {
     let parsed: MessagesSendParams = match params {
         Some(v) => serde_json::from_value(v.clone()).map_err(|e| {
@@ -2149,20 +2247,17 @@ async fn method_messages_send(state: &Arc<DaemonState>, params: Option<&Value>) 
             None,
         ));
     }
-    if parsed.body.len() > crate::app::messaging::MAX_BODY_BYTES {
+    if parsed.body.len() > pim_messaging::MAX_BODY_BYTES {
         return Err((
             codes::MESSAGE_BODY_TOO_LARGE,
-            format!(
-                "body exceeds {} bytes",
-                crate::app::messaging::MAX_BODY_BYTES
-            ),
+            format!("body exceeds {} bytes", pim_messaging::MAX_BODY_BYTES),
             None,
         ));
     }
 
     let peer = parse_peer_node_id(&parsed.peer_node_id)?;
     let body = parsed.body;
-    let result = crate::app::messaging::dispatch::send_user_message(state, peer, body).await;
+    let result = messaging_service(state).send(peer, body).await;
     match result {
         Ok(record) => Ok(json!({
             "id": record.id,
@@ -2180,6 +2275,7 @@ async fn method_messages_send(state: &Arc<DaemonState>, params: Option<&Value>) 
     }
 }
 
+#[cfg(feature = "messaging")]
 async fn method_messages_mark_read(state: &Arc<DaemonState>, params: Option<&Value>) -> RpcResult {
     let parsed: MessagesMarkReadParams = match params {
         Some(v) => serde_json::from_value(v.clone()).map_err(|e| {
@@ -2207,7 +2303,7 @@ async fn method_messages_mark_read(state: &Arc<DaemonState>, params: Option<&Val
     }
     let peer_hex = parsed.peer_node_id;
     let up_to = parsed.up_to_ts_ms;
-    let storage = state.messaging.storage().clone();
+    let storage = messaging_service(state).storage().clone();
 
     let unread = tokio::task::spawn_blocking(move || storage.mark_read_up_to(&peer_hex, up_to))
         .await
