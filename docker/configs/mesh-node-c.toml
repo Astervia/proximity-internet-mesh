@@ -1,0 +1,30 @@
+# Mesh chain — node C (interior, between B and D).
+#
+# Topology:  A ── B ── C ── D
+
+[node]
+name = "node-c"
+data_dir = "/var/lib/pim"
+
+[interface]
+mesh_ip = "10.77.0.103/24"
+mtu = 1400
+
+[transport]
+listen_port = 9100
+
+[security]
+key_file = "/var/lib/pim/node.key"
+
+[discovery]
+enabled = false
+
+[messaging.broadcast]
+outgoing_interval_s = 30
+watch_incoming = true
+min_peer_interval_s = 1
+
+[[peers]]
+mechanism = "tcp"
+address = "node-d:9100"
+label = "node-d"

@@ -47,12 +47,15 @@ docker/
     resilience.yml        — gateway + client (network disruption)
     flow-control.yml      — gateway + flood-sender
     multi-gateway.yml      — gateway1 + gateway2 + relay + client
+    mesh-broadcast.yml       — node-a → node-b → node-c → node-d chain
   tests/
     test-bluetooth.sh           — Bluetooth seam test runner
     test-bluetooth-enx.sh       — Bluetooth dynamic-enx seam test runner
     test-debug-cli.sh           — debug CLI output runner
     test-route-cli.sh           — split-default route CLI runner
-    common.sh                    — shared assertion and lifecycle helpers
+    test-broadcast.sh           — daemon broadcast across a multi-hop chain
+    test-messaging.sh           — pim-messaging plugin end-to-end (direct + routed)
+    common.sh                    — shared assertion + JSON-RPC helpers
     test-single-hop.sh               — phase 1 test runner
     test-multi-hop.sh               — phase 2 test runner
     test-peer-discovery.sh               — phase 3 test runner
@@ -114,6 +117,19 @@ The mesh uses `10.77.0.0/24` for TUN addresses.
   .100         .10
 ```
 
+### Mesh broadcast / messaging — 4-node chain
+
+```
+  node-a ──[TCP]── node-b ──[TCP]── node-c ──[TCP]── node-d
+  10.77.0.101      10.77.0.102      10.77.0.103      10.77.0.104
+```
+
+LAN UDP discovery is disabled. Each node only configures its left
+neighbour as a static peer. Non-adjacent peers learn each other's
+identity exclusively through routed `PeerInfo` broadcasts emitted by
+the daemon's `messaging.broadcast` cycle, which is precisely what the
+broadcast test validates.
+
 ## Quick Start
 
 ```bash
@@ -129,6 +145,8 @@ make test-multi-hop
 make test-debug-cli
 make test-route-cli
 make test-bluetooth
+make test-broadcast
+make test-messaging
 
 # Interactive: bring up a stack and poke around
 make up-single-hop
@@ -381,6 +399,27 @@ plan. Status: **[x] implemented** / **[ ] pending**.
 | 5.1  | Restore gateway1 → routing re-converges                | [x] test-multi-gateway.sh               |
 | 5.2  | Saturate gateway1 → new flows observed on gateway2     | [x] test-multi-gateway.sh (heuristic)   |
 | 5.3  | tc netem latency on gateway1 → client prefers gateway2 | [x] test-multi-gateway.sh (requires tc) |
+
+### Daemon broadcast (mesh-essential identity hygiene)
+
+| Test | Scenario                                                                | Status                  |
+| ---- | ----------------------------------------------------------------------- | ----------------------- |
+| BC.1 | 4-node chain converges so every node has 3 routes                        | [x] test-broadcast.sh   |
+| BC.2 | Direct neighbour x25519 lands in `peers.list` after the Noise handshake | [x] test-broadcast.sh   |
+| BC.3 | `peers.broadcast_identity_now` reports recipients = routes − 1           | [x] test-broadcast.sh   |
+| BC.4 | After broadcast, `messages.send` to a 3-hop peer succeeds (keystore)     | [x] test-broadcast.sh   |
+| BC.5 | Broadcast keystore round-trip is symmetric (`d → a` also works)          | [x] test-broadcast.sh   |
+
+### pim-messaging plugin (end-to-end)
+
+| Test | Scenario                                                                  | Status                  |
+| ---- | ------------------------------------------------------------------------- | ----------------------- |
+| MS.1 | `messages.send` to a direct neighbour → recipient decrypts the body       | [x] test-messaging.sh   |
+| MS.2 | `messages.send` across 3 hops → routed delivery + ack                      | [x] test-messaging.sh   |
+| MS.3 | Sender row transitions `pending` → `sent` → `delivered` after the ack      | [x] test-messaging.sh   |
+| MS.4 | `messages.list_conversations` enriches rows with x25519 + name from keystore | [x] test-messaging.sh |
+| MS.5 | `peers.forget` fans `on_peer_forgotten` and wipes the conversation         | [x] test-messaging.sh   |
+| MS.6 | `messages.send` rejects empty bodies and unknown peers cleanly             | [x] test-messaging.sh   |
 
 ## Pending / Future Scenarios
 
