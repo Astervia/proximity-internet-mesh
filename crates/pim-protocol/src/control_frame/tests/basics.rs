@@ -102,11 +102,10 @@ fn peer_info_empty_name_round_trip() {
 }
 
 #[test]
-fn message_round_trip() {
-    let frame = ControlFrame::Message {
-        message_id: [0x55; 16],
-        timestamp_ms: 1_745_960_000_000,
-        ciphertext: vec![0xDE, 0xAD, 0xBE, 0xEF, 0xCA, 0xFE],
+fn plugin_payload_round_trip() {
+    let frame = ControlFrame::PluginPayload {
+        kind: "messaging.msg".into(),
+        body: bytes::Bytes::from_static(&[0xDE, 0xAD, 0xBE, 0xEF]),
     };
     let mut buf = BytesMut::new();
     frame.encode(&mut buf);
@@ -115,10 +114,10 @@ fn message_round_trip() {
 }
 
 #[test]
-fn message_ack_round_trip() {
-    let frame = ControlFrame::MessageAck {
-        message_id: [0x77; 16],
-        ack_kind: 1,
+fn plugin_payload_empty_body_round_trip() {
+    let frame = ControlFrame::PluginPayload {
+        kind: "messaging.ack".into(),
+        body: bytes::Bytes::new(),
     };
     let mut buf = BytesMut::new();
     frame.encode(&mut buf);
@@ -133,7 +132,15 @@ fn reject_truncated_peer_info() {
 }
 
 #[test]
-fn reject_truncated_message() {
-    let mut buf = BytesMut::from(&[0x08, 0x00][..]); // too short
+fn reject_truncated_plugin_payload_header() {
+    // tag + kind_len = 0x05 promising 5 bytes of kind, but no kind/body follows.
+    let mut buf = BytesMut::from(&[0x08, 0x05][..]);
+    assert!(ControlFrame::decode(&mut buf).is_err());
+}
+
+#[test]
+fn reject_truncated_plugin_payload_body() {
+    // tag + kind_len(1) + kind("a") + body_len(0x0008) + only 2 body bytes.
+    let mut buf = BytesMut::from(&[0x08, 0x01, b'a', 0x00, 0x08, 0xAA, 0xBB][..]);
     assert!(ControlFrame::decode(&mut buf).is_err());
 }
