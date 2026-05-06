@@ -1,0 +1,40 @@
+# Mesh chain — node A (left edge).
+#
+# Topology:  A ── B ── C ── D
+#
+# A connects only to B. To reach C and D, A relies on multi-hop routing.
+# Used by docker/tests/test-broadcast.sh and test-messaging.sh.
+
+[node]
+name = "node-a"
+data_dir = "/var/lib/pim"
+
+[interface]
+mesh_ip = "10.77.0.101/24"
+mtu = 1400
+
+[transport]
+listen_port = 9100
+
+[security]
+key_file = "/var/lib/pim/node.key"
+
+# Disable LAN UDP discovery — the chain is held together by static peers
+# only, so we exercise multi-hop routed PeerInfo broadcast rather than
+# direct UDP discovery.
+[discovery]
+enabled = false
+
+# Periodic identity broadcast every 30 s (the floor enforced at the RPC
+# layer). Tests poke `peers.broadcast_identity_now` for deterministic
+# verification, but we leave the periodic task on so future regressions
+# in scheduled broadcasts also surface.
+[messaging.broadcast]
+outgoing_interval_s = 30
+watch_incoming = true
+min_peer_interval_s = 1
+
+[[peers]]
+mechanism = "tcp"
+address = "node-b:9100"
+label = "node-b"

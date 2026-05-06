@@ -16,7 +16,8 @@ docker-build:
 .PHONY: test-single-hop test-single-hop-ipv6 test-multi-hop test-peer-discovery \
         test-resilience test-resilience-full test-multi-gateway test-auto-discovery \
         test-auto-ip-chain test-auth test-debug-cli test-route-cli \
-        test-bluetooth test-bluetooth-enx test-rfcomm-discovery test-all
+        test-bluetooth test-bluetooth-enx test-rfcomm-discovery \
+        test-broadcast test-messaging test-all
 
 test-single-hop: docker-build         ## phase 1: TUN, NAT, gateway/client baseline
 	bash $(TEST_DIR)/test-single-hop.sh
@@ -63,6 +64,12 @@ test-bluetooth-enx: docker-build
 test-rfcomm-discovery: docker-build  ## RFCOMM listener + outbound dial-failure resilience
 	bash $(TEST_DIR)/test-rfcomm-discovery.sh
 
+test-broadcast: docker-build         ## identity broadcast across a multi-hop chain
+	bash $(TEST_DIR)/test-broadcast.sh
+
+test-messaging: docker-build         ## end-to-end messaging plugin (direct + routed)
+	bash $(TEST_DIR)/test-messaging.sh
+
 test-all: docker-build
 	@bash $(TEST_DIR)/test-single-hop.sh && \
 	 bash $(TEST_DIR)/test-ipv6.sh && \
@@ -73,14 +80,17 @@ test-all: docker-build
 	 bash $(TEST_DIR)/test-authorization.sh && \
 	 bash $(TEST_DIR)/test-route-cli.sh && \
 	 bash $(TEST_DIR)/test-bluetooth.sh && \
-	 bash $(TEST_DIR)/test-bluetooth-enx.sh
+	 bash $(TEST_DIR)/test-bluetooth-enx.sh && \
+	 bash $(TEST_DIR)/test-broadcast.sh && \
+	 bash $(TEST_DIR)/test-messaging.sh
 
 # ── Manual stack management ───────────────────────────────────────────────────
 # Use these for interactive debugging without the test scripts.
 
 .PHONY: up-single-hop up-single-hop-ipv6 up-multi-hop-relay up-multi-hop-routing \
         up-peer-discovery up-resilience up-flow-control up-multi-gateway \
-        up-auto-discovery up-auto-ip-chain up-bluetooth up-bluetooth-enx
+        up-auto-discovery up-auto-ip-chain up-bluetooth up-bluetooth-enx \
+        up-mesh-broadcast
 
 up-single-hop:
 	docker compose -f $(COMPOSE_DIR)/single-hop.yml up -d --build
@@ -118,9 +128,13 @@ up-bluetooth:
 up-bluetooth-enx:
 	docker compose -f $(COMPOSE_DIR)/bluetooth-seam-enx.yml up -d --build
 
+up-mesh-broadcast:
+	docker compose -f $(COMPOSE_DIR)/mesh-broadcast.yml up -d --build
+
 .PHONY: down-single-hop down-single-hop-ipv6 down-multi-hop-relay down-multi-hop-routing \
         down-peer-discovery down-resilience down-flow-control down-multi-gateway \
-        down-auto-discovery down-auto-ip-chain down-bluetooth down-bluetooth-enx
+        down-auto-discovery down-auto-ip-chain down-bluetooth down-bluetooth-enx \
+        down-mesh-broadcast
 
 down-single-hop:
 	docker compose -f $(COMPOSE_DIR)/single-hop.yml down -v --remove-orphans
@@ -158,11 +172,14 @@ down-bluetooth:
 down-bluetooth-enx:
 	docker compose -f $(COMPOSE_DIR)/bluetooth-seam-enx.yml down -v --remove-orphans
 
+down-mesh-broadcast:
+	docker compose -f $(COMPOSE_DIR)/mesh-broadcast.yml down -v --remove-orphans
+
 # ── Log tailing ───────────────────────────────────────────────────────────────
 
 .PHONY: logs-single-hop logs-single-hop-ipv6 logs-multi-hop-relay logs-multi-hop-routing \
         logs-peer-discovery logs-resilience logs-multi-gateway logs-auto-discovery \
-        logs-auto-ip-chain logs-bluetooth logs-bluetooth-enx
+        logs-auto-ip-chain logs-bluetooth logs-bluetooth-enx logs-mesh-broadcast
 
 logs-single-hop:
 	docker compose -f $(COMPOSE_DIR)/single-hop.yml logs -f
@@ -196,6 +213,9 @@ logs-bluetooth:
 
 logs-bluetooth-enx:
 	docker compose -f $(COMPOSE_DIR)/bluetooth-seam-enx.yml logs -f
+
+logs-mesh-broadcast:
+	docker compose -f $(COMPOSE_DIR)/mesh-broadcast.yml logs -f
 
 # ── Shortcuts for exec ────────────────────────────────────────────────────────
 
@@ -237,7 +257,8 @@ docker-clean:
 	    $(COMPOSE_DIR)/auth-tofu.yml \
 	    $(COMPOSE_DIR)/auth-discovery-key.yml \
 	    $(COMPOSE_DIR)/bluetooth-seam.yml \
-	    $(COMPOSE_DIR)/bluetooth-seam-enx.yml; do \
+	    $(COMPOSE_DIR)/bluetooth-seam-enx.yml \
+	    $(COMPOSE_DIR)/mesh-broadcast.yml; do \
 	    docker compose -f $$f down -v --remove-orphans 2>/dev/null || true; \
 	done
 
@@ -271,6 +292,8 @@ help:
 	@echo "  make test-bluetooth         Bluetooth fake-sysfs seam test in Docker"
 	@echo "  make test-bluetooth-enx     Bluetooth dynamic enx PAN fallback seam test in Docker"
 	@echo "  make test-rfcomm-discovery  RFCOMM listener + outbound dial-failure seam"
+	@echo "  make test-broadcast         Identity broadcast across a 4-node chain"
+	@echo "  make test-messaging         End-to-end messaging plugin (direct + 3-hop)"
 	@echo "  make test-all               All labs (slow tests skipped)"
 	@echo "  make test-unit              Rust unit tests (no Docker)"
 	@echo ""
