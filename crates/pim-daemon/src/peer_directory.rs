@@ -33,6 +33,21 @@ CREATE TABLE IF NOT EXISTS peers_seen (
     first_seen_ms    INTEGER NOT NULL,
     last_seen_ms     INTEGER NOT NULL
 );
+
+-- RFCOMM peer reachability log. Driven by the daemon's RFCOMM event
+-- loop: every paired peer the daemon observes (via dial-attempt or
+-- inbound session) gets a row; successful sessions update
+-- `last_connected_at_s`. Phase 2 cleanup uses
+-- `max(first_paired_at_s, last_connected_at_s)` as the freshness
+-- horizon. Timestamps are unix seconds, not milliseconds — cleanup
+-- thresholds are days, not minutes, so second-precision is plenty
+-- and keeps the rows easy to read on `sqlite3 peers.db`.
+CREATE TABLE IF NOT EXISTS rfcomm_peer_lifecycle (
+    bd_addr               TEXT PRIMARY KEY,
+    name                  TEXT NOT NULL,
+    first_paired_at_s     INTEGER NOT NULL,
+    last_connected_at_s   INTEGER
+);
 "#;
 
 /// Outcome of an out-of-band identity import via
@@ -358,6 +373,129 @@ impl PeerDirectoryService {
         }
         Ok(out)
     }
+
+    // ── RFCOMM peer lifecycle ─────────────────────────────────────────
+    //
+    // Phase 1 of `plans/rfcomm-reconnect/plan.md`. The
+    // `rfcomm_peer_lifecycle` table lives in `peers.db` because it is
+    // daemon-essential (reachability, not messaging) — the rest of the
+    // peer keystore is the natural neighbour. Connection and lock are
+    // shared with `peers_seen` so the daemon never opens a second
+    // connection to the same SQLite file.
+
+    /// Record that the daemon observed `bd_addr` in the paired set
+    /// with human-readable `name`. The first observation wins:
+    /// subsequent calls leave `name` and `first_paired_at_s`
+    /// untouched. Always idempotent.
+    pub fn observe_rfcomm_paired(&self, bd_addr: &str, name: &str, now_s: i64) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "INSERT INTO rfcomm_peer_lifecycle (bd_addr, name, first_paired_at_s) \
+             VALUES (?1, ?2, ?3) \
+             ON CONFLICT(bd_addr) DO NOTHING",
+            params![bd_addr, name, now_s],
+        )?;
+        Ok(())
+    }
+
+    /// Record that the daemon just completed a successful RFCOMM
+    /// handshake with `bd_addr`. Upserts so the row exists even if
+    /// the peer has never been observed via the paired-list scan
+    /// (e.g. an inbound session from a freshly-paired peer that
+    /// hasn't been scanned yet). Updates
+    /// `last_connected_at_s = max(existing, now)` so out-of-order
+    /// events from concurrent inbound + outbound paths cannot rewind
+    /// the timestamp.
+    pub fn record_rfcomm_connected(&self, bd_addr: &str, name: &str, now_s: i64) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "INSERT INTO rfcomm_peer_lifecycle (bd_addr, name, first_paired_at_s, last_connected_at_s) \
+             VALUES (?1, ?2, ?3, ?3) \
+             ON CONFLICT(bd_addr) DO UPDATE SET \
+                last_connected_at_s = MAX(COALESCE(last_connected_at_s, 0), excluded.last_connected_at_s)",
+            params![bd_addr, name, now_s],
+        )?;
+        Ok(())
+    }
+
+    /// Most recent freshness signal for `bd_addr`:
+    /// `max(first_paired_at_s, last_connected_at_s)`. `None` when
+    /// the peer has never been observed.
+    ///
+    /// Phase 2 (cleanup loop) is the first production caller; covered
+    /// by unit tests today.
+    #[allow(dead_code)]
+    pub fn rfcomm_last_seen(&self, bd_addr: &str) -> Result<Option<i64>> {
+        let conn = self.conn.lock().unwrap();
+        Ok(conn
+            .query_row(
+                "SELECT MAX(first_paired_at_s, COALESCE(last_connected_at_s, first_paired_at_s)) \
+                 FROM rfcomm_peer_lifecycle WHERE bd_addr = ?1",
+                params![bd_addr],
+                |row| row.get::<_, Option<i64>>(0),
+            )
+            .ok()
+            .flatten())
+    }
+
+    /// Snapshot every tracked RFCOMM peer. Cleanup loop in Phase 2
+    /// iterates this list; RPC introspection (later) returns it raw.
+    #[allow(dead_code)]
+    pub fn list_rfcomm_lifecycle(&self) -> Result<Vec<RfcommLifecycleRecord>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT bd_addr, name, first_paired_at_s, last_connected_at_s \
+             FROM rfcomm_peer_lifecycle \
+             ORDER BY bd_addr ASC",
+        )?;
+        let rows = stmt
+            .query_map([], |row| {
+                Ok(RfcommLifecycleRecord {
+                    bd_addr: row.get(0)?,
+                    name: row.get(1)?,
+                    first_paired_at_s: row.get(2)?,
+                    last_connected_at_s: row.get(3)?,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    /// Drop a peer from the lifecycle log. Phase 2 cleanup calls
+    /// this after a successful `bluetoothctl remove`. No-op when the
+    /// row is absent.
+    #[allow(dead_code)]
+    pub fn forget_rfcomm_peer(&self, bd_addr: &str) -> Result<bool> {
+        let conn = self.conn.lock().unwrap();
+        let n = conn.execute(
+            "DELETE FROM rfcomm_peer_lifecycle WHERE bd_addr = ?1",
+            params![bd_addr],
+        )?;
+        Ok(n > 0)
+    }
+}
+
+/// One row from `rfcomm_peer_lifecycle`. Returned by
+/// [`PeerDirectoryService::list_rfcomm_lifecycle`] for the cleanup
+/// loop and (later) for RPC introspection.
+#[allow(dead_code)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct RfcommLifecycleRecord {
+    /// `"AA:BB:CC:DD:EE:FF"` (uppercase, colon-separated). Matches
+    /// the format produced by `bluetoothctl devices Paired`.
+    pub bd_addr: String,
+    /// Friendly name observed at first sighting. May be the BlueZ
+    /// device name (from a paired-list scan) or the PIM node name
+    /// (from a successful handshake) — whichever arrived first.
+    /// Cosmetic; cleanup logs use this purely for human readability.
+    pub name: String,
+    /// Wall-clock seconds when the daemon first saw this paired
+    /// peer.
+    pub first_paired_at_s: i64,
+    /// Wall-clock seconds when the daemon last completed a
+    /// successful RFCOMM handshake with this peer. `None` until the
+    /// first success.
+    pub last_connected_at_s: Option<i64>,
 }
 
 /// Adapter implementing [`pim_plugin::PeerDirectory`] over
@@ -415,4 +553,129 @@ fn hex32(bytes: &[u8]) -> String {
         out.push_str(&format!("{b:02x}"));
     }
     out
+}
+
+#[cfg(test)]
+mod rfcomm_lifecycle_tests {
+    //! Phase 1 of `plans/rfcomm-reconnect/plan.md`. Covers the
+    //! rfcomm-specific methods on `PeerDirectoryService`. The peer-
+    //! identity surface is exercised by the broader `app::tests` /
+    //! integration suite.
+
+    use super::*;
+    use tempfile::TempDir;
+
+    fn open_temp_storage() -> (TempDir, PeerDirectoryService) {
+        let dir = TempDir::new().expect("tempdir");
+        let path = dir.path().join("peers.db");
+        let storage = PeerDirectoryService::open(path).expect("open storage");
+        (dir, storage)
+    }
+
+    #[test]
+    fn rfcomm_observe_paired_inserts_then_preserves() {
+        let (_d, storage) = open_temp_storage();
+        storage
+            .observe_rfcomm_paired("00:15:83:3D:0A:57", "PIM-foo", 1000)
+            .unwrap();
+        // Second observation with a different name MUST NOT overwrite.
+        storage
+            .observe_rfcomm_paired("00:15:83:3D:0A:57", "PIM-renamed", 2000)
+            .unwrap();
+        let rows = storage.list_rfcomm_lifecycle().unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].name, "PIM-foo");
+        assert_eq!(rows[0].first_paired_at_s, 1000);
+        assert_eq!(rows[0].last_connected_at_s, None);
+    }
+
+    #[test]
+    fn rfcomm_record_connected_creates_then_updates() {
+        let (_d, storage) = open_temp_storage();
+        storage
+            .record_rfcomm_connected("00:15:83:3D:0A:57", "PIM-foo", 5000)
+            .unwrap();
+        let last = storage
+            .rfcomm_last_seen("00:15:83:3D:0A:57")
+            .unwrap()
+            .expect("present");
+        assert_eq!(last, 5000);
+
+        // A later success bumps last_connected_at.
+        storage
+            .record_rfcomm_connected("00:15:83:3D:0A:57", "PIM-foo", 6000)
+            .unwrap();
+        let last = storage
+            .rfcomm_last_seen("00:15:83:3D:0A:57")
+            .unwrap()
+            .expect("present");
+        assert_eq!(last, 6000);
+
+        // An earlier success (out-of-order event) MUST NOT rewind.
+        storage
+            .record_rfcomm_connected("00:15:83:3D:0A:57", "PIM-foo", 5500)
+            .unwrap();
+        let last = storage
+            .rfcomm_last_seen("00:15:83:3D:0A:57")
+            .unwrap()
+            .expect("present");
+        assert_eq!(last, 6000);
+    }
+
+    #[test]
+    fn rfcomm_last_seen_uses_max_of_paired_and_connected() {
+        let (_d, storage) = open_temp_storage();
+        storage
+            .observe_rfcomm_paired("00:15:83:3D:0A:57", "PIM-foo", 9000)
+            .unwrap();
+        // Connected with an older timestamp (e.g. clock skew or an
+        // out-of-order event from an inbound session that fired before
+        // the paired-list scan).
+        storage
+            .record_rfcomm_connected("00:15:83:3D:0A:57", "PIM-foo", 8000)
+            .unwrap();
+        let last = storage
+            .rfcomm_last_seen("00:15:83:3D:0A:57")
+            .unwrap()
+            .expect("present");
+        assert_eq!(last, 9000);
+    }
+
+    #[test]
+    fn rfcomm_last_seen_unknown_returns_none() {
+        let (_d, storage) = open_temp_storage();
+        assert_eq!(storage.rfcomm_last_seen("00:15:83:3D:0A:57").unwrap(), None);
+    }
+
+    #[test]
+    fn rfcomm_lifecycle_persists_across_reopen() {
+        let dir = TempDir::new().expect("create tempdir");
+        let path = dir.path().join("peers.db");
+        {
+            let s = PeerDirectoryService::open(path.clone()).unwrap();
+            s.observe_rfcomm_paired("00:15:83:3D:0A:57", "PIM-foo", 100)
+                .unwrap();
+            s.record_rfcomm_connected("00:15:83:3D:0A:57", "PIM-foo", 200)
+                .unwrap();
+        }
+        // New connection on the same file — schema is `IF NOT EXISTS`,
+        // existing rows must survive.
+        let s = PeerDirectoryService::open(path).unwrap();
+        let rows = s.list_rfcomm_lifecycle().unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].first_paired_at_s, 100);
+        assert_eq!(rows[0].last_connected_at_s, Some(200));
+    }
+
+    #[test]
+    fn rfcomm_forget_removes_row() {
+        let (_d, storage) = open_temp_storage();
+        storage
+            .observe_rfcomm_paired("00:15:83:3D:0A:57", "PIM-foo", 100)
+            .unwrap();
+        assert!(storage.forget_rfcomm_peer("00:15:83:3D:0A:57").unwrap());
+        assert!(storage.list_rfcomm_lifecycle().unwrap().is_empty());
+        // Subsequent forget on the same address is a no-op.
+        assert!(!storage.forget_rfcomm_peer("00:15:83:3D:0A:57").unwrap());
+    }
 }
