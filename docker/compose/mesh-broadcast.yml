@@ -1,0 +1,134 @@
+# Plugin/messaging mesh — exercises identity broadcast and the
+# user-to-user messaging plugin across direct + multi-hop paths.
+#
+# Topology:
+#
+#   node-a ──[TCP]── node-b ──[TCP]── node-c ──[TCP]── node-d
+#   .101              .102              .103              .104
+#
+# - node-a and node-b are direct neighbours.
+# - node-a and node-c are two hops apart (via node-b).
+# - node-a and node-d are three hops apart.
+# - LAN UDP discovery is disabled, so peers learn each other's identity
+#   only through routed PeerInfo broadcasts (the daemon's
+#   `messaging.broadcast` cycle) — which is exactly what we want to
+#   exercise.
+#
+# Used by:
+#   docker/tests/test-broadcast.sh   — broadcast → routing-table → peer-directory
+#   docker/tests/test-messaging.sh   — messages.send through direct + routed paths
+
+name: pim-mesh-broadcast
+
+x-pim-base: &pim-base
+    build:
+        context: ../..
+        dockerfile: Dockerfile
+    image: pim:latest
+    cap_add:
+        - NET_ADMIN
+    devices:
+        - /dev/net/tun:/dev/net/tun
+
+services:
+    # Brought up first — D has no statically configured peers (C dials it).
+    node-d:
+        <<: *pim-base
+        container_name: pim-mesh-broadcast-d
+        hostname: node-d
+        volumes:
+            - ../configs/mesh-node-d.toml:/etc/pim/pim.toml:ro
+        networks:
+            pim-net:
+                ipv4_address: 172.40.0.14
+        healthcheck:
+            test:
+                [
+                    "CMD-SHELL",
+                    "test -f /run/pim.pid && kill -0 $(cat /run/pim.pid) 2>/dev/null && ip link show pim0 2>/dev/null | grep -q UP",
+                ]
+            interval: 2s
+            timeout: 4s
+            retries: 25
+            start_period: 5s
+
+    # C dials D at startup. resolve_configured_peer_targets resolves
+    # `node-d:9100` synchronously; bring D up first so the lookup never
+    # hits the brief window where Docker's embedded DNS hasn't published
+    # the record yet (which crashes the daemon at boot).
+    node-c:
+        <<: *pim-base
+        container_name: pim-mesh-broadcast-c
+        hostname: node-c
+        volumes:
+            - ../configs/mesh-node-c.toml:/etc/pim/pim.toml:ro
+        depends_on:
+            node-d:
+                condition: service_healthy
+        networks:
+            pim-net:
+                ipv4_address: 172.40.0.13
+        healthcheck:
+            test:
+                [
+                    "CMD-SHELL",
+                    "test -f /run/pim.pid && kill -0 $(cat /run/pim.pid) 2>/dev/null && ip link show pim0 2>/dev/null | grep -q UP",
+                ]
+            interval: 2s
+            timeout: 4s
+            retries: 25
+            start_period: 8s
+
+    node-b:
+        <<: *pim-base
+        container_name: pim-mesh-broadcast-b
+        hostname: node-b
+        volumes:
+            - ../configs/mesh-node-b.toml:/etc/pim/pim.toml:ro
+        depends_on:
+            node-c:
+                condition: service_healthy
+        networks:
+            pim-net:
+                ipv4_address: 172.40.0.12
+        healthcheck:
+            test:
+                [
+                    "CMD-SHELL",
+                    "test -f /run/pim.pid && kill -0 $(cat /run/pim.pid) 2>/dev/null && ip link show pim0 2>/dev/null | grep -q UP",
+                ]
+            interval: 2s
+            timeout: 4s
+            retries: 25
+            start_period: 10s
+
+    node-a:
+        <<: *pim-base
+        container_name: pim-mesh-broadcast-a
+        hostname: node-a
+        volumes:
+            - ../configs/mesh-node-a.toml:/etc/pim/pim.toml:ro
+        depends_on:
+            node-b:
+                condition: service_healthy
+        networks:
+            pim-net:
+                ipv4_address: 172.40.0.11
+        healthcheck:
+            test:
+                [
+                    "CMD-SHELL",
+                    "test -f /run/pim.pid && kill -0 $(cat /run/pim.pid) 2>/dev/null && ip link show pim0 2>/dev/null | grep -q UP",
+                ]
+            interval: 2s
+            timeout: 4s
+            retries: 25
+            start_period: 12s
+
+networks:
+    pim-net:
+        driver: bridge
+        ipam:
+            driver: default
+            config:
+                - subnet: 172.40.0.0/24

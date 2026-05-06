@@ -258,6 +258,133 @@ wait_for_peers() {
     return 1
 }
 
+# ── JSON-RPC over the daemon's Unix socket ────────────────────────────────────
+#
+# The daemon speaks newline-delimited JSON-RPC 2.0 on
+# `/run/pim/pim.sock`. `rpc.hello` must precede every other request on a
+# fresh connection (docs/RPC.md §1.4), so each helper call here opens a
+# new socket, replays the handshake, then issues a single request.
+#
+# Tools used inside the container: `nc -U` (netcat-openbsd, already
+# installed) and `jq` (added to the image alongside the other test
+# tools). The runtime image bundles both so test scripts only need to
+# `in_svc` into the daemon container.
+#
+# Usage:
+#   resp=$(rpc <file> <svc> <method> [params_json])
+#   rpc_result <file> <svc> <method> [params_json]   # extracts .result
+#   rpc_error  <file> <svc> <method> [params_json]   # extracts .error.message
+
+# rpc <file> <svc> <method> [params_json]
+# Returns the JSON-RPC response to the request (the line whose `id`
+# matches our request id), or empty on transport failure.
+#
+# Implementation notes:
+#   * The handshake response (`id:0`) is discarded; we only care about
+#     the request response (`id:1`).
+#   * The daemon also fans out subscription notifications (`status.event`,
+#     `peers.event`, `logs.event`, `messages.event`) on every connection
+#     — those have no `id` field, so we match by id rather than by line
+#     number to skip them.
+#   * `nc -N -q 2 -w 8` shuts our write side down on stdin EOF, then
+#     waits up to 2 s for the daemon to drain its writer task before
+#     nc exits. The `-w 8` cap stops a wedged daemon from hanging the
+#     whole test.
+rpc() {
+    local file="$1" svc="$2" method="$3" params="${4:-}"
+    local hello='{"jsonrpc":"2.0","id":0,"method":"rpc.hello","params":{"client":"docker-test","rpc_version":1}}'
+    local req
+    if [ -n "$params" ]; then
+        req=$(printf '{"jsonrpc":"2.0","id":1,"method":"%s","params":%s}' "$method" "$params")
+    else
+        req=$(printf '{"jsonrpc":"2.0","id":1,"method":"%s"}' "$method")
+    fi
+    {
+        printf '%s\n%s\n' "$hello" "$req"
+    } | docker compose -f "$COMPOSE_DIR/$file" exec -T "$svc" \
+        nc -N -q 2 -U -w 8 /run/pim/pim.sock \
+        | jq -ec --argjson want_id 1 'select(.id == $want_id)' \
+        | head -n1
+}
+
+# rpc_result <file> <svc> <method> [params_json]
+# Prints the `.result` of the JSON-RPC response. Empty if the call
+# returned an error or if the daemon dropped the connection.
+rpc_result() {
+    local resp
+    resp=$(rpc "$@") || return 1
+    [ -n "$resp" ] || return 1
+    echo "$resp" | jq -ec '.result // empty'
+}
+
+# rpc_error <file> <svc> <method> [params_json]
+# Prints the `.error.message` of the JSON-RPC response (empty when the
+# call succeeded).
+rpc_error() {
+    local resp
+    resp=$(rpc "$@") || return 1
+    [ -n "$resp" ] || return 1
+    echo "$resp" | jq -er '.error.message // empty' 2>/dev/null
+}
+
+# rpc_node_id <file> <svc>
+# Returns the 32-char hex `node_id` reported by `status`.
+rpc_node_id() {
+    local file="$1" svc="$2"
+    rpc_result "$file" "$svc" status | jq -er '.node_id'
+}
+
+# wait_routes <file> <svc> <min_routes> [max_seconds]
+# Block until `pim status --verbose` reports at least `min_routes`
+# entries. Routes propagate through distance-vector advertisements
+# (5 s cadence) plus convergence; multi-hop topologies typically
+# need 2–3 cycles to settle.
+wait_routes() {
+    local file="$1" svc="$2" min="$3" max="${4:-60}"
+    local elapsed=0
+    log_info "Waiting for $svc routing table to reach $min entr(y|ies) (up to ${max}s)..."
+    while [ $elapsed -lt $max ]; do
+        local count
+        count=$(in_svc "$file" "$svc" sh -c "cat /run/pim.stats 2>/dev/null" \
+            | awk -F= '/^routes=/ {print $2; exit}')
+        count="${count:-0}"
+        if [ "${count:-0}" -ge "$min" ]; then
+            log_info "$svc has $count route(s) installed"
+            return 0
+        fi
+        sleep 2
+        elapsed=$((elapsed+2))
+    done
+    log_fail "$svc did not reach $min route(s) within ${max}s"
+    in_svc "$file" "$svc" sh -c "cat /run/pim.stats 2>/dev/null || true" || true
+    return 1
+}
+
+# wait_peer_directory <file> <svc> <expected_peer_node_id> [max_seconds]
+# Block until the daemon's `peers.list` (which enumerates *direct*
+# sessions) contains `expected_peer_node_id`. Note: routed PeerInfo
+# arrivals from a multi-hop peer don't surface here, since they
+# populate the keystore but not `state.sessions`. For multi-hop
+# verification, probe with `messages.send` instead — see
+# `docker/tests/test-broadcast.sh`.
+wait_peer_directory() {
+    local file="$1" svc="$2" target="$3" max="${4:-60}"
+    local elapsed=0
+    log_info "Waiting for $svc peer directory to contain ${target:0:8}... (up to ${max}s)"
+    while [ $elapsed -lt $max ]; do
+        local resp
+        resp=$(rpc_result "$file" "$svc" peers.list 2>/dev/null || true)
+        if [ -n "$resp" ] && echo "$resp" | jq -e --arg id "$target" \
+            '.[] | select(.node_id == $id)' >/dev/null 2>&1; then
+            return 0
+        fi
+        sleep 2
+        elapsed=$((elapsed+2))
+    done
+    log_fail "$svc peer directory missing ${target:0:8}... after ${max}s"
+    return 1
+}
+
 # ── Summary ───────────────────────────────────────────────────────────────────
 
 print_summary() {

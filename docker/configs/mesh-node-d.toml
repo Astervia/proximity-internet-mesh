@@ -1,0 +1,31 @@
+# Mesh chain — node D (right edge).
+#
+# Topology:  A ── B ── C ── D
+#
+# D only knows about C; it must learn A and B via routed PeerInfo
+# broadcasts and reach them via multi-hop routing.
+
+[node]
+name = "node-d"
+data_dir = "/var/lib/pim"
+
+[interface]
+mesh_ip = "10.77.0.104/24"
+mtu = 1400
+
+[transport]
+listen_port = 9100
+
+[security]
+key_file = "/var/lib/pim/node.key"
+
+[discovery]
+enabled = false
+
+[messaging.broadcast]
+outgoing_interval_s = 30
+watch_incoming = true
+min_peer_interval_s = 1
+
+# D is the right edge — it does not initiate any outgoing static peer
+# connection. C dials it.
