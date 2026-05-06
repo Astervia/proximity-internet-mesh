@@ -1,0 +1,17 @@
+[package]
+name = "pim-plugin"
+version = "0.1.0"
+edition = "2021"
+description = "In-process plugin trait + service ports for pim-daemon extensions"
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+pim-core = { workspace = true }
+pim-protocol = { workspace = true }
+async-trait = { workspace = true }
+bytes = { workspace = true }
+tokio = { workspace = true }
+tokio-util = { workspace = true }
+anyhow = { workspace = true }
+serde = { workspace = true }

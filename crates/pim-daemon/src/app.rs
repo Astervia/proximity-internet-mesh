@@ -47,18 +47,22 @@ mod fs_util;
 mod gateway_tasks;
 #[path = "handshake.rs"]
 mod handshake;
+#[path = "identity_broadcast.rs"]
+pub(crate) mod identity_broadcast;
 #[path = "ip_control.rs"]
 mod ip_control;
 #[path = "logs_subscriber.rs"]
 mod logs_subscriber;
-#[path = "messaging.rs"]
-pub(crate) mod messaging;
 #[path = "net.rs"]
 mod net;
 #[path = "observability.rs"]
 mod observability;
+#[path = "peer_directory.rs"]
+pub(crate) mod peer_directory;
 #[path = "peer_tasks.rs"]
 mod peer_tasks;
+#[path = "plugin_host.rs"]
+pub(crate) mod plugin_host;
 #[path = "rate_limiter.rs"]
 mod rate_limiter;
 #[path = "reconnect.rs"]
@@ -254,9 +258,22 @@ pub(crate) struct DaemonState {
     /// connection's `status.subscribe` forwarder pumps them into the
     /// per-connection writer.
     pub(crate) status_events_tx: tokio::sync::broadcast::Sender<serde_json::Value>,
-    /// Encrypted peer-to-peer messaging subsystem. Lazily opens a SQLite
-    /// database under [`runtime_paths::data_dir`] on daemon startup.
-    pub(crate) messaging: Arc<messaging::MessagingState>,
+    /// Daemon-owned peer keystore — x25519 + last-known names plus the
+    /// `peer_seen` event stream consumed by the JSON-RPC layer (and by
+    /// optional plugins like messaging).
+    pub(crate) peer_directory: Arc<peer_directory::PeerDirectoryService>,
+    /// In-process plugin registry. Populated at startup from compile-time
+    /// features (e.g. `messaging`); empty when the daemon is built
+    /// without any plugins. Wrapped in `OnceLock` because plugins are
+    /// constructed *after* `Arc<DaemonState>` exists (the daemon's
+    /// adapters they bind to need a stable `Arc<DaemonState>`).
+    pub(crate) plugins: std::sync::OnceLock<Vec<Arc<dyn pim_plugin::DaemonPlugin>>>,
+    /// Optional handle to the messaging plugin's service when the
+    /// `messaging` feature is enabled. Used by `rpc.rs` to dispatch
+    /// `messages.*` action methods directly. Same `OnceLock` rationale
+    /// as `plugins` above.
+    #[cfg(feature = "messaging")]
+    pub(crate) messaging: std::sync::OnceLock<Arc<pim_messaging::MessagingService>>,
     /// Live mirror of `[messaging.broadcast]` from pim.toml. Edited via
     /// `peers.set_broadcast_config` (hot-applied) or `config.save`
     /// (requires restart for non-broadcast fields). Clones cheaply.
@@ -590,10 +607,10 @@ pub(crate) async fn run() -> Result<()> {
     }
     let routing = Arc::new(Mutex::new(routing_table));
 
-    let messages_db_path = runtime_paths::messages_db_path();
-    let messaging = Arc::new(
-        messaging::MessagingState::open(messages_db_path.clone())
-            .with_context(|| format!("open messages db at {}", messages_db_path.display()))?,
+    let peers_db_path = runtime_paths::peers_db_path();
+    let peer_directory = Arc::new(
+        peer_directory::PeerDirectoryService::open(peers_db_path.clone())
+            .with_context(|| format!("open peers db at {}", peers_db_path.display()))?,
     );
 
     let state = Arc::new(DaemonState {
@@ -649,7 +666,10 @@ pub(crate) async fn run() -> Result<()> {
         // subscribers receive RecvError::Lagged and re-sync via the
         // next `status` RPC.
         status_events_tx: tokio::sync::broadcast::channel::<serde_json::Value>(64).0,
-        messaging,
+        peer_directory: peer_directory.clone(),
+        plugins: std::sync::OnceLock::new(),
+        #[cfg(feature = "messaging")]
+        messaging: std::sync::OnceLock::new(),
         broadcast_config: Arc::new(RwLock::new(config.messaging.broadcast.clone())),
         broadcast_peer_last_seen: Arc::new(Mutex::new(HashMap::new())),
         last_broadcast_ms: Arc::new(AtomicI64::new(i64::MIN)),
@@ -659,13 +679,71 @@ pub(crate) async fn run() -> Result<()> {
         mesh_dns_servers: config.routing.dns_servers.clone(),
     });
 
+    // ── Plugin registry ───────────────────────────────────────────────────
+    // Plugins consume daemon services through `pim_plugin::PluginContext`.
+    // The adapters bind to the freshly-built `Arc<DaemonState>` so they
+    // can route control frames through the same transport / routing
+    // surfaces the daemon itself uses.
+    {
+        use pim_plugin::{ControlSender, IdentitySecrets, PeerDirectory};
+        let peers: Arc<dyn PeerDirectory> = Arc::new(peer_directory::PeerDirectoryAdapter::new(
+            peer_directory.clone(),
+        ));
+        let control_sender: Arc<dyn ControlSender> =
+            Arc::new(plugin_host::ControlSenderAdapter::new(state.clone()));
+        let identity_secrets: Arc<dyn IdentitySecrets> =
+            Arc::new(plugin_host::IdentitySecretsAdapter::new(identity.clone()));
+        let plugin_ctx = pim_plugin::PluginContext {
+            peers: peers.clone(),
+            control: control_sender.clone(),
+            identity: identity_secrets.clone(),
+            data_dir: runtime_paths::data_dir(),
+            cancel: cancel.clone(),
+        };
+
+        #[allow(unused_mut)]
+        let mut plugin_list: Vec<Arc<dyn pim_plugin::DaemonPlugin>> = vec![];
+
+        #[cfg(feature = "messaging")]
+        {
+            let messages_db = runtime_paths::messages_db_path();
+            let messaging_svc = Arc::new(
+                pim_messaging::MessagingService::open(
+                    messages_db.clone(),
+                    peers.clone(),
+                    control_sender.clone(),
+                    identity_secrets.clone(),
+                )
+                .with_context(|| format!("open messages db at {}", messages_db.display()))?,
+            );
+            state
+                .messaging
+                .set(messaging_svc.clone())
+                .map_err(|_| anyhow::anyhow!("messaging service set twice"))?;
+            let messaging_plugin = pim_messaging::MessagingPlugin::new(messaging_svc);
+            plugin_list.push(messaging_plugin as Arc<dyn pim_plugin::DaemonPlugin>);
+        }
+
+        for plugin in plugin_list.iter() {
+            let plugin = plugin.clone();
+            let ctx = plugin_ctx.clone();
+            plugin
+                .start(ctx)
+                .await
+                .with_context(|| "plugin start failed")?;
+        }
+
+        state
+            .plugins
+            .set(plugin_list)
+            .map_err(|_| anyhow::anyhow!("plugin list set twice"))?;
+    }
+
     // ── Identity-broadcast background task ────────────────────────────────
     // Sleeps when `messaging.broadcast.outgoing_interval_s` is None and
     // wakes up early when the broadcast config is mutated via the
     // peers.set_broadcast_config RPC.
-    tokio::spawn(crate::app::messaging::dispatch::run_broadcast_task(
-        state.clone(),
-    ));
+    tokio::spawn(identity_broadcast::run_broadcast_task(state.clone()));
 
     // ── Initiate connections to configured peers ───────────────────────────
     for target in configured_targets.startup_targets.iter().copied() {
