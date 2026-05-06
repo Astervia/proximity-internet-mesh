@@ -1,0 +1,64 @@
+name: pim-rfcomm-cleanup
+
+# Phase 2 (plans/rfcomm-reconnect/plan.md) cleanup lab. The container
+# can't bind RFCOMM (AF_BLUETOOTH is per-netns) but the cleanup task
+# is independent of the RFCOMM service: it iterates the
+# `rfcomm_peer_lifecycle` SQLite rows in peers.db and shells out to a
+# fake `bluetoothctl` mounted from
+# `docker/configs/rfcomm-cleanup-bluetoothctl.sh`. The fake responds
+# to the three calls the cleanup task makes (`devices Paired`,
+# `info <addr>`, `remove <addr>`) and logs every `remove` to
+# `/tmp/fake-bin/remove.log`.
+#
+# `docker/configs/rfcomm-cleanup-seed.sh` runs before the daemon and
+# inserts a single stale lifecycle row whose `first_paired_at_s` is
+# two days ago, then `exec`s the shipped entrypoint. The first
+# cleanup tick (~60 s after boot, the clamped minimum interval)
+# unpairs that peer.
+#
+# Lab assertions live in docker/tests/test-rfcomm-cleanup.sh.
+
+services:
+  node:
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+    image: pim:latest
+    container_name: pim-rfcomm-cleanup-node
+    hostname: node
+    entrypoint:
+      - /bin/sh
+      - /etc/pim/lab/rfcomm-cleanup-seed.sh
+    environment:
+      RUST_LOG: pim_daemon=info,pim_bluetooth=info,info
+      PIM_BLUETOOTH_BLUETOOTHCTL_COMMAND: /tmp/fake-bin/bluetoothctl
+      # Pin peers.db location so the seed script and the daemon
+      # agree (otherwise the daemon defaults to
+      # `$HOME/.local/share/pim/peers.db` and never sees the
+      # pre-seeded row at /var/lib/pim/peers.db).
+      XDG_DATA_HOME: /var/lib
+    volumes:
+      - ../configs/rfcomm-cleanup.toml:/etc/pim/pim.toml:ro
+      - ../configs/rfcomm-cleanup-seed.sh:/etc/pim/lab/rfcomm-cleanup-seed.sh:ro
+      - ../configs/rfcomm-cleanup-bluetoothctl.sh:/etc/pim/lab/rfcomm-cleanup-bluetoothctl.sh:ro
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    networks:
+      pim-net:
+        ipv4_address: 172.41.0.10
+    healthcheck:
+      test: ["CMD-SHELL", "test -f /run/pim.pid && kill -0 $(cat /run/pim.pid) 2>/dev/null && ip link show pim0 2>/dev/null | grep -q UP"]
+      interval: 2s
+      timeout: 4s
+      retries: 25
+      start_period: 5s
+
+networks:
+  pim-net:
+    driver: bridge
+    ipam:
+      driver: default
+      config:
+        - subnet: 172.41.0.0/24

@@ -337,6 +337,22 @@ pub struct BluetoothRfcommConfig {
     /// Bridge established RFCOMM sessions to the local TCP transport listener.
     #[serde(default = "default_bluetooth_rfcomm_bridge_to_tcp")]
     pub bridge_to_tcp: bool,
+    /// Run a periodic task that unpairs peers whose last successful
+    /// contact is older than `max_unreachable_lifetime_s`. Defaults
+    /// to `false`: cleanup is destructive (removes BlueZ pairing) and
+    /// the daemon should not delete user-managed pairings without the
+    /// operator opting in.
+    #[serde(default)]
+    pub peer_cleanup_enabled: bool,
+    /// Threshold past which an unreachable paired peer is unpaired
+    /// by the cleanup task. Default 7 days. The daemon clamps values
+    /// below 1 hour up to 1 hour at runtime — a misconfigured short
+    /// lifetime would silently delete pairings the user manually set.
+    #[serde(default = "default_bluetooth_rfcomm_max_unreachable_lifetime_s")]
+    pub max_unreachable_lifetime_s: u64,
+    /// Interval between cleanup sweeps. Default 6 h.
+    #[serde(default = "default_bluetooth_rfcomm_cleanup_interval_s")]
+    pub cleanup_interval_s: u64,
 }
 
 /// Messaging subsystem configuration. Currently exposes the
@@ -605,6 +621,14 @@ fn default_bluetooth_rfcomm_bridge_to_tcp() -> bool {
     true
 }
 
+fn default_bluetooth_rfcomm_max_unreachable_lifetime_s() -> u64 {
+    604_800
+}
+
+fn default_bluetooth_rfcomm_cleanup_interval_s() -> u64 {
+    21_600
+}
+
 impl Default for InterfaceConfig {
     fn default() -> Self {
         Self {
@@ -712,6 +736,9 @@ impl Default for BluetoothRfcommConfig {
             outbound_enabled: default_bluetooth_rfcomm_outbound_enabled(),
             poll_interval_ms: default_bluetooth_rfcomm_poll_interval_ms(),
             bridge_to_tcp: default_bluetooth_rfcomm_bridge_to_tcp(),
+            peer_cleanup_enabled: false,
+            max_unreachable_lifetime_s: default_bluetooth_rfcomm_max_unreachable_lifetime_s(),
+            cleanup_interval_s: default_bluetooth_rfcomm_cleanup_interval_s(),
         }
     }
 }
