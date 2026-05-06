@@ -344,6 +344,112 @@ Device 00:15:83:3D:0A:57 (public)
         assert_eq!(directory.list_rfcomm_lifecycle().unwrap().len(), 1);
     }
 
+    /// Simulates the "peer disconnected, peer rejoined within
+    /// `max_unreachable_lifetime_s`" lifecycle: a peer that the
+    /// daemon previously had a session with reconnects after a brief
+    /// outage, and a successful handshake refreshes
+    /// `last_connected_at_s`. The next cleanup tick must NOT unpair
+    /// it — it's been seen too recently. The fake bluetoothctl
+    /// reports it as paired and `Connected: no` so the only thing
+    /// keeping the row alive is the freshness check.
+    #[tokio::test]
+    async fn run_once_keeps_peer_that_rejoined_within_lifetime() {
+        let dir = open_temp_directory();
+        let now = unix_seconds_now();
+
+        // Peer was originally paired a long time ago (well past the
+        // lifetime threshold) but reconnected 60 s ago. With
+        // `last_connected_at_s` recent, `last_seen` returns that
+        // recent timestamp and the age is below the lifetime.
+        dir.observe_rfcomm_paired("AA:BB:CC:DD:EE:FF", "PIM-x", now - 7_200)
+            .unwrap();
+        dir.record_rfcomm_connected("AA:BB:CC:DD:EE:FF", "PIM-x", now - 60)
+            .unwrap();
+
+        let lab = FakeShim::new(FakeShim::SCRIPT_PEER_PAIRED_DISCONNECTED);
+        let cfg = CleanupConfig {
+            bluetoothctl_command: lab.path.clone(),
+            max_unreachable_lifetime: Duration::from_secs(MIN_LIFETIME_S),
+            interval: Duration::from_secs(MIN_INTERVAL_S),
+        };
+        let directory = Arc::new(dir);
+        run_once(&cfg, &directory).await.expect("run_once");
+
+        // Row preserved.
+        let rows = directory.list_rfcomm_lifecycle().unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].bd_addr, "AA:BB:CC:DD:EE:FF");
+        // No `remove` invocation reached the shim.
+        assert!(
+            !lab.removed("AA:BB:CC:DD:EE:FF"),
+            "rejoined peer must not be unpaired"
+        );
+    }
+
+    /// Simulates the "peer disconnected, max lifetime passed"
+    /// lifecycle: the daemon's last successful contact is older than
+    /// `max_unreachable_lifetime_s` and the peer has not come back.
+    /// The next cleanup tick must unpair the peer (assuming BlueZ
+    /// reports `Connected: no`) and drop the lifecycle row.
+    #[tokio::test]
+    async fn run_once_unpairs_peer_after_lifetime_passed() {
+        let dir = open_temp_directory();
+        let now = unix_seconds_now();
+
+        // Both paired_at and last_connected_at predate the lifetime
+        // threshold (2 hours ago vs 1-hour minimum lifetime). Peer
+        // never came back.
+        dir.observe_rfcomm_paired("AA:BB:CC:DD:EE:FF", "PIM-x", now - 7_200)
+            .unwrap();
+        dir.record_rfcomm_connected("AA:BB:CC:DD:EE:FF", "PIM-x", now - 7_200)
+            .unwrap();
+
+        let lab = FakeShim::new(FakeShim::SCRIPT_PEER_PAIRED_DISCONNECTED);
+        let cfg = CleanupConfig {
+            bluetoothctl_command: lab.path.clone(),
+            max_unreachable_lifetime: Duration::from_secs(MIN_LIFETIME_S),
+            interval: Duration::from_secs(MIN_INTERVAL_S),
+        };
+        let directory = Arc::new(dir);
+        run_once(&cfg, &directory).await.expect("run_once");
+
+        // Row dropped after successful unpair.
+        assert!(directory.list_rfcomm_lifecycle().unwrap().is_empty());
+        // Shim observed the `remove` call.
+        assert!(
+            lab.removed("AA:BB:CC:DD:EE:FF"),
+            "stale peer must trigger bluetoothctl remove"
+        );
+    }
+
+    /// Lifetime expired BUT the peer is currently in a session
+    /// (BlueZ reports `Connected: yes`). The cleanup must skip the
+    /// removal — radio-layer activity, even at the start of a new
+    /// session, overrides the staleness signal.
+    #[tokio::test]
+    async fn run_once_skips_unpair_when_peer_currently_connected() {
+        let dir = open_temp_directory();
+        let now = unix_seconds_now();
+        dir.observe_rfcomm_paired("AA:BB:CC:DD:EE:FF", "PIM-x", now - 7_200)
+            .unwrap();
+
+        let lab = FakeShim::new(FakeShim::SCRIPT_PEER_PAIRED_CONNECTED);
+        let cfg = CleanupConfig {
+            bluetoothctl_command: lab.path.clone(),
+            max_unreachable_lifetime: Duration::from_secs(MIN_LIFETIME_S),
+            interval: Duration::from_secs(MIN_INTERVAL_S),
+        };
+        let directory = Arc::new(dir);
+        run_once(&cfg, &directory).await.expect("run_once");
+
+        // Row preserved; no remove invoked.
+        assert_eq!(directory.list_rfcomm_lifecycle().unwrap().len(), 1);
+        assert!(
+            !lab.removed("AA:BB:CC:DD:EE:FF"),
+            "currently-connected peer must not be unpaired"
+        );
+    }
+
     fn open_temp_directory() -> PeerDirectoryService {
         let dir = tempfile::TempDir::new().expect("tempdir");
         let path = dir.path().join("peers.db");
@@ -352,5 +458,70 @@ Device 00:15:83:3D:0A:57 (public)
         // on process exit.
         std::mem::forget(dir);
         PeerDirectoryService::open(path).expect("open peers directory")
+    }
+
+    /// Test-only fake `bluetoothctl`. Materialises a small `/bin/sh`
+    /// script in a tempdir and exposes its path so a `CleanupConfig`
+    /// can point at it. The script writes every `remove` invocation
+    /// to a sibling log file, which the test inspects to assert the
+    /// daemon's behaviour.
+    struct FakeShim {
+        path: PathBuf,
+        remove_log: PathBuf,
+        // Held to keep the tempdir alive for the duration of the test.
+        _dir: tempfile::TempDir,
+    }
+
+    impl FakeShim {
+        /// Reports the bd_addr as paired, `Connected: no`, and
+        /// records every `remove` call. Use for tests where the peer
+        /// is paired but the radio layer says it is not currently in
+        /// a session.
+        const SCRIPT_PEER_PAIRED_DISCONNECTED: &'static str = r#"#!/bin/sh
+if [ "$1" = "--timeout" ]; then shift 2; fi
+case "$1" in
+    devices) printf 'Device AA:BB:CC:DD:EE:FF PIM-x\n' ;;
+    info)    printf 'Connected: no\n' ;;
+    remove)  printf '%s\n' "$2" >> "FAKE_REMOVE_LOG" ;;
+esac
+exit 0
+"#;
+
+        /// Reports the bd_addr as paired AND `Connected: yes`.
+        /// Records every `remove` call (which the cleanup task
+        /// should never make in this scenario).
+        const SCRIPT_PEER_PAIRED_CONNECTED: &'static str = r#"#!/bin/sh
+if [ "$1" = "--timeout" ]; then shift 2; fi
+case "$1" in
+    devices) printf 'Device AA:BB:CC:DD:EE:FF PIM-x\n' ;;
+    info)    printf 'Connected: yes\n' ;;
+    remove)  printf '%s\n' "$2" >> "FAKE_REMOVE_LOG" ;;
+esac
+exit 0
+"#;
+
+        fn new(template: &'static str) -> Self {
+            use std::os::unix::fs::PermissionsExt;
+            let dir = tempfile::TempDir::new().expect("tempdir for fake shim");
+            let path = dir.path().join("bluetoothctl");
+            let remove_log = dir.path().join("remove.log");
+            let body = template.replace("FAKE_REMOVE_LOG", remove_log.to_str().unwrap());
+            std::fs::write(&path, body).expect("write fake bluetoothctl");
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755))
+                .expect("chmod +x fake bluetoothctl");
+            Self {
+                path,
+                remove_log,
+                _dir: dir,
+            }
+        }
+
+        /// True iff the cleanup task issued `bluetoothctl remove
+        /// <bd_addr>` at least once.
+        fn removed(&self, bd_addr: &str) -> bool {
+            std::fs::read_to_string(&self.remove_log)
+                .map(|s| s.lines().any(|l| l.trim() == bd_addr))
+                .unwrap_or(false)
+        }
     }
 }
