@@ -16,7 +16,7 @@ docker-build:
 .PHONY: test-single-hop test-single-hop-ipv6 test-multi-hop test-peer-discovery \
         test-resilience test-resilience-full test-multi-gateway test-auto-discovery \
         test-auto-ip-chain test-auth test-debug-cli test-route-cli \
-        test-bluetooth test-bluetooth-enx test-rfcomm-discovery \
+        test-bluetooth test-bluetooth-enx test-rfcomm-discovery test-rfcomm-cleanup \
         test-broadcast test-messaging test-all
 
 test-single-hop: docker-build         ## phase 1: TUN, NAT, gateway/client baseline
@@ -63,6 +63,9 @@ test-bluetooth-enx: docker-build
 
 test-rfcomm-discovery: docker-build  ## RFCOMM listener + outbound dial-failure resilience
 	bash $(TEST_DIR)/test-rfcomm-discovery.sh
+
+test-rfcomm-cleanup: docker-build    ## RFCOMM unreachable-peer unpair (Phase 2 cleanup)
+	bash $(TEST_DIR)/test-rfcomm-cleanup.sh
 
 test-broadcast: docker-build         ## identity broadcast across a multi-hop chain
 	bash $(TEST_DIR)/test-broadcast.sh
