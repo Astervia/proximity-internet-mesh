@@ -214,15 +214,27 @@ pub(super) fn default_bluetooth_rfcomm_bridge_to_tcp() -> bool {
     true
 }
 
+pub(super) fn default_bluetooth_rfcomm_peer_cleanup_enabled() -> bool {
+    // Default ON. The mesh use case treats a paired peer that hasn't
+    // been in contact for hours as gone; keeping the BlueZ paired list
+    // tidy is more valuable than preserving a stale pairing the user
+    // probably no longer wants. A user who manages pairings manually
+    // can opt out via TOML or the Settings pane.
+    true
+}
+
 pub(super) fn default_bluetooth_rfcomm_max_unreachable_lifetime_s() -> u64 {
-    // 7 days. Long enough that a phone left at home for a week before
-    // returning to the mesh isn't surprise-unpaired; short enough that
-    // a peer the user retired actually gets garbage-collected.
-    604_800
+    // 2 h. Tuned for mesh-peer churn rather than user-managed
+    // pairings: a peer that has been unreachable for two hours is
+    // almost certainly gone (battery, range, retired). Floor of 1 h
+    // (`MIN_LIFETIME_S` in `rfcomm_cleanup.rs`) means the sweep is
+    // never finer than a 2x margin on this default.
+    7_200
 }
 
 pub(super) fn default_bluetooth_rfcomm_cleanup_interval_s() -> u64 {
-    // 6 h. The horizon is days, so the sweep cadence can be lazy —
-    // amortises away the bluetoothctl shell-out cost.
-    21_600
+    // 1 h. With a 2 h lifetime the sweep should fire at least twice
+    // per stale-window so the latency between "peer ages out" and
+    // "BlueZ pairing removed" is bounded by ~1 h.
+    3_600
 }
