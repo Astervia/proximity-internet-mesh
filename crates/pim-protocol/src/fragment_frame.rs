@@ -85,7 +85,7 @@ pub fn fragment_packet(data: bytes::Bytes, fragment_id: u32) -> Vec<FragmentFram
     }
 
     let total_length = data.len() as u16;
-    let mut frames = Vec::new();
+    let mut frames = Vec::with_capacity(data.len().div_ceil(MAX_FRAGMENT_PAYLOAD));
     let mut offset = 0usize;
 
     while offset < data.len() {

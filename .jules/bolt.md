@@ -44,3 +44,8 @@
 ## 2026-05-09 - Zero-copy packet fragmentation
 **Learning:** `fragment_packet` previously took a `&[u8]` slice and forced memory allocation for every fragmented packet via `Bytes::copy_from_slice()`. For large packets traversing the mesh, this creates massive memory pressure due to repeated allocation at every network boundary. Passing the original `Bytes` buffer lets us utilize `.slice(offset..end)` to create cheap references.
 **Action:** When designing API boundaries for networking, protocol layers, and fragmentation, pass payloads as `bytes::Bytes` by value instead of `&[u8]`. This preserves the ability to perform O(1) zero-copy slicing (`payload.slice()`) downstream and avoids unnecessary O(N) memory reallocations like `Bytes::copy_from_slice()`.
+
+## 2026-05-09 - Pre-allocate Vector capacities in hot paths when populating collections
+
+**Learning:** `Vec::new()` allocates no heap memory until the first element is pushed, at which point it dynamically allocates and then periodically reallocates. In hot network paths like `fragment_packet`, where we know we will push items, this leads to unnecessary reallocation overhead. However, it is a mistake to aggressively apply `Vec::with_capacity()` to collections that often remain empty (e.g., error queues or retry buffers on the "happy path"), as this will force an unnecessary heap allocation where `Vec::new()` would have remained zero-cost.
+**Action:** Always pre-allocate exact `Vec` capacities (e.g., using `Vec::with_capacity()`) over `Vec::new()` when the final size or an upper bound is known in advance *and* the vector is guaranteed or highly likely to be populated. Avoid `Vec::with_capacity()` for paths that usually remain empty.
