@@ -1521,8 +1521,25 @@ async fn persist_broadcast_config_to_disk(state: &Arc<DaemonState>) -> anyhow::R
             .parent()
             .ok_or_else(|| anyhow!("config path has no parent"))?;
         let tmp = tempfile_in_same_dir(parent, &path_for_task)?;
-        std::fs::write(&tmp, serialized.as_bytes())
-            .with_context(|| format!("write tmp {}", tmp.display()))?;
+
+        let mut options = std::fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+
+        {
+            use std::io::Write;
+            let mut file = options.open(&tmp)
+                .with_context(|| format!("open tmp {}", tmp.display()))?;
+            file.write_all(serialized.as_bytes())
+                .with_context(|| format!("write tmp {}", tmp.display()))?;
+            file.flush()
+                .with_context(|| format!("flush tmp {}", tmp.display()))?;
+        }
+
         std::fs::rename(&tmp, &path_for_task)
             .with_context(|| format!("rename {} -> {}", tmp.display(), path_for_task.display()))?;
         Ok(())
