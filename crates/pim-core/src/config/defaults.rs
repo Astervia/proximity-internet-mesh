@@ -213,3 +213,16 @@ pub(super) fn default_bluetooth_rfcomm_poll_interval_ms() -> u64 {
 pub(super) fn default_bluetooth_rfcomm_bridge_to_tcp() -> bool {
     true
 }
+
+pub(super) fn default_bluetooth_rfcomm_max_unreachable_lifetime_s() -> u64 {
+    // 7 days. Long enough that a phone left at home for a week before
+    // returning to the mesh isn't surprise-unpaired; short enough that
+    // a peer the user retired actually gets garbage-collected.
+    604_800
+}
+
+pub(super) fn default_bluetooth_rfcomm_cleanup_interval_s() -> u64 {
+    // 6 h. The horizon is days, so the sweep cadence can be lazy —
+    // amortises away the bluetoothctl shell-out cost.
+    21_600
+}
