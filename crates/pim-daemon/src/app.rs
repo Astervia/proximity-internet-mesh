@@ -934,6 +934,11 @@ pub(crate) async fn run() -> Result<()> {
                                     initiator = *initiator,
                                     "rfcomm peer discovered"
                                 );
+                                record_rfcomm_lifecycle_connected(
+                                    state_for_rfcomm.clone(),
+                                    bd_addr.clone(),
+                                    name.clone(),
+                                );
                                 spawn_rfcomm_initiator_if_lower(
                                     state_for_rfcomm.clone(),
                                     node_id.clone(),
@@ -943,13 +948,24 @@ pub(crate) async fn run() -> Result<()> {
                                 info!(bd_addr = %bd_addr, reason = %reason, "rfcomm peer lost")
                             }
                             RfcommEvent::OpenFailed {
-                                bd_addr, reason, ..
+                                bd_addr,
+                                name,
+                                reason,
                             } => {
                                 // Promoted from debug → warn while debugging the
                                 // linux↔linux RFCOMM bench. Open failures are
                                 // the most useful signal we have right now and
                                 // hiding them at debug stalls iteration.
-                                warn!(bd_addr = %bd_addr, reason = %reason, "rfcomm open failed")
+                                warn!(bd_addr = %bd_addr, reason = %reason, "rfcomm open failed");
+                                // Failed dials still tell us "this peer is
+                                // paired right now": observe so the cleanup
+                                // loop (Phase 2) has a `first_paired_at_s`
+                                // even for peers we have never connected to.
+                                observe_rfcomm_lifecycle_paired(
+                                    state_for_rfcomm.clone(),
+                                    bd_addr.clone(),
+                                    name.clone(),
+                                );
                             }
                             RfcommEvent::Error { code, message } => {
                                 warn!(code = *code, message = %message, "rfcomm error")
@@ -1018,6 +1034,45 @@ pub(crate) async fn run() -> Result<()> {
 ///
 /// The bridge already injects each side's local NodeId as the first 16
 /// bytes of the RFCOMM stream (see `pim-bluetooth::rfcomm::bridge`),
+/// Persist `bd_addr` as a paired peer the daemon has observed, with
+/// `name` recorded for human-readable cleanup logs. Idempotent — see
+/// `PeerDirectoryService::observe_rfcomm_paired`. Spawned as a fire-
+/// and-forget task so the RFCOMM event loop never blocks on SQLite.
+#[cfg(target_os = "linux")]
+fn observe_rfcomm_lifecycle_paired(state: Arc<DaemonState>, bd_addr: String, name: String) {
+    let directory = state.peer_directory.clone();
+    let now_s = unix_seconds_now();
+    tokio::task::spawn_blocking(move || {
+        if let Err(e) = directory.observe_rfcomm_paired(&bd_addr, &name, now_s) {
+            warn!(bd_addr = %bd_addr, "observe_rfcomm_paired failed: {e}");
+        }
+    });
+}
+
+/// Persist a successful RFCOMM session for `bd_addr`. Stamps
+/// `last_connected_at_s` so the Phase 2 cleanup loop knows the peer
+/// is reachable. Always also creates the row if missing — inbound
+/// sessions can land before the paired-list scan has had a chance to
+/// observe the peer.
+#[cfg(target_os = "linux")]
+fn record_rfcomm_lifecycle_connected(state: Arc<DaemonState>, bd_addr: String, name: String) {
+    let directory = state.peer_directory.clone();
+    let now_s = unix_seconds_now();
+    tokio::task::spawn_blocking(move || {
+        if let Err(e) = directory.record_rfcomm_connected(&bd_addr, &name, now_s) {
+            warn!(bd_addr = %bd_addr, "record_rfcomm_connected failed: {e}");
+        }
+    });
+}
+
+#[cfg(target_os = "linux")]
+fn unix_seconds_now() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
+}
+
 /// so when this fires the loopback TCP listener has typically already
 /// `register_peer`'d the peer in `state.transport`'s session map.
 /// We poll briefly for that registration to land, then call
