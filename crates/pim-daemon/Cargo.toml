@@ -6,22 +6,32 @@ description = "Background daemon process for the Proximity Internet Mesh"
 license.workspace = true
 repository.workspace = true
 
+[features]
+default = ["messaging"]
+# Optional in-process plugins. Building with `--no-default-features`
+# yields a daemon that runs without messaging compiled in (no
+# messages.* RPC methods, no messages.db).
+messaging = ["dep:pim-messaging"]
+
 [dependencies]
 pim-bluetooth = { workspace = true }
 pim-core = { workspace = true }
 pim-crypto = { workspace = true }
 pim-protocol = { workspace = true }
+pim-plugin = { workspace = true }
 pim-transport = { workspace = true }
 pim-tun = { workspace = true }
 pim-gateway = { workspace = true }
 pim-discovery = { workspace = true }
 pim-routing = { workspace = true }
 pim-wifidirect = { workspace = true }
+pim-messaging = { workspace = true, optional = true }
 tokio = { workspace = true }
 tokio-util = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 anyhow = { workspace = true }
+async-trait = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 toml = { workspace = true }

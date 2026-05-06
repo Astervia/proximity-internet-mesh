@@ -331,40 +331,18 @@ pub(super) async fn run_event_loop(state: Arc<DaemonState>) -> Result<()> {
                                             x25519_pub,
                                             friendly_name,
                                         } => {
-                                            crate::app::messaging::dispatch::handle_incoming_peer_info(
+                                            crate::app::identity_broadcast::handle_incoming_peer_info(
                                                 &state,
                                                 mesh.src_id,
                                                 x25519_pub,
                                                 friendly_name,
-                                                crate::app::messaging::PeerInfoSource::Routed,
+                                                pim_plugin::PeerInfoSource::Routed,
                                             )
                                             .await;
                                         }
-                                        ControlFrame::Message {
-                                            message_id,
-                                            timestamp_ms,
-                                            ciphertext,
-                                        } => {
-                                            crate::app::messaging::dispatch::handle_incoming_message(
-                                                &state,
-                                                mesh.src_id,
-                                                message_id,
-                                                timestamp_ms,
-                                                ciphertext,
-                                            )
-                                            .await;
-                                        }
-                                        ControlFrame::MessageAck {
-                                            message_id,
-                                            ack_kind,
-                                        } => {
-                                            crate::app::messaging::dispatch::handle_incoming_message_ack(
-                                                &state,
-                                                mesh.src_id,
-                                                message_id,
-                                                ack_kind,
-                                            )
-                                            .await;
+                                        ControlFrame::PluginPayload { kind, body } => {
+                                            dispatch_plugin_payload(&state, mesh.src_id, kind, body)
+                                                .await;
                                         }
                                         other => {
                                             debug!(
@@ -688,40 +666,17 @@ pub(super) async fn run_event_loop(state: Arc<DaemonState>) -> Result<()> {
                                     x25519_pub,
                                     friendly_name,
                                 } => {
-                                    crate::app::messaging::dispatch::handle_incoming_peer_info(
+                                    crate::app::identity_broadcast::handle_incoming_peer_info(
                                         &state,
                                         from_peer,
                                         x25519_pub,
                                         friendly_name,
-                                        crate::app::messaging::PeerInfoSource::Direct,
+                                        pim_plugin::PeerInfoSource::Direct,
                                     )
                                     .await;
                                 }
-                                ControlFrame::Message {
-                                    message_id,
-                                    timestamp_ms,
-                                    ciphertext,
-                                } => {
-                                    crate::app::messaging::dispatch::handle_incoming_message(
-                                        &state,
-                                        from_peer,
-                                        message_id,
-                                        timestamp_ms,
-                                        ciphertext,
-                                    )
-                                    .await;
-                                }
-                                ControlFrame::MessageAck {
-                                    message_id,
-                                    ack_kind,
-                                } => {
-                                    crate::app::messaging::dispatch::handle_incoming_message_ack(
-                                        &state,
-                                        from_peer,
-                                        message_id,
-                                        ack_kind,
-                                    )
-                                    .await;
+                                ControlFrame::PluginPayload { kind, body } => {
+                                    dispatch_plugin_payload(&state, from_peer, kind, body).await;
                                 }
                             },
                             Err(e) => warn!(%from_peer, "control frame decode: {e}"),
@@ -785,6 +740,33 @@ pub(super) async fn run_event_loop(state: Arc<DaemonState>) -> Result<()> {
     state.transport.shutdown().await;
     state.tun.down().ok();
     Ok(())
+}
+
+/// Dispatch an inbound [`pim_protocol::ControlFrame::PluginPayload`]
+/// to the first registered plugin claiming `kind`. Frames whose `kind`
+/// no plugin handles are dropped with a debug log — that's how the
+/// daemon stays usable when an optional feature (e.g. `messaging`) is
+/// compiled out but a peer still pushes its frames at us.
+async fn dispatch_plugin_payload(
+    state: &Arc<DaemonState>,
+    src: NodeId,
+    kind: String,
+    body: bytes::Bytes,
+) {
+    let plugins = match state.plugins.get() {
+        Some(list) => list,
+        None => {
+            debug!(%src, %kind, "plugin payload arrived before plugin init; dropping");
+            return;
+        }
+    };
+    for plugin in plugins {
+        if plugin.payload_kinds().contains(&kind.as_str()) {
+            plugin.handle_payload(src, &kind, body).await;
+            return;
+        }
+    }
+    debug!(%src, %kind, "no plugin claims kind; dropping payload");
 }
 
 // ── Entry point ───────────────────────────────────────────────────────────────

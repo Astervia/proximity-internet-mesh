@@ -1,6 +1,6 @@
 //! Control-plane messages carried inside transport frames.
 
-use bytes::{Buf, BufMut, BytesMut};
+use bytes::{Buf, BufMut, Bytes, BytesMut};
 
 use pim_core::{FrameCodec, NodeId, PimError};
 
@@ -22,10 +22,8 @@ pub enum ControlType {
     Pong = 0x06,
     /// One-shot exchange of node identity metadata after handshake.
     PeerInfo = 0x07,
-    /// User-to-user encrypted message payload.
-    Message = 0x08,
-    /// Acknowledgement for a previously delivered message.
-    MessageAck = 0x09,
+    /// Generic plugin-defined payload — see [`ControlFrame::PluginPayload`].
+    PluginPayload = 0x08,
 }
 
 impl ControlType {
@@ -39,8 +37,7 @@ impl ControlType {
             0x05 => Ok(Self::Ping),
             0x06 => Ok(Self::Pong),
             0x07 => Ok(Self::PeerInfo),
-            0x08 => Ok(Self::Message),
-            0x09 => Ok(Self::MessageAck),
+            0x08 => Ok(Self::PluginPayload),
             other => Err(PimError::Protocol(format!(
                 "unknown control type: 0x{other:02x}"
             ))),
@@ -50,7 +47,12 @@ impl ControlType {
 
 /// Multiplexed control message.
 ///
-/// Layout: control_type(1) + body (variable, depends on type)
+/// Layout: control_type(1) + body (variable, depends on type).
+///
+/// Mesh-essential variants (IP lease, routing, liveness, identity)
+/// live here directly. Optional features such as user messaging are
+/// carried inside [`ControlFrame::PluginPayload`] so the daemon can
+/// be built without those plugins compiled in.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ControlFrame {
     /// Request an address lease from a gateway.
@@ -98,26 +100,28 @@ pub enum ControlFrame {
         /// length-prefixed by `u8` — capped at 255 bytes by the codec).
         friendly_name: String,
     },
-    /// End-to-end encrypted user message.
+    /// Generic plugin-defined payload.
     ///
-    /// Carried inside a [`MeshDataFrame`](crate::MeshDataFrame) with both
-    /// [`DataFlags::IS_CONTROL`](crate::DataFlags::IS_CONTROL) and
-    /// [`DataFlags::IS_E2E`](crate::DataFlags::IS_E2E) set. `ciphertext`
-    /// is the literal output of `pim_crypto::e2e_encrypt`.
-    Message {
-        /// 16-byte stable identifier (UUIDv4 bytes).
-        message_id: [u8; 16],
-        /// Sender-stamped wall-clock time in milliseconds since epoch.
-        timestamp_ms: u64,
-        /// ECIES-encrypted UTF-8 plaintext.
-        ciphertext: Vec<u8>,
-    },
-    /// Receipt for a previously sent [`ControlFrame::Message`].
-    MessageAck {
-        /// Identifier of the original message being acknowledged.
-        message_id: [u8; 16],
-        /// Acknowledgement category: `1 = delivered`, `2 = read`.
-        ack_kind: u8,
+    /// `kind` is an ASCII identifier (≤ 255 bytes) registered by a
+    /// [`pim-plugin`](https://crates.io/crates/pim-plugin)-style
+    /// plugin (e.g. `"messaging.msg"`). `body` is plugin-private and
+    /// opaque to the daemon — typically further encrypted/serialized
+    /// according to the plugin's own scheme.
+    ///
+    /// Wire layout:
+    /// ```text
+    /// 0x08
+    /// kind_len (u8, 1..=255)
+    /// kind     (kind_len bytes, ASCII)
+    /// body_len (u16 BE)
+    /// body     (body_len bytes)
+    /// ```
+    PluginPayload {
+        /// Plugin-namespaced kind identifier.
+        kind: String,
+        /// Opaque payload bytes — interpretation is up to the plugin
+        /// claiming `kind`.
+        body: Bytes,
     },
 }
 
@@ -170,25 +174,15 @@ impl FrameCodec for ControlFrame {
                 buf.put_u8(name_len);
                 buf.put_slice(&name_bytes[..name_len as usize]);
             }
-            ControlFrame::Message {
-                message_id,
-                timestamp_ms,
-                ciphertext,
-            } => {
-                buf.put_u8(ControlType::Message as u8);
-                buf.put_slice(message_id);
-                buf.put_u64(*timestamp_ms);
-                let ciphertext_len = ciphertext.len().min(u16::MAX as usize) as u16;
-                buf.put_u16(ciphertext_len);
-                buf.put_slice(&ciphertext[..ciphertext_len as usize]);
-            }
-            ControlFrame::MessageAck {
-                message_id,
-                ack_kind,
-            } => {
-                buf.put_u8(ControlType::MessageAck as u8);
-                buf.put_slice(message_id);
-                buf.put_u8(*ack_kind);
+            ControlFrame::PluginPayload { kind, body } => {
+                buf.put_u8(ControlType::PluginPayload as u8);
+                let kind_bytes = kind.as_bytes();
+                let kind_len = kind_bytes.len().min(255) as u8;
+                buf.put_u8(kind_len);
+                buf.put_slice(&kind_bytes[..kind_len as usize]);
+                let body_len = body.len().min(u16::MAX as usize) as u16;
+                buf.put_u16(body_len);
+                buf.put_slice(&body[..body_len as usize]);
             }
         }
     }
@@ -294,43 +288,39 @@ impl FrameCodec for ControlFrame {
                     friendly_name,
                 })
             }
-            ControlType::Message => {
-                // 1 (tag) + 16 (id) + 8 (ts) + 2 (len) + N (ciphertext)
-                if buf.len() < 27 {
-                    return Err(PimError::Protocol("Message too short".into()));
+            ControlType::PluginPayload => {
+                // 1 (tag) + 1 (kind_len) + N (kind) + 2 (body_len) + M (body)
+                if buf.len() < 4 {
+                    return Err(PimError::Protocol("PluginPayload too short".into()));
                 }
-                let mut message_id = [0u8; 16];
-                message_id.copy_from_slice(&buf[1..17]);
-                let timestamp_ms = (&buf[17..25]).get_u64();
-                let ciphertext_len = (&buf[25..27]).get_u16() as usize;
-                let total = 27 + ciphertext_len;
-                if buf.len() < total {
+                let kind_len = buf[1] as usize;
+                let body_len_off = 2 + kind_len;
+                if buf.len() < body_len_off + 2 {
                     return Err(PimError::Protocol(format!(
-                        "Message truncated: need {total}, have {}",
+                        "PluginPayload header truncated: need {}, have {}",
+                        body_len_off + 2,
                         buf.len()
                     )));
                 }
-                let ciphertext = buf[27..total].to_vec();
-                buf.advance(total);
-                Ok(ControlFrame::Message {
-                    message_id,
-                    timestamp_ms,
-                    ciphertext,
-                })
-            }
-            ControlType::MessageAck => {
-                // 1 (tag) + 16 (id) + 1 (ack_kind)
-                if buf.len() < 18 {
-                    return Err(PimError::Protocol("MessageAck too short".into()));
+                let kind = match std::str::from_utf8(&buf[2..body_len_off]) {
+                    Ok(s) => s.to_owned(),
+                    Err(_) => {
+                        return Err(PimError::Protocol(
+                            "PluginPayload kind not valid UTF-8".into(),
+                        ))
+                    }
+                };
+                let body_len = (&buf[body_len_off..body_len_off + 2]).get_u16() as usize;
+                let total = body_len_off + 2 + body_len;
+                if buf.len() < total {
+                    return Err(PimError::Protocol(format!(
+                        "PluginPayload truncated: need {total}, have {}",
+                        buf.len()
+                    )));
                 }
-                let mut message_id = [0u8; 16];
-                message_id.copy_from_slice(&buf[1..17]);
-                let ack_kind = buf[17];
-                buf.advance(18);
-                Ok(ControlFrame::MessageAck {
-                    message_id,
-                    ack_kind,
-                })
+                let body = Bytes::copy_from_slice(&buf[body_len_off + 2..total]);
+                buf.advance(total);
+                Ok(ControlFrame::PluginPayload { kind, body })
             }
         }
     }

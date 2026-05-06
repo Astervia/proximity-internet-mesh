@@ -875,6 +875,7 @@ name = "pim-daemon"
 version = "0.1.15"
 dependencies = [
  "anyhow",
+ "async-trait",
  "bytes",
  "ed25519-dalek",
  "hkdf",
@@ -884,6 +885,8 @@ dependencies = [
  "pim-crypto",
  "pim-discovery",
  "pim-gateway",
+ "pim-messaging",
+ "pim-plugin",
  "pim-protocol",
  "pim-routing",
  "pim-transport",
@@ -929,6 +932,41 @@ dependencies = [
  "thiserror",
  "tokio",
  "tracing",
+]
+
+[[package]]
+name = "pim-messaging"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "bytes",
+ "pim-core",
+ "pim-crypto",
+ "pim-plugin",
+ "pim-protocol",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tokio-util",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
+name = "pim-plugin"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "bytes",
+ "pim-core",
+ "pim-protocol",
+ "serde",
+ "tokio",
+ "tokio-util",
 ]
 
 [[package]]

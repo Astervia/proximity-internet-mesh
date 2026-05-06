@@ -13,6 +13,8 @@ members = [
     "crates/pim-wifidirect",
     "crates/pim-daemon",
     "crates/pim-cli",
+    "crates/pim-plugin",
+    "crates/pim-messaging",
 ]
 
 [workspace.package]
@@ -75,3 +77,5 @@ pim-gateway = { path = "crates/pim-gateway", version = "0.1.4" }
 pim-discovery = { path = "crates/pim-discovery", version = "0.1.2" }
 pim-routing = { path = "crates/pim-routing", version = "0.1.3" }
 pim-wifidirect = { path = "crates/pim-wifidirect", version = "0.1.3" }
+pim-plugin = { path = "crates/pim-plugin", version = "0.1.0" }
+pim-messaging = { path = "crates/pim-messaging", version = "0.1.0" }
