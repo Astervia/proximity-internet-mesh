@@ -16,8 +16,12 @@ use pim_core::PeerCleanupConfig;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
 
+#[path = "peer_cleanup/broadcast.rs"]
+pub(crate) mod broadcast;
 #[path = "peer_cleanup/mesh_identity.rs"]
 pub(crate) mod mesh_identity;
+#[path = "peer_cleanup/reconnect_discovered.rs"]
+pub(crate) mod reconnect_discovered;
 #[path = "peer_cleanup/rfcomm.rs"]
 pub(crate) mod rfcomm;
 
