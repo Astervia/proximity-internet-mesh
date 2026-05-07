@@ -3,12 +3,14 @@
 mod defaults;
 mod model;
 mod peer;
+mod peer_cleanup;
 
 #[cfg(test)]
 mod tests;
 
 pub use model::*;
 pub use peer::*;
+pub use peer_cleanup::PeerCleanupConfig;
 
 use std::path::Path;
 use std::str::FromStr;
