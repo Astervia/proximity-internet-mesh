@@ -123,8 +123,8 @@ pub(crate) async fn run_gateway_return(state: Arc<DaemonState>) {
                         break;
                     }
                 };
-                let mut pkt = buf[..n].to_vec();
-                let Some(version) = packet_ip_version(&pkt) else {
+                let pkt = &mut buf[..n];
+                let Some(version) = packet_ip_version(pkt) else {
                     continue;
                 };
 
@@ -135,7 +135,7 @@ pub(crate) async fn run_gateway_return(state: Arc<DaemonState>) {
                     if pkt.len() < 20 {
                         continue;
                     }
-                    let dest_ip = match gw.translate_inbound(&mut pkt).await {
+                    let dest_ip = match gw.translate_inbound(pkt).await {
                         Ok(dest_ip) => dest_ip,
                         Err(_) => continue,
                     };
@@ -143,21 +143,21 @@ pub(crate) async fn run_gateway_return(state: Arc<DaemonState>) {
                     if let Some((dst_id, next_hop)) = state.routing.lock().await.lookup_mesh_ip(dest_ip) {
                         let session = state.sessions.read().await.get(&next_hop).cloned();
                         if let Some(session) = session {
-                            send_mesh_data(&state, &session, state.self_id, dst_id, 8, DataFlags::IS_INTERNET, &pkt).await;
+                            send_mesh_data(&state, &session, state.self_id, dst_id, 8, DataFlags::IS_INTERNET, pkt).await;
                         }
                     }
                 } else if version == 6 {
                     let Some(gw_v6) = gw_v6.as_ref() else {
                         continue;
                     };
-                    let dst_id = match gw_v6.translate_inbound(&mut pkt).await {
+                    let dst_id = match gw_v6.translate_inbound(pkt).await {
                         Ok(dst_id) => dst_id,
                         Err(_) => continue,
                     };
                     if let Some(next_hop) = state.routing.lock().await.lookup(dst_id) {
                         let session = state.sessions.read().await.get(&next_hop).cloned();
                         if let Some(session) = session {
-                            send_mesh_data(&state, &session, state.self_id, dst_id, 8, DataFlags::IS_INTERNET, &pkt).await;
+                            send_mesh_data(&state, &session, state.self_id, dst_id, 8, DataFlags::IS_INTERNET, pkt).await;
                         }
                     }
                 }

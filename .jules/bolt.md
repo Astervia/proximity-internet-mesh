@@ -36,3 +36,7 @@
 
 **Learning:** `bytes::Bytes` holds a reference-counted buffer but its contents cannot be mutated via `.to_vec()` without forcing a clone and full allocation. However, if the network code owns the sole reference to the buffer (e.g. immediately after decoding), `.try_into_mut()` can safely reclaim mutable access to the underlying `BytesMut` with zero allocations. In high-throughput network daemons like PIM, allocating memory for every frame on the read path becomes a major performance bottleneck.
 **Action:** When a frame buffer needs to be mutated directly (like in `decrypt_in_place_detached`), avoid `.to_vec()`. Instead, attempt to use `.try_into_mut()` when we know the `Bytes` object is uniquely owned to recover zero-copy mutability.
+
+## 2024-05-07 - Gateway IP Return Allocation Elimination
+**Learning:** `run_gateway_return` in `pim-daemon` historically copied bytes into a newly-allocated `Vec<u8>` (`buf[..n].to_vec()`) on every single internet-to-mesh packet just to process IP headers and queue them. This created massive heap churn during high-throughput gateway NAT return paths. Because Tokio's network writes and our pipeline are sequenced within this loop, an in-place mutable slice `&mut buf[..n]` is entirely safe and sufficient.
+**Action:** When inspecting async loop buffers handling network I/O, explicitly check if the read buffer can be sliced and processed safely without a deep clone to a `Vec` before transmission.
