@@ -993,11 +993,11 @@ pub(crate) async fn run() -> Result<()> {
     // enabled (no point cleaning lifecycle rows we never write to)
     // and the operator has explicitly enabled cleanup.
     #[cfg(target_os = "linux")]
-    if config.bluetooth_rfcomm.enabled && config.bluetooth_rfcomm.peer_cleanup_enabled {
+    if config.bluetooth_rfcomm.enabled && config.bluetooth_rfcomm.peer_cleanup.enabled {
         let cleanup_cfg = rfcomm_cleanup::build_cleanup_config(
             bluetoothctl_command(),
-            config.bluetooth_rfcomm.max_unreachable_lifetime_s,
-            config.bluetooth_rfcomm.cleanup_interval_s,
+            config.bluetooth_rfcomm.peer_cleanup.max_unreachable_lifetime_s,
+            config.bluetooth_rfcomm.peer_cleanup.cleanup_interval_s,
         );
         rfcomm_cleanup::spawn(cleanup_cfg, state.peer_directory.clone(), cancel.clone());
     }
