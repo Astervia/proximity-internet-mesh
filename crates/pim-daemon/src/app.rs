@@ -98,7 +98,7 @@ use tracing::{debug, error, info, warn};
 
 #[cfg(test)]
 use auth::AuthorizationDecision;
-use auth::{expand_tilde, parse_discovery_shared_key, AuthorizationManager};
+use auth::{expand_tilde, AuthorizationManager};
 use bluetooth_env::*;
 use data_plane::{
     reassemble_or_deliver, run_heartbeats, run_reassembly_gc, run_route_advertisements,
@@ -315,11 +315,59 @@ pub(crate) struct DaemonState {
     /// management" so users who rely on systemd's DNS-over-pim0 stub
     /// or a custom resolver setup can opt out.
     pub(crate) mesh_dns_servers: Vec<String>,
+    /// 32-byte handshake-binding key derived from the mesh passphrase
+    /// at startup (see [`pim_crypto::MeshSecret`]). `None` for open
+    /// meshes; passed into every [`Handshaker`] so a peer that doesn't
+    /// share the same mesh can't complete the session-key derivation.
+    /// Read-only after construction; rotating the passphrase requires
+    /// a daemon restart.
+    pub(crate) mesh_handshake_key: Option<[u8; 32]>,
+    /// 8-byte non-secret display value derived alongside
+    /// [`Self::mesh_handshake_key`]. Surfaced via JSON-RPC / UI so
+    /// operators can confirm two nodes share a mesh without revealing
+    /// the passphrase. Consumed by `mesh.status`.
+    pub(crate) mesh_fingerprint: Option<[u8; 8]>,
+    /// Optional cosmetic mesh label cloned from `[mesh].mesh_id` at
+    /// startup. The value is mixed into the Argon2 salt at derivation
+    /// time, so it's already baked into `mesh_handshake_key`; this copy
+    /// is purely for UI/CLI display.
+    pub(crate) mesh_id: Option<String>,
 }
 
 impl DaemonState {
     fn next_frag_id(&self) -> u32 {
         self.frag_id.fetch_add(1, Ordering::Relaxed)
+    }
+}
+
+/// Derive the mesh secret from `[mesh]` config, or `None` for open mesh.
+///
+/// Argon2id runs synchronously here; the cost is paid once at startup.
+/// `mode = "private"` with an empty/missing passphrase is rejected so
+/// operators don't accidentally start a private daemon with no secret.
+pub(crate) fn build_mesh_secret(
+    mesh: &pim_core::config::MeshConfig,
+) -> Result<Option<pim_crypto::MeshSecret>> {
+    use pim_core::config::MeshMode;
+    match mesh.mode {
+        MeshMode::Open => Ok(None),
+        MeshMode::Private => {
+            let passphrase = mesh
+                .passphrase
+                .as_deref()
+                .filter(|s| !s.is_empty())
+                .ok_or_else(|| {
+                    anyhow::anyhow!("[mesh] mode = \"private\" requires a non-empty passphrase")
+                })?;
+            let kdf = pim_crypto::MeshKdfParams {
+                m_cost_kib: mesh.kdf.m_cost_kib,
+                t_cost: mesh.kdf.t_cost,
+                p_cost: mesh.kdf.p_cost,
+            };
+            let secret = pim_crypto::MeshSecret::derive(passphrase, mesh.mesh_id.as_deref(), kdf)
+                .context("derive mesh secret from passphrase")?;
+            Ok(Some(secret))
+        }
     }
 }
 
@@ -572,13 +620,21 @@ pub(crate) async fn run() -> Result<()> {
         )
         .context("build authorization manager")?,
     );
-    let discovery_shared_key = config
-        .discovery
-        .shared_key
-        .as_deref()
-        .map(parse_discovery_shared_key)
-        .transpose()
-        .context("parse discovery shared key")?;
+    // ── Derive private-mesh secret (optional) ─────────────────────────────
+    // Absent / `mode = "open"` → open mesh; any peer can handshake and
+    // discovery is plaintext. `mode = "private"` → Argon2id-stretched
+    // passphrase produces sub-keys for discovery encryption + handshake
+    // binding (see `pim_crypto::MeshSecret`). The Argon2 derivation is
+    // synchronous and intentionally slow (~100 ms default); we run it
+    // once here and stash the result for the lifetime of the daemon.
+    let mesh_secret = build_mesh_secret(&config.mesh).context("derive mesh secret")?;
+    if let Some(secret) = &mesh_secret {
+        info!(
+            mesh_id = config.mesh.mesh_id.as_deref().unwrap_or(""),
+            fingerprint = %secret.fingerprint_hex(),
+            "private mesh enabled"
+        );
+    }
 
     let discovery_runtime = if config.discovery.enabled {
         let pubkey: [u8; 32] = identity.signing_key().verifying_key().to_bytes();
@@ -591,8 +647,8 @@ pub(crate) async fn run() -> Result<()> {
                 config.discovery.broadcast_interval_ms,
             ))
             .with_peer_timeout(Duration::from_millis(config.discovery.peer_timeout_ms));
-        let discovery_svc = if let Some(key) = discovery_shared_key {
-            discovery_svc.with_shared_key(key)
+        let discovery_svc = if let Some(secret) = &mesh_secret {
+            discovery_svc.with_discovery_key(*secret.discovery_key())
         } else {
             discovery_svc
         };
@@ -679,6 +735,9 @@ pub(crate) async fn run() -> Result<()> {
         broadcast_notify: Arc::new(Notify::new()),
         route_install_notify: Arc::new(Notify::new()),
         mesh_dns_servers: config.routing.dns_servers.clone(),
+        mesh_handshake_key: mesh_secret.as_ref().map(|s| *s.handshake_key()),
+        mesh_fingerprint: mesh_secret.as_ref().map(|s| *s.fingerprint()),
+        mesh_id: config.mesh.mesh_id.clone(),
     });
 
     // ── Plugin registry ───────────────────────────────────────────────────
@@ -915,6 +974,7 @@ pub(crate) async fn run() -> Result<()> {
                 }
                 caps
             },
+            mesh_handshake_key: state.mesh_handshake_key,
         };
         let rfcomm_cfg = RfcommConfig {
             enabled: true,

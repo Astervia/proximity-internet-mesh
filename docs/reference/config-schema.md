@@ -88,15 +88,56 @@ daemon connects only to statically configured `[[peers]]` entries.
 | `peer_timeout_ms` | integer | `30000` | no | Time after which an unseen peer is considered stale, in milliseconds. |
 | `connect_relays` | boolean | `true` | no | Automatically connect to discovered peers advertising relay capability. |
 | `connect_gateways` | boolean | `true` | no | Automatically connect to discovered peers advertising gateway capability. |
-| `shared_key` | optional string | _(none)_ | no | Optional 32-byte discovery group key encoded as 64 hex characters. Only nodes with the same key can decode each other's broadcasts. |
 
 ```toml
 [discovery]
 enabled = true
 broadcast_interval_ms = 5000
 peer_timeout_ms = 30000
-# shared_key = "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"
 ```
+
+> Discovery encryption now lives in [`[mesh]`](#mesh) — set `mode = "private"`
+> there to gate broadcasts behind a passphrase-derived key. The previous
+> per-section `shared_key` field has been retired.
+
+---
+
+## `[mesh]`
+
+Private-mesh membership. The `[mesh]` section is **optional**; absent or
+`mode = "open"` keeps the daemon on the open mesh (any peer can connect —
+this is the default). When `mode = "private"`, every node in the mesh must
+share the same `passphrase`. The passphrase is stretched once at daemon
+startup via Argon2id into a 32-byte master and split via HKDF into
+purpose-bound sub-keys for discovery encryption and per-session handshake
+binding. Non-members can't decrypt discovery broadcasts and can't complete
+the encrypted handshake.
+
+| Key | Type | Default | Required | Notes |
+|-----|------|---------|----------|-------|
+| `mode` | `"open"` \| `"private"` | `"open"` | no | Mesh mode. `"private"` requires `passphrase`. |
+| `passphrase` | optional string | _(none)_ | when `mode = "private"` | UTF-8 string stretched via Argon2id at startup. Empty in private mode is rejected. |
+| `mesh_id` | optional string | _(none)_ | no | Cosmetic label, also mixed into the KDF salt — two meshes that share a passphrase but have different `mesh_id`s derive distinct secrets and can't interconnect. Renaming `mesh_id` invalidates existing peer sessions. |
+| `kdf.m_cost_kib` | integer | `65536` | no | Argon2id memory cost in KiB (default 64 MiB). |
+| `kdf.t_cost` | integer | `3` | no | Argon2id iteration count. |
+| `kdf.p_cost` | integer | `1` | no | Argon2id parallelism. |
+
+```toml
+[mesh]
+mode = "private"
+passphrase = "correct horse battery staple"
+mesh_id = "office"
+
+[mesh.kdf]
+m_cost_kib = 65536
+t_cost = 3
+p_cost = 1
+```
+
+Open and private meshes do not interoperate: a private node will reject the
+handshake from an open node (and vice-versa). The split is silent on the
+wire (no new frame fields) but cryptographically definitive — both sides
+derive different session keys and the transcript HMAC fails.
 
 ---
 

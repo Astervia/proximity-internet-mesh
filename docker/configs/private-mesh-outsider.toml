@@ -1,14 +1,18 @@
 [node]
-name = "client"
+name = "outsider"
 data_dir = "/var/lib/pim"
 
 [interface]
-mesh_ip = "10.77.0.100/24"
+mesh_ip = "10.77.0.201/24"
 mtu = 1400
 
 [discovery]
 enabled = true
-shared_key = "3333333333333333333333333333333333333333333333333333333333333333"
+
+# No [mesh] section → open mesh. Outsider's plaintext discovery
+# advertisements are ignored by private-mesh nodes (which expect
+# encrypted ones), and the outsider can't decrypt the private-mesh
+# advertisements either.
 
 [transport]
 listen_port = 9100

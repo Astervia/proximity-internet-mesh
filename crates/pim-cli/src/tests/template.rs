@@ -83,9 +83,6 @@ fn template_discovery_emits_all_fields() {
             "discovery missing `{needle}`. rendered:\n{rendered}"
         );
     }
-    // Optional shared_key — commented out
-    assert!(rendered.contains("# shared_key ="));
-
     let cfg = pim_core::Config::from_toml_str(&rendered).unwrap();
     assert!(cfg.discovery.enabled);
     assert_eq!(cfg.discovery.port, 9101);
@@ -93,7 +90,28 @@ fn template_discovery_emits_all_fields() {
     assert_eq!(cfg.discovery.peer_timeout_ms, 30000);
     assert!(cfg.discovery.connect_relays);
     assert!(cfg.discovery.connect_gateways);
-    assert_eq!(cfg.discovery.shared_key, None);
+}
+
+#[test]
+fn template_emits_mesh_section_open_by_default() {
+    let rendered = render_config_template(&[NodeRole::Client], None);
+    assert!(
+        rendered.contains("[mesh]"),
+        "[mesh] section missing from template:\n{rendered}"
+    );
+    assert!(
+        rendered.contains("mode = \"open\""),
+        "default mode should be open. rendered:\n{rendered}"
+    );
+    // Private-mesh knobs are emitted commented so users uncomment to enable.
+    assert!(rendered.contains("# passphrase ="));
+    assert!(rendered.contains("# mesh_id ="));
+    assert!(rendered.contains("# [mesh.kdf]"));
+
+    let cfg = pim_core::Config::from_toml_str(&rendered).unwrap();
+    assert_eq!(cfg.mesh.mode, pim_core::config::MeshMode::Open);
+    assert!(cfg.mesh.passphrase.is_none());
+    assert!(cfg.mesh.mesh_id.is_none());
 }
 
 #[test]
