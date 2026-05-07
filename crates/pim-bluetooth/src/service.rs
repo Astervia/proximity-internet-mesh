@@ -248,6 +248,18 @@ impl BluetoothDiscovery {
                         new = devices.iter().filter(|d| !seen_macs.contains(&d.mac)).count(),
                         "Bluetooth radio scan complete"
                     );
+                    // Per-peer "Paired" observations feed the daemon's
+                    // bluetooth_pan_lifecycle table (peer-cleanup
+                    // subsystem). Skipped silently when no event
+                    // sink is registered.
+                    for device in &devices {
+                        self.emit_pan_peer_event(
+                            &device.mac,
+                            &device.name,
+                            crate::PanPeerEventKind::Paired,
+                        )
+                        .await;
+                    }
                     for device in devices {
                         if seen_macs.contains(&device.mac) {
                             continue;
@@ -259,6 +271,12 @@ impl BluetoothDiscovery {
                                     match self.start_pan_client(&device.mac).await {
                                         Ok(child) => {
                                             info!(mac = %device.mac, name = %device.name, "Bluetooth radio-discovered peer prepared");
+                                            self.emit_pan_peer_event(
+                                                &device.mac,
+                                                &device.name,
+                                                crate::PanPeerEventKind::Connected,
+                                            )
+                                            .await;
                                             pan_clients.insert(device.mac.clone(), child);
                                             seen_macs.insert(device.mac);
                                         }
@@ -270,6 +288,12 @@ impl BluetoothDiscovery {
                                 #[cfg(not(target_os = "linux"))]
                                 {
                                     info!(mac = %device.mac, name = %device.name, "Bluetooth radio-discovered peer prepared");
+                                    self.emit_pan_peer_event(
+                                        &device.mac,
+                                        &device.name,
+                                        crate::PanPeerEventKind::Connected,
+                                    )
+                                    .await;
                                     seen_macs.insert(device.mac);
                                 }
                             }
@@ -318,6 +342,27 @@ impl BluetoothDiscovery {
                     }
                 }
             }
+        }
+    }
+
+    /// Best-effort emission of a per-peer event. Silently dropped
+    /// when no [`crate::PanPeerEvent`] sink has been registered or
+    /// when the receiver has been dropped — emission is purely
+    /// observational and must never break the discovery loop.
+    async fn emit_pan_peer_event(&self, mac: &str, name: &str, kind: crate::PanPeerEventKind) {
+        let Some(tx) = self.peer_event_tx.as_ref() else {
+            return;
+        };
+        let event = crate::PanPeerEvent {
+            mac: mac.to_string(),
+            name: name.to_string(),
+            kind,
+        };
+        // `try_send` so a slow daemon-side consumer can't stall the
+        // discovery loop. If the buffer is full or closed, log at
+        // debug — observation gaps are recoverable.
+        if let Err(err) = tx.try_send(event) {
+            tracing::debug!(%mac, ?kind, "PanPeerEvent send failed: {err}");
         }
     }
 }

@@ -37,7 +37,7 @@ CREATE TABLE IF NOT EXISTS peers_seen (
 -- RFCOMM peer reachability log. Driven by the daemon's RFCOMM event
 -- loop: every paired peer the daemon observes (via dial-attempt or
 -- inbound session) gets a row; successful sessions update
--- `last_connected_at_s`. Phase 2 cleanup uses
+-- `last_connected_at_s`. Cleanup uses
 -- `max(first_paired_at_s, last_connected_at_s)` as the freshness
 -- horizon. Timestamps are unix seconds, not milliseconds — cleanup
 -- thresholds are days, not minutes, so second-precision is plenty
@@ -46,6 +46,33 @@ CREATE TABLE IF NOT EXISTS rfcomm_peer_lifecycle (
     bd_addr               TEXT PRIMARY KEY,
     name                  TEXT NOT NULL,
     first_paired_at_s     INTEGER NOT NULL,
+    last_connected_at_s   INTEGER
+);
+
+-- Bluetooth PAN peer reachability log. Same shape as RFCOMM but
+-- separate row-set: a peer can show up via either subsystem and the
+-- two cleanup tasks tick on independent schedules. The destructive
+-- action is the same `bluetoothctl remove <bd_addr>`; coordination
+-- between the two trackers happens at the BlueZ level (`Connected`
+-- check in `bluetoothctl info`) rather than via shared rows.
+CREATE TABLE IF NOT EXISTS bluetooth_pan_lifecycle (
+    bd_addr               TEXT PRIMARY KEY,
+    name                  TEXT NOT NULL,
+    first_paired_at_s     INTEGER NOT NULL,
+    last_connected_at_s   INTEGER
+);
+
+-- Wi-Fi Direct peer reachability log. Keyed by MAC. There is no
+-- BlueZ-style persistent paired list to garbage-collect at the
+-- protocol level — `wpa_supplicant` doesn't keep one — so the
+-- destructive action for this table is just dropping the row + a
+-- best-effort `wpa_cli p2p_remove_client <mac>` to free any in-
+-- memory wpa_supplicant state. Reachability still benefits from the
+-- TTL: the table itself would otherwise grow with every unique peer
+-- seen via `p2p_peers`.
+CREATE TABLE IF NOT EXISTS wfd_peer_lifecycle (
+    mac                   TEXT PRIMARY KEY,
+    first_seen_at_s       INTEGER NOT NULL,
     last_connected_at_s   INTEGER
 );
 "#;
@@ -504,6 +531,170 @@ impl PeerDirectoryService {
         )?;
         Ok(n > 0)
     }
+
+    // ── Bluetooth PAN peer lifecycle ──────────────────────────────────
+
+    /// Record that the daemon observed `bd_addr` as a PAN-paired
+    /// peer with friendly `name`. Idempotent: subsequent calls leave
+    /// `name` and `first_paired_at_s` untouched. Mirrors
+    /// [`Self::observe_rfcomm_paired`] but for the PAN table.
+    pub fn observe_pan_paired(&self, bd_addr: &str, name: &str, now_s: i64) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "INSERT INTO bluetooth_pan_lifecycle (bd_addr, name, first_paired_at_s) \
+             VALUES (?1, ?2, ?3) \
+             ON CONFLICT(bd_addr) DO NOTHING",
+            params![bd_addr, name, now_s],
+        )?;
+        Ok(())
+    }
+
+    /// Record that the daemon just completed a PAN connection with
+    /// `bd_addr`. Upserts; never rewinds `last_connected_at_s`.
+    pub fn record_pan_connected(&self, bd_addr: &str, name: &str, now_s: i64) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "INSERT INTO bluetooth_pan_lifecycle (bd_addr, name, first_paired_at_s, last_connected_at_s) \
+             VALUES (?1, ?2, ?3, ?3) \
+             ON CONFLICT(bd_addr) DO UPDATE SET \
+                last_connected_at_s = MAX(COALESCE(last_connected_at_s, 0), excluded.last_connected_at_s)",
+            params![bd_addr, name, now_s],
+        )?;
+        Ok(())
+    }
+
+    /// Snapshot every tracked PAN peer; used by the PAN cleanup
+    /// tracker.
+    #[allow(dead_code)]
+    pub fn list_pan_lifecycle(&self) -> Result<Vec<PanLifecycleRecord>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT bd_addr, name, first_paired_at_s, last_connected_at_s \
+             FROM bluetooth_pan_lifecycle \
+             ORDER BY bd_addr ASC",
+        )?;
+        let rows = stmt
+            .query_map([], |row| {
+                Ok(PanLifecycleRecord {
+                    bd_addr: row.get(0)?,
+                    name: row.get(1)?,
+                    first_paired_at_s: row.get(2)?,
+                    last_connected_at_s: row.get(3)?,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    /// Drop a PAN peer from the lifecycle log after a successful
+    /// `bluetoothctl remove`. No-op when the row is absent.
+    #[allow(dead_code)]
+    pub fn forget_pan_peer(&self, bd_addr: &str) -> Result<bool> {
+        let conn = self.conn.lock().unwrap();
+        let n = conn.execute(
+            "DELETE FROM bluetooth_pan_lifecycle WHERE bd_addr = ?1",
+            params![bd_addr],
+        )?;
+        Ok(n > 0)
+    }
+
+    // ── Wi-Fi Direct peer lifecycle ───────────────────────────────────
+
+    /// Record that the daemon saw `mac` reported by `p2p_peers`.
+    /// Idempotent: subsequent calls leave `first_seen_at_s`
+    /// untouched.
+    pub fn observe_wfd_peer(&self, mac: &str, now_s: i64) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "INSERT INTO wfd_peer_lifecycle (mac, first_seen_at_s) \
+             VALUES (?1, ?2) \
+             ON CONFLICT(mac) DO NOTHING",
+            params![mac, now_s],
+        )?;
+        Ok(())
+    }
+
+    /// Record that the daemon just completed P2P group formation
+    /// with `mac`. Upserts; never rewinds `last_connected_at_s`.
+    pub fn record_wfd_connected(&self, mac: &str, now_s: i64) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "INSERT INTO wfd_peer_lifecycle (mac, first_seen_at_s, last_connected_at_s) \
+             VALUES (?1, ?2, ?2) \
+             ON CONFLICT(mac) DO UPDATE SET \
+                last_connected_at_s = MAX(COALESCE(last_connected_at_s, 0), excluded.last_connected_at_s)",
+            params![mac, now_s],
+        )?;
+        Ok(())
+    }
+
+    /// Snapshot every tracked WFD peer; used by the WFD cleanup
+    /// tracker.
+    #[allow(dead_code)]
+    pub fn list_wfd_lifecycle(&self) -> Result<Vec<WfdLifecycleRecord>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT mac, first_seen_at_s, last_connected_at_s \
+             FROM wfd_peer_lifecycle \
+             ORDER BY mac ASC",
+        )?;
+        let rows = stmt
+            .query_map([], |row| {
+                Ok(WfdLifecycleRecord {
+                    mac: row.get(0)?,
+                    first_seen_at_s: row.get(1)?,
+                    last_connected_at_s: row.get(2)?,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    /// Drop a WFD peer from the lifecycle log. No-op when the row
+    /// is absent.
+    #[allow(dead_code)]
+    pub fn forget_wfd_peer(&self, mac: &str) -> Result<bool> {
+        let conn = self.conn.lock().unwrap();
+        let n = conn.execute(
+            "DELETE FROM wfd_peer_lifecycle WHERE mac = ?1",
+            params![mac],
+        )?;
+        Ok(n > 0)
+    }
+}
+
+/// One row from `bluetooth_pan_lifecycle`. Mirrors the RFCOMM record
+/// because the cleanup logic for both BlueZ tables is structurally
+/// identical (`bluetoothctl remove` after the lifetime threshold +
+/// `Connected: no`).
+#[allow(dead_code)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct PanLifecycleRecord {
+    /// `"AA:BB:CC:DD:EE:FF"` (uppercase).
+    pub bd_addr: String,
+    /// BlueZ-cached friendly name.
+    pub name: String,
+    /// Wall-clock seconds when first paired.
+    pub first_paired_at_s: i64,
+    /// Wall-clock seconds when the last PAN connection completed.
+    pub last_connected_at_s: Option<i64>,
+}
+
+/// One row from `wfd_peer_lifecycle`. WFD doesn't carry a friendly
+/// name in the events the daemon receives — `p2p_peers` only
+/// returns MAC addresses, and the device-name lookup costs an extra
+/// round-trip. The cleanup loop logs the MAC alone, which is fine
+/// for an audit trail.
+#[allow(dead_code)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct WfdLifecycleRecord {
+    /// Wi-Fi Direct peer MAC.
+    pub mac: String,
+    /// Wall-clock seconds when first reported by `p2p_peers`.
+    pub first_seen_at_s: i64,
+    /// Wall-clock seconds when the last P2P group formation
+    /// completed.
+    pub last_connected_at_s: Option<i64>,
 }
 
 /// One row from `rfcomm_peer_lifecycle`. Returned by
