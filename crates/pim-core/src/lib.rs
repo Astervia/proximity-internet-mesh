@@ -9,8 +9,8 @@ pub mod types;
 
 pub use config::{
     AuthorizationPolicy, BluetoothConfig, BluetoothRfcommConfig, BroadcastConfig, Config,
-    DiscoveryConfig, MessagingConfig, PeerCleanupConfig, PeerConfig, PeerEndpointConfig,
-    RelayConfig, SecurityConfig, WifiDirectConfig,
+    DiscoveryConfig, MeshConfig, MeshKdfConfig, MeshMode, MessagingConfig, PeerCleanupConfig,
+    PeerConfig, PeerEndpointConfig, RelayConfig, SecurityConfig, WifiDirectConfig,
 };
 pub use debug::*;
 pub use error::PimError;

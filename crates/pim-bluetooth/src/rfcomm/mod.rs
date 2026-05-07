@@ -73,7 +73,7 @@ pub const HELLO_VERSION: u8 = 1;
 /// Local identity carried in the Hello / HelloAck frames. Provided by
 /// the daemon (typically `pim-core::NodeId` on Linux, formatted via
 /// `to_hex()`).
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct LocalIdentity {
     /// Pre-formatted hex node id. Kernel `NodeId` is 16 bytes / 32 hex
     /// chars; spike Mac side advertises 64 hex chars (random 32 bytes).
@@ -86,6 +86,29 @@ pub struct LocalIdentity {
     /// Capability flags advertised in Hello payload (`mesh-v1`,
     /// `gateway-v1`, …).
     pub caps: Vec<String>,
+    /// 32-byte handshake key for the local mesh, or `None` for the open
+    /// mesh. `Some` → we attach a `mesh_tag` to our outgoing Hello and
+    /// require the peer to send a matching one; `None` → we send no
+    /// `mesh_tag` and reject any peer that does. This is what blocks an
+    /// open node from talking to a private one (and vice-versa) at the
+    /// RFCOMM layer, before the TCP-bridge handshake task is spawned.
+    pub mesh_handshake_key: Option<[u8; 32]>,
+}
+
+impl std::fmt::Debug for LocalIdentity {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // Never include `mesh_handshake_key` bytes in Debug output —
+        // it's the same secret that protects discovery encryption.
+        f.debug_struct("LocalIdentity")
+            .field("node_id_hex", &self.node_id_hex)
+            .field("name", &self.name)
+            .field("caps", &self.caps)
+            .field(
+                "mesh_handshake_key",
+                &self.mesh_handshake_key.map(|_| "<redacted>"),
+            )
+            .finish()
+    }
 }
 
 /// Configuration for `RfcommService`. The daemon constructs this from

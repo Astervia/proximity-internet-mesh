@@ -136,6 +136,22 @@ enum Commands {
         #[command(subcommand)]
         command: DebugCommands,
     },
+
+    /// Inspect this node's private-mesh membership
+    Mesh {
+        #[command(subcommand)]
+        command: MeshCommands,
+    },
+}
+
+#[derive(Subcommand)]
+enum MeshCommands {
+    /// Show the configured mesh mode, label, and derived fingerprint
+    Status {
+        /// Path to the TOML configuration file
+        #[arg(short, long, default_value = DEFAULT_CONFIG)]
+        config: PathBuf,
+    },
 }
 
 #[derive(Subcommand)]
@@ -304,6 +320,10 @@ fn main() -> Result<()> {
                 }
             },
         },
+
+        Commands::Mesh { command } => match command {
+            MeshCommands::Status { config } => cmd_mesh_status(config),
+        },
     }
 }
 
@@ -367,6 +387,7 @@ mod commands;
 
 use commands::config::*;
 use commands::logs::*;
+use commands::mesh::*;
 use commands::route::*;
 
 // ── `pim down` ────────────────────────────────────────────────────────────────

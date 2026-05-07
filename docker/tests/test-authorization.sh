@@ -10,19 +10,16 @@ source "$SCRIPT_DIR/common.sh"
 ALLOW_ALL_FILE="auth-allow-all.yml"
 ALLOW_LIST_FILE="auth-allow-list.yml"
 TOFU_FILE="auth-tofu.yml"
-DISCOVERY_KEY_FILE="auth-discovery-key.yml"
 
 cleanup() {
     if [ "${DUMP_LOGS_ON_FAIL:-0}" = "1" ] && [ $FAIL -gt 0 ]; then
         dump_logs "$ALLOW_ALL_FILE"
         dump_logs "$ALLOW_LIST_FILE"
         dump_logs "$TOFU_FILE"
-        dump_logs "$DISCOVERY_KEY_FILE"
     fi
     stop_stack "$ALLOW_ALL_FILE"
     stop_stack "$ALLOW_LIST_FILE"
     stop_stack "$TOFU_FILE"
-    stop_stack "$DISCOVERY_KEY_FILE"
 }
 trap cleanup EXIT
 
@@ -71,17 +68,9 @@ else
 fi
 stop_stack "$TOFU_FILE"
 
-log_section "Discovery — shared key"
-start_stack "$DISCOVERY_KEY_FILE"
-wait_all_healthy "$DISCOVERY_KEY_FILE" 120
-wait_for_peers "$DISCOVERY_KEY_FILE" client 1 50
-sleep 8
-assert_cmd_output "keyed discovery client sees the gateway" "discovered peers: 1" \
-    in_svc "$DISCOVERY_KEY_FILE" client pim debug discovery
-assert_cmd_output "node without the discovery key sees no peers" "discovered peers: 0" \
-    in_svc "$DISCOVERY_KEY_FILE" outsider pim debug discovery
-assert_peer_count "$DISCOVERY_KEY_FILE" outsider 0 \
-    "node without the discovery key has no sessions"
-stop_stack "$DISCOVERY_KEY_FILE"
+# NOTE: The legacy "Discovery — shared key" lab was removed when
+# `[discovery].shared_key` was retired in favour of the [mesh] section.
+# Private-mesh coverage lives in `test-private-mesh.sh` (passphrase-derived
+# discovery key + handshake binding).
 
 print_summary

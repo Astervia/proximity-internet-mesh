@@ -59,6 +59,9 @@ pub(crate) async fn handshake_initiator(
     mut rx: mpsc::Receiver<HandshakeWireFrame>,
 ) -> Result<NodeId> {
     let mut hs = Handshaker::new(&state.identity);
+    if let Some(key) = state.mesh_handshake_key {
+        hs = hs.with_mesh_handshake_key(key);
+    }
     let init = hs.initiate();
 
     send_handshake(
@@ -181,6 +184,9 @@ pub(crate) async fn handshake_responder(
     };
 
     let mut hs = Handshaker::new(&state.identity);
+    if let Some(key) = state.mesh_handshake_key {
+        hs = hs.with_mesh_handshake_key(key);
+    }
     let presented_peer_id = NodeId::from_public_key(&init.sender_pub);
     match state
         .authorization

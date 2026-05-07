@@ -15,7 +15,7 @@ docker-build:
 
 .PHONY: test-single-hop test-single-hop-ipv6 test-multi-hop test-peer-discovery \
         test-resilience test-resilience-full test-multi-gateway test-auto-discovery \
-        test-auto-ip-chain test-auth test-debug-cli test-route-cli \
+        test-auto-ip-chain test-auth test-private-mesh test-debug-cli test-route-cli \
         test-bluetooth test-bluetooth-enx test-rfcomm-discovery test-rfcomm-cleanup \
         test-broadcast test-messaging test-all
 
@@ -49,6 +49,9 @@ test-auto-ip-chain: docker-build      ## phase 8: routed auto-IP chain with late
 test-auth: docker-build
 	bash $(TEST_DIR)/test-authorization.sh
 
+test-private-mesh: docker-build       ## passphrase-derived private mesh (happy path + intruder + outsider)
+	bash $(TEST_DIR)/test-private-mesh.sh
+
 test-debug-cli: docker-build
 	bash $(TEST_DIR)/test-debug-cli.sh
 
@@ -81,6 +84,7 @@ test-all: docker-build
 	 SKIP_SLOW=1 bash $(TEST_DIR)/test-resilience.sh && \
 	 bash $(TEST_DIR)/test-multi-gateway.sh && \
 	 bash $(TEST_DIR)/test-authorization.sh && \
+	 bash $(TEST_DIR)/test-private-mesh.sh && \
 	 bash $(TEST_DIR)/test-route-cli.sh && \
 	 bash $(TEST_DIR)/test-bluetooth.sh && \
 	 bash $(TEST_DIR)/test-bluetooth-enx.sh && \

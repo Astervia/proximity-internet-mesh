@@ -10,7 +10,6 @@ fn discovery_defaults_when_section_absent() {
     assert_eq!(config.discovery.peer_timeout_ms, 30000);
     assert!(config.discovery.connect_relays);
     assert!(config.discovery.connect_gateways);
-    assert!(config.discovery.shared_key.is_none());
 }
 
 #[test]
@@ -50,7 +49,6 @@ fn config_round_trip_with_all_discovery_fields() {
     assert_eq!(config.discovery.port, 9101);
     assert!(config.discovery.connect_relays);
     assert!(config.discovery.connect_gateways);
-    assert!(config.discovery.shared_key.is_some());
     assert!(!config.relay.enabled);
     let serialized = config.to_toml_string().unwrap();
     let reparsed = Config::from_toml_str(&serialized).unwrap();

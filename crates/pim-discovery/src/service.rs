@@ -47,7 +47,7 @@ pub struct DiscoveryService {
     discovery_port: u16,
     broadcast_interval: Duration,
     peer_timeout: Duration,
-    shared_key: Option<[u8; 32]>,
+    discovery_key: Option<[u8; 32]>,
     peer_table: Arc<Mutex<PeerTable>>,
     /// Sender for notifying the daemon when a new peer is discovered.
     new_peer_tx: mpsc::Sender<PeerRecord>,
@@ -77,7 +77,7 @@ impl DiscoveryService {
             discovery_port: DEFAULT_DISCOVERY_PORT,
             broadcast_interval: DEFAULT_BROADCAST_INTERVAL,
             peer_timeout: DEFAULT_PEER_TIMEOUT,
-            shared_key: None,
+            discovery_key: None,
             peer_table: Arc::new(Mutex::new(PeerTable::new())),
             new_peer_tx,
         };
@@ -102,9 +102,13 @@ impl DiscoveryService {
         self
     }
 
-    /// Configure a shared key for encrypted discovery advertisements.
-    pub fn with_shared_key(mut self, key: [u8; 32]) -> Self {
-        self.shared_key = Some(key);
+    /// Configure the AES-256-GCM key used to encrypt discovery
+    /// advertisements. Sourced from
+    /// [`pim_crypto::MeshSecret::discovery_key`] when the daemon is
+    /// configured for a private mesh; absent for open meshes (plaintext
+    /// advertisements).
+    pub fn with_discovery_key(mut self, key: [u8; 32]) -> Self {
+        self.discovery_key = Some(key);
         self
     }
 
@@ -115,7 +119,7 @@ impl DiscoveryService {
 
     /// Send one broadcast advertisement on `socket`.
     pub async fn broadcast_presence(&self, socket: &UdpSocket) -> Result<()> {
-        let payload = match self.shared_key {
+        let payload = match self.discovery_key {
             Some(key) => self.own_ad.serialize_encrypted(&key).to_vec(),
             None => self.own_ad.serialize().to_vec(),
         };
@@ -133,7 +137,7 @@ impl DiscoveryService {
     /// Returns the `PeerRecord` if the advertisement is valid and from a
     /// previously-unknown peer, otherwise `None`.
     pub async fn handle_advertisement(&self, data: &[u8], from: SocketAddr) -> Option<PeerRecord> {
-        let ad = match self.shared_key {
+        let ad = match self.discovery_key {
             Some(key) => DiscoveryAdvertisement::deserialize_encrypted(data, &key)?,
             None => DiscoveryAdvertisement::deserialize(data)?,
         };

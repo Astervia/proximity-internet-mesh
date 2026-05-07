@@ -24,6 +24,15 @@ struct HelloMsg<'a> {
     name: String,
     platform: &'a str,
     caps: Vec<String>,
+    /// Lowercase-hex `HMAC-SHA256(mesh_handshake_key, node_id_hex)`.
+    /// Present iff the sender is on a private mesh. See
+    /// `pim_crypto::compute_rfcomm_hello_tag`. The receiver requires
+    /// this field to be present and matching when the receiver is
+    /// itself on a private mesh, and absent when the receiver is on
+    /// the open mesh — i.e., open ↔ private is hard-rejected at the
+    /// RFCOMM Hello layer, before any TCP bridge is set up.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    mesh_tag: Option<String>,
 }
 
 /// Drive a freshly-accepted/dialed RFCOMM session from handshake
@@ -146,6 +155,66 @@ async fn discovery_only_loop(
     }
 }
 
+/// Mesh-membership gate enforced on every RFCOMM Hello / HelloAck.
+///
+/// | local | peer sent tag | result | reason returned |
+/// |-------|---------------|--------|-----------------|
+/// | private | matching | admit | — |
+/// | private | mismatch | reject | "mesh tag mismatch ..." |
+/// | private | absent | reject | "mesh tag missing ..." |
+/// | open | absent | admit | — |
+/// | open | present | reject | "mesh tag present ..." |
+///
+/// Pure function — no I/O — so the table above is exercised directly
+/// in `pim_bluetooth::rfcomm::session::tests` rather than via the
+/// async RFCOMM socket plumbing.
+pub(super) fn verify_peer_mesh_tag(
+    local_mesh_key: Option<&[u8; 32]>,
+    peer_mesh_tag_hex: Option<&str>,
+    peer_node_id_hex: &str,
+) -> Result<(), String> {
+    match (local_mesh_key, peer_mesh_tag_hex) {
+        (Some(key), Some(tag_hex)) => {
+            let expected = pim_crypto::compute_rfcomm_hello_tag(key, peer_node_id_hex);
+            let expected_hex = bytes_to_hex(&expected);
+            if constant_time_eq(expected_hex.as_bytes(), tag_hex.as_bytes()) {
+                Ok(())
+            } else {
+                Err("mesh tag mismatch (peer is on a different mesh)".to_string())
+            }
+        }
+        (Some(_), None) => {
+            Err("mesh tag missing (peer is on the open mesh; this node is private)".to_string())
+        }
+        (None, Some(_)) => {
+            Err("mesh tag present (peer is on a private mesh; this node is open)".to_string())
+        }
+        (None, None) => Ok(()),
+    }
+}
+
+/// Lowercase-hex encode a 32-byte tag for the JSON Hello envelope.
+fn bytes_to_hex(bytes: &[u8]) -> String {
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for b in bytes {
+        out.push_str(&format!("{b:02x}"));
+    }
+    out
+}
+
+/// Constant-time byte-slice equality. Avoids leaking the
+/// position-of-first-mismatch through timing for the mesh-tag check.
+fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut diff: u8 = 0;
+    for (x, y) in a.iter().zip(b.iter()) {
+        diff |= x ^ y;
+    }
+    diff == 0
+}
+
 /// Decode a 32-char lowercase hex NodeId into 16 bytes. Returns the
 /// concrete `String` reason on parse failure so the caller can pass it
 /// up the `RfcommEvent::Lost` reason field unchanged.
@@ -177,6 +246,11 @@ async fn handshake(
     let local_caps = identity.caps.clone();
     let local_node_hex = identity.node_id_hex.clone();
     let local_name = identity.name.clone();
+    let local_mesh_key = identity.mesh_handshake_key;
+    let local_mesh_tag = local_mesh_key.map(|key| {
+        let raw = pim_crypto::compute_rfcomm_hello_tag(&key, &local_node_hex);
+        bytes_to_hex(&raw)
+    });
 
     let send_msg = |kind: &str| -> Result<Vec<u8>, FrameError> {
         let msg = HelloMsg {
@@ -186,6 +260,7 @@ async fn handshake(
             name: local_name.clone(),
             platform: "linux",
             caps: local_caps.clone(),
+            mesh_tag: local_mesh_tag.clone(),
         };
         let json = serde_json::to_vec(&msg).expect("serialize hello");
         encode_frame(&json)
@@ -250,6 +325,19 @@ async fn handshake(
             })
             .unwrap_or_default();
 
+        // Mesh-membership gate. See `verify_peer_mesh_tag`.
+        let their_mesh_tag = v
+            .get("mesh_tag")
+            .and_then(|x| x.as_str())
+            .map(|s| s.to_string());
+        if let Err(reason) = verify_peer_mesh_tag(
+            local_mesh_key.as_ref(),
+            their_mesh_tag.as_deref(),
+            &their_node,
+        ) {
+            return Err(reason.into());
+        }
+
         if !initiator {
             let frame = send_msg("hello-ack")?;
             stream.write_all(&frame).await?;
@@ -274,5 +362,84 @@ async fn handshake(
             })
             .await;
         return Ok(peer_node_id);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const PEER_ID: &str = "0123456789abcdef0123456789abcdef";
+
+    fn matching_tag(key: &[u8; 32], node_id_hex: &str) -> String {
+        let raw = pim_crypto::compute_rfcomm_hello_tag(key, node_id_hex);
+        bytes_to_hex(&raw)
+    }
+
+    #[test]
+    fn open_to_open_admits() {
+        assert!(verify_peer_mesh_tag(None, None, PEER_ID).is_ok());
+    }
+
+    #[test]
+    fn open_to_private_rejects() {
+        let key = [0xABu8; 32];
+        let tag = matching_tag(&key, PEER_ID);
+        let err = verify_peer_mesh_tag(None, Some(&tag), PEER_ID).unwrap_err();
+        assert!(err.contains("private mesh"), "{err}");
+    }
+
+    #[test]
+    fn private_to_open_rejects() {
+        let key = [0xABu8; 32];
+        let err = verify_peer_mesh_tag(Some(&key), None, PEER_ID).unwrap_err();
+        assert!(err.contains("missing"), "{err}");
+    }
+
+    #[test]
+    fn private_with_matching_tag_admits() {
+        let key = [0xABu8; 32];
+        let tag = matching_tag(&key, PEER_ID);
+        verify_peer_mesh_tag(Some(&key), Some(&tag), PEER_ID).unwrap();
+    }
+
+    #[test]
+    fn private_with_wrong_key_rejects() {
+        let our_key = [0xABu8; 32];
+        let their_key = [0xCDu8; 32];
+        let their_tag = matching_tag(&their_key, PEER_ID);
+        let err = verify_peer_mesh_tag(Some(&our_key), Some(&their_tag), PEER_ID).unwrap_err();
+        assert!(err.contains("mismatch"), "{err}");
+    }
+
+    #[test]
+    fn private_with_tag_for_different_node_rejects() {
+        // Replay defense: peer says they're PEER_ID but signed a tag for
+        // a different node id (mounted attack from a captured Hello).
+        let key = [0xABu8; 32];
+        let tag_for_other = matching_tag(&key, "ffffffffffffffffffffffffffffffff");
+        let err = verify_peer_mesh_tag(Some(&key), Some(&tag_for_other), PEER_ID).unwrap_err();
+        assert!(err.contains("mismatch"), "{err}");
+    }
+
+    #[test]
+    fn private_with_garbage_tag_rejects() {
+        let key = [0xABu8; 32];
+        let err = verify_peer_mesh_tag(Some(&key), Some("not-hex"), PEER_ID).unwrap_err();
+        assert!(err.contains("mismatch"), "{err}");
+    }
+
+    #[test]
+    fn constant_time_eq_correctness() {
+        assert!(constant_time_eq(b"abc", b"abc"));
+        assert!(!constant_time_eq(b"abc", b"abd"));
+        assert!(!constant_time_eq(b"abc", b"ab"));
+        assert!(constant_time_eq(b"", b""));
+    }
+
+    #[test]
+    fn bytes_to_hex_round_trip() {
+        let bytes = [0x00u8, 0xAB, 0xFF, 0x42];
+        assert_eq!(bytes_to_hex(&bytes), "00abff42");
     }
 }

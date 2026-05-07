@@ -5,6 +5,7 @@
 pub mod e2e;
 pub mod handshake;
 pub mod identity;
+pub mod mesh;
 pub mod session;
 
 pub use e2e::{
@@ -15,4 +16,5 @@ pub use handshake::{
     HandshakeConfirm, HandshakeError, HandshakeInit, HandshakeResponse, Handshaker, SessionKey,
 };
 pub use identity::Identity;
+pub use mesh::{compute_rfcomm_hello_tag, MeshKdfError, MeshKdfParams, MeshSecret};
 pub use session::{EncryptedFrame, SessionCipher, SessionError};

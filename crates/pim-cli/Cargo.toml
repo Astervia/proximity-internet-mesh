@@ -12,6 +12,7 @@ path = "src/main.rs"
 
 [dependencies]
 pim-core = { workspace = true }
+pim-crypto = { workspace = true }
 clap = { workspace = true }
 clap_complete = { workspace = true }
 tokio = { workspace = true }

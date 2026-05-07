@@ -108,6 +108,75 @@ fn different_sessions_produce_different_keys() {
 }
 
 #[test]
+fn matching_mesh_keys_yield_matching_session_keys() {
+    let mesh_key = [0xABu8; 32];
+    let alice_id = Identity::generate();
+    let bob_id = Identity::generate();
+
+    let mut alice = Handshaker::new(&alice_id).with_mesh_handshake_key(mesh_key);
+    let mut bob = Handshaker::new(&bob_id).with_mesh_handshake_key(mesh_key);
+
+    let init = alice.initiate();
+    let response = bob.respond(&init).unwrap();
+    alice.finalize_initiator(&response).unwrap();
+
+    assert_eq!(
+        alice.session_key().unwrap().as_bytes(),
+        bob.session_key().unwrap().as_bytes()
+    );
+    let alice_confirm = alice.make_confirm().unwrap();
+    bob.verify_confirm(&alice_confirm).unwrap();
+}
+
+#[test]
+fn mismatched_mesh_keys_are_rejected_at_confirm() {
+    let alice_mesh = [0xABu8; 32];
+    let bob_mesh = [0xCDu8; 32];
+    let alice_id = Identity::generate();
+    let bob_id = Identity::generate();
+
+    let mut alice = Handshaker::new(&alice_id).with_mesh_handshake_key(alice_mesh);
+    let mut bob = Handshaker::new(&bob_id).with_mesh_handshake_key(bob_mesh);
+
+    let init = alice.initiate();
+    // Signatures still verify — the divergence is in the derived key.
+    let response = bob.respond(&init).unwrap();
+    alice.finalize_initiator(&response).unwrap();
+
+    // Different IKMs → different session keys → confirm HMAC must fail.
+    assert_ne!(
+        alice.session_key().unwrap().as_bytes(),
+        bob.session_key().unwrap().as_bytes()
+    );
+    let alice_confirm = alice.make_confirm().unwrap();
+    let result = bob.verify_confirm(&alice_confirm);
+    assert!(matches!(result, Err(HandshakeError::ConfirmMismatch)));
+}
+
+#[test]
+fn open_and_private_meshes_do_not_interop() {
+    let mesh_key = [0xABu8; 32];
+    let alice_id = Identity::generate();
+    let bob_id = Identity::generate();
+
+    // Alice is on a private mesh; Bob is on the open mesh.
+    let mut alice = Handshaker::new(&alice_id).with_mesh_handshake_key(mesh_key);
+    let mut bob = Handshaker::new(&bob_id);
+
+    let init = alice.initiate();
+    let response = bob.respond(&init).unwrap();
+    alice.finalize_initiator(&response).unwrap();
+
+    assert_ne!(
+        alice.session_key().unwrap().as_bytes(),
+        bob.session_key().unwrap().as_bytes()
+    );
+    let alice_confirm = alice.make_confirm().unwrap();
+    let result = bob.verify_confirm(&alice_confirm);
+    assert!(matches!(result, Err(HandshakeError::ConfirmMismatch)));
+}
+
+#[test]
 fn finalize_without_init_fails() {
     let id = Identity::generate();
     let mut hs = Handshaker::new(&id);
