@@ -58,6 +58,34 @@ pub enum WifiDirectError {
     Io(#[from] std::io::Error),
 }
 
+/// Per-peer lifecycle event surfaced by [`WifiDirectDiscovery`] when
+/// a caller has registered a sender via
+/// [`WifiDirectDiscovery::set_peer_event_tx`]. Used by the daemon's
+/// peer-cleanup subsystem to maintain the `wfd_peer_lifecycle`
+/// freshness table, which the WFD cleanup tracker ages out (and
+/// optionally drops via `wpa_cli p2p_remove_client` when the
+/// destructive action is wired in).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WfdPeerEvent {
+    /// Wi-Fi Direct peer MAC (lowercase, colon-separated).
+    pub mac: String,
+    /// What just happened.
+    pub kind: WfdPeerEventKind,
+}
+
+/// Discriminator for [`WfdPeerEvent`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WfdPeerEventKind {
+    /// `p2p_peers` reported the MAC. Fired before any connection is
+    /// attempted; the cleanup table uses this as the initial
+    /// `first_seen_at_s` stamp.
+    Discovered,
+    /// Successful P2P group formation with this peer (peer IP
+    /// resolved, address emitted on the canonical `peer_tx`
+    /// channel). Bumps `last_connected_at_s`.
+    Connected,
+}
+
 /// Drives Wi-Fi Direct peer discovery and group formation.
 ///
 /// Constructed via [`WifiDirectDiscovery::new`], which also returns a
@@ -72,6 +100,12 @@ pub struct WifiDirectDiscovery {
     config: WifiDirectConfig,
     listen_port: u16,
     peer_tx: mpsc::Sender<SocketAddr>,
+    /// Optional sink for per-peer discovery/connection events — see
+    /// [`WfdPeerEvent`]. Set via
+    /// [`WifiDirectDiscovery::set_peer_event_tx`] before the service
+    /// is started; if `None`, the discovery loop never emits per-
+    /// peer events and the existing `peer_tx` flow is unaffected.
+    peer_event_tx: Option<mpsc::Sender<WfdPeerEvent>>,
 }
 
 #[cfg(target_os = "macos")]
@@ -105,9 +139,34 @@ impl WifiDirectDiscovery {
                 config,
                 listen_port,
                 peer_tx,
+                peer_event_tx: None,
             },
             peer_rx,
         )
+    }
+
+    /// Register a sink for per-peer discovery / connection events —
+    /// see [`WfdPeerEvent`]. Caller must invoke this before
+    /// [`WifiDirectDiscovery::run`]; registering after the loop has
+    /// started is a no-op for already-emitted events.
+    pub fn set_peer_event_tx(&mut self, tx: mpsc::Sender<WfdPeerEvent>) {
+        self.peer_event_tx = Some(tx);
+    }
+
+    /// Best-effort emission of a per-peer event. Silently dropped
+    /// when no sink is registered; non-blocking so a slow consumer
+    /// can never stall the discovery loop.
+    fn emit_peer_event(&self, mac: &str, kind: WfdPeerEventKind) {
+        let Some(tx) = self.peer_event_tx.as_ref() else {
+            return;
+        };
+        let event = WfdPeerEvent {
+            mac: mac.to_string(),
+            kind,
+        };
+        if let Err(err) = tx.try_send(event) {
+            tracing::debug!(%mac, ?kind, "WfdPeerEvent send failed: {err}");
+        }
     }
 
     /// Run the discovery loop until `cancel` fires.
@@ -189,6 +248,9 @@ impl WifiDirectDiscovery {
             }
             seen_macs.insert(mac.clone());
             info!("Wi-Fi Direct: new peer discovered: {mac}");
+            // Per-peer Discovered event for the cleanup subsystem;
+            // skipped silently when no sink is registered.
+            self.emit_peer_event(&mac, WfdPeerEventKind::Discovered);
 
             let result = self.connect_and_emit(&mac).await;
             if let Err(e) = result {
@@ -262,6 +324,10 @@ impl WifiDirectDiscovery {
 
         // Stop scanning while in a group to avoid interference.
         let _ = self.ctrl.p2p_stop_find().await;
+
+        // Per-peer Connected event for the cleanup subsystem;
+        // skipped silently when no sink is registered.
+        self.emit_peer_event(mac, WfdPeerEventKind::Connected);
 
         let _ = self.peer_tx.send(addr).await;
         Ok(())

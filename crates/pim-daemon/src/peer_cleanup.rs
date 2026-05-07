@@ -16,6 +16,9 @@ use pim_core::PeerCleanupConfig;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
 
+#[cfg(target_os = "linux")]
+#[path = "peer_cleanup/bluetooth_pan.rs"]
+pub(crate) mod bluetooth_pan;
 #[path = "peer_cleanup/broadcast.rs"]
 pub(crate) mod broadcast;
 #[path = "peer_cleanup/mesh_identity.rs"]
@@ -24,6 +27,9 @@ pub(crate) mod mesh_identity;
 pub(crate) mod reconnect_discovered;
 #[path = "peer_cleanup/rfcomm.rs"]
 pub(crate) mod rfcomm;
+#[cfg(target_os = "linux")]
+#[path = "peer_cleanup/wfd.rs"]
+pub(crate) mod wfd;
 
 /// 1 hour. Smallest sane unreachable-lifetime — anything below this
 /// is almost certainly a typoed minutes-vs-seconds confusion that

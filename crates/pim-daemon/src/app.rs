@@ -773,11 +773,26 @@ pub(crate) async fn run() -> Result<()> {
             interface = %config.wifi_direct.interface,
             "starting Wi-Fi Direct discovery"
         );
-        let (wd_svc, addr_rx) = WifiDirectDiscovery::new(
+        #[cfg_attr(not(target_os = "linux"), allow(unused_mut))]
+        let (mut wd_svc, addr_rx) = WifiDirectDiscovery::new(
             config.node.name.clone(),
             config.wifi_direct.clone(),
             config.transport.listen_port,
         );
+        // Per-peer event sink for the WFD cleanup tracker. Decoupled
+        // from the canonical SocketAddr stream so cleanup remains
+        // observational only. Linux-only since the cleanup module
+        // is gated on Linux (macOS WFD goes through Bonjour, not
+        // wpa_cli).
+        #[cfg(target_os = "linux")]
+        {
+            let (wfd_event_tx, wfd_event_rx) = mpsc::channel(64);
+            wd_svc.set_peer_event_tx(wfd_event_tx);
+            tokio::spawn(peer_cleanup::wfd::run_wfd_event_consumer(
+                state.peer_directory.clone(),
+                wfd_event_rx,
+            ));
+        }
         let c = cancel.clone();
         tokio::spawn(async move { wd_svc.run(c).await });
         tokio::spawn(run_wifidirect_consumer(state.clone(), addr_rx));
@@ -832,7 +847,8 @@ pub(crate) async fn run() -> Result<()> {
             local_alias = %bluetooth_config.local_alias,
             "starting Bluetooth PAN watcher"
         );
-        let (bt_svc, addr_rx) = BluetoothDiscovery::new_with_system_paths(
+        #[cfg_attr(not(target_os = "linux"), allow(unused_mut))]
+        let (mut bt_svc, addr_rx) = BluetoothDiscovery::new_with_system_paths(
             bluetooth_config,
             config.transport.listen_port,
             configured_targets.bluetooth_static_targets.clone(),
@@ -847,6 +863,18 @@ pub(crate) async fn run() -> Result<()> {
             bluetooth_nat_interface,
         )
         .context("failed to construct Bluetooth PAN watcher")?;
+        // Per-peer event sink for the PAN cleanup tracker. Linux-
+        // only since `bluetoothctl remove` and the PAN cleanup
+        // logic are not relevant on macOS.
+        #[cfg(target_os = "linux")]
+        {
+            let (pan_event_tx, pan_event_rx) = mpsc::channel(64);
+            bt_svc.set_peer_event_tx(pan_event_tx);
+            tokio::spawn(peer_cleanup::bluetooth_pan::run_pan_event_consumer(
+                state.peer_directory.clone(),
+                pan_event_rx,
+            ));
+        }
         let c = cancel.clone();
         let handle = tokio::spawn(async move {
             if let Err(err) = bt_svc.run(c).await {
@@ -1000,6 +1028,38 @@ pub(crate) async fn run() -> Result<()> {
             ));
         peer_cleanup::spawn(
             config.bluetooth_rfcomm.peer_cleanup.clone(),
+            tracker,
+            cancel.clone(),
+        );
+    }
+
+    // Bluetooth PAN cleanup tracker (Linux-only). Operates on the
+    // `bluetooth_pan_lifecycle` table populated by the PAN event
+    // consumer.
+    #[cfg(target_os = "linux")]
+    if config.bluetooth.enabled {
+        let tracker: std::sync::Arc<dyn peer_cleanup::PeerCleanupTracker> =
+            std::sync::Arc::new(peer_cleanup::bluetooth_pan::PanTracker::new(
+                bluetoothctl_command(),
+                state.peer_directory.clone(),
+            ));
+        peer_cleanup::spawn(
+            config.bluetooth.peer_cleanup.clone(),
+            tracker,
+            cancel.clone(),
+        );
+    }
+
+    // Wi-Fi Direct cleanup tracker (Linux-only). Drops stale
+    // `wfd_peer_lifecycle` rows; no wpa_supplicant-level cleanup
+    // because the supplicant doesn't keep persistent peer state.
+    #[cfg(target_os = "linux")]
+    if config.wifi_direct.enabled {
+        let tracker: std::sync::Arc<dyn peer_cleanup::PeerCleanupTracker> = std::sync::Arc::new(
+            peer_cleanup::wfd::WfdTracker::new(state.peer_directory.clone()),
+        );
+        peer_cleanup::spawn(
+            config.wifi_direct.peer_cleanup.clone(),
             tracker,
             cancel.clone(),
         );
