@@ -6,6 +6,7 @@ use std::path::PathBuf;
 #[allow(unused_imports)]
 use super::defaults::*;
 use super::peer::PeerConfig;
+use super::peer_cleanup::PeerCleanupConfig;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 /// Top-level configuration loaded from the node TOML file.
@@ -128,6 +129,14 @@ pub struct TransportConfig {
     /// Timeout for outbound TCP connect attempts in milliseconds.
     #[serde(default = "default_connect_timeout_ms")]
     pub connect_timeout_ms: u64,
+    /// Periodic cleanup of `ReconnectManager.discovered_targets` —
+    /// see [`PeerCleanupConfig`]. Discovered targets are
+    /// `(NodeId, ConnectTarget)` pairs accumulated as the daemon
+    /// learns peers from various discovery sources; without
+    /// cleanup the set grows monotonically. Ephemeral defaults
+    /// (7 days / 1 h).
+    #[serde(default = "PeerCleanupConfig::ephemeral_default")]
+    pub peer_cleanup: PeerCleanupConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -232,6 +241,13 @@ pub struct WifiDirectConfig {
     /// Connection method: `"pbc"` (push-button) or `"pin:<8-digit-pin>"`. Default `"pbc"`.
     #[serde(default = "default_wfd_connect_method")]
     pub connect_method: String,
+    /// Periodic cleanup of unreachable Wi-Fi Direct peers — see
+    /// [`PeerCleanupConfig`]. The destructive action drops the
+    /// peer's row from the in-daemon `wfd_peer_lifecycle` table.
+    /// Bluetooth-flavoured defaults (2 h / 1 h) since the radio-
+    /// layer reachability characteristics are similar.
+    #[serde(default = "PeerCleanupConfig::bluetooth_default")]
+    pub peer_cleanup: PeerCleanupConfig,
 }
 
 /// Bluetooth PAN link-establishment configuration.
@@ -309,6 +325,14 @@ pub struct BluetoothConfig {
     /// Maximum time to wait for the PAN interface to appear before giving up.
     #[serde(default = "default_bluetooth_startup_timeout_ms")]
     pub startup_timeout_ms: u64,
+    /// Periodic cleanup of unreachable PAN-paired peers — see
+    /// [`PeerCleanupConfig`]. Bluetooth-flavoured defaults (2 h /
+    /// 1 h). The destructive action is `bluetoothctl remove
+    /// <bd_addr>`. Coordinates with `[bluetooth_rfcomm.peer_cleanup]`
+    /// via the BlueZ `Connected` check so an active session in
+    /// either subsystem suppresses the unpair.
+    #[serde(default = "PeerCleanupConfig::bluetooth_default")]
+    pub peer_cleanup: PeerCleanupConfig,
 }
 
 /// Bluetooth RFCOMM direct-channel configuration.
@@ -337,37 +361,42 @@ pub struct BluetoothRfcommConfig {
     /// Bridge established RFCOMM sessions to the local TCP transport listener.
     #[serde(default = "default_bluetooth_rfcomm_bridge_to_tcp")]
     pub bridge_to_tcp: bool,
-    /// Run a periodic task that unpairs peers whose last successful
-    /// contact is older than `max_unreachable_lifetime_s`. Defaults
-    /// to `true`: the mesh use case treats a paired peer that hasn't
-    /// been in contact for hours as gone, so keeping the BlueZ
-    /// paired list tidy is more valuable than preserving stale
-    /// pairings. Set to `false` to manage pairings manually.
-    #[serde(default = "default_bluetooth_rfcomm_peer_cleanup_enabled")]
-    pub peer_cleanup_enabled: bool,
-    /// Threshold past which an unreachable paired peer is unpaired
-    /// by the cleanup task. Default 2 h (`7200`). The daemon clamps
-    /// values below 1 hour up to 1 hour at runtime — a misconfigured
-    /// short lifetime would silently delete pairings the user
-    /// manually set.
-    #[serde(default = "default_bluetooth_rfcomm_max_unreachable_lifetime_s")]
-    pub max_unreachable_lifetime_s: u64,
-    /// Interval between cleanup sweeps. Default 1 h (`3600`). With a
-    /// 2 h lifetime this fires at least twice per stale window so a
-    /// peer that ages out is unpaired within ~1 h of the threshold.
-    #[serde(default = "default_bluetooth_rfcomm_cleanup_interval_s")]
-    pub cleanup_interval_s: u64,
+    /// Periodic cleanup of unreachable paired peers — see
+    /// [`PeerCleanupConfig`]. The destructive action is
+    /// `bluetoothctl remove <bd_addr>`. Bluetooth-flavoured defaults:
+    /// enabled, 2 h lifetime, 1 h sweep cadence.
+    #[serde(default = "PeerCleanupConfig::bluetooth_default")]
+    pub peer_cleanup: PeerCleanupConfig,
 }
 
-/// Messaging subsystem configuration. Currently exposes the
-/// `[messaging.broadcast]` policy that governs how this node advertises
-/// its identity across the mesh and how it consumes broadcasts from
-/// other peers.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+/// Messaging subsystem configuration. Exposes the
+/// `[messaging.broadcast]` policy that governs how this node
+/// advertises its identity across the mesh, plus a peer-cleanup
+/// subsection that ages out stale entries from the daemon's
+/// `peers_seen` identity keystore.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct MessagingConfig {
     /// Identity-broadcast policy for the multi-hop mesh.
     #[serde(default)]
     pub broadcast: BroadcastConfig,
+    /// Periodic cleanup of unreachable mesh-identity entries in the
+    /// daemon's `peers_seen` table — see [`PeerCleanupConfig`]. The
+    /// destructive action drops the row + emits `peer_forgotten`.
+    /// Mesh-identity defaults (90 days / daily): identity loss
+    /// forces a fresh handshake on next contact (cheap), so a long
+    /// horizon keeps the keystore from growing forever on a long-
+    /// running node.
+    #[serde(default = "PeerCleanupConfig::mesh_identity_default")]
+    pub peer_cleanup: PeerCleanupConfig,
+}
+
+impl Default for MessagingConfig {
+    fn default() -> Self {
+        Self {
+            broadcast: BroadcastConfig::default(),
+            peer_cleanup: PeerCleanupConfig::mesh_identity_default(),
+        }
+    }
 }
 
 /// Identity-broadcast policy.
@@ -396,6 +425,14 @@ pub struct BroadcastConfig {
     /// a single misbehaving peer cannot flood the keystore or the UI.
     #[serde(default = "default_broadcast_min_peer_interval_s")]
     pub min_peer_interval_s: u64,
+    /// Periodic cleanup of `state.broadcast_peer_last_seen` rate-
+    /// limit entries — see [`PeerCleanupConfig`]. Ephemeral defaults
+    /// (7 days / 1 h): the rate-limit map costs ~32 bytes per peer,
+    /// so the horizon is generous; the goal is bounding worst-case
+    /// growth on long-running nodes that see thousands of unique
+    /// broadcasters.
+    #[serde(default = "PeerCleanupConfig::ephemeral_default")]
+    pub peer_cleanup: PeerCleanupConfig,
 }
 
 impl Default for BroadcastConfig {
@@ -404,6 +441,7 @@ impl Default for BroadcastConfig {
             outgoing_interval_s: None,
             watch_incoming: default_broadcast_watch_incoming(),
             min_peer_interval_s: default_broadcast_min_peer_interval_s(),
+            peer_cleanup: PeerCleanupConfig::ephemeral_default(),
         }
     }
 }
@@ -625,18 +663,6 @@ fn default_bluetooth_rfcomm_bridge_to_tcp() -> bool {
     true
 }
 
-fn default_bluetooth_rfcomm_peer_cleanup_enabled() -> bool {
-    true
-}
-
-fn default_bluetooth_rfcomm_max_unreachable_lifetime_s() -> u64 {
-    7_200
-}
-
-fn default_bluetooth_rfcomm_cleanup_interval_s() -> u64 {
-    3_600
-}
-
 impl Default for InterfaceConfig {
     fn default() -> Self {
         Self {
@@ -669,6 +695,7 @@ impl Default for TransportConfig {
             listen_port: default_listen_port(),
             max_reconnect_attempts: default_max_reconnect_attempts(),
             connect_timeout_ms: default_connect_timeout_ms(),
+            peer_cleanup: PeerCleanupConfig::ephemeral_default(),
         }
     }
 }
@@ -703,6 +730,7 @@ impl Default for WifiDirectConfig {
             listen_channel: default_wfd_listen_channel(),
             op_channel: default_wfd_op_channel(),
             connect_method: default_wfd_connect_method(),
+            peer_cleanup: PeerCleanupConfig::bluetooth_default(),
         }
     }
 }
@@ -731,6 +759,7 @@ impl Default for BluetoothConfig {
             bluetoothctl_timeout_s: default_bluetoothctl_timeout_s(),
             discoverable_timeout_s: default_bluetooth_discoverable_timeout_s(),
             startup_timeout_ms: default_bluetooth_startup_timeout_ms(),
+            peer_cleanup: PeerCleanupConfig::bluetooth_default(),
         }
     }
 }
@@ -744,9 +773,7 @@ impl Default for BluetoothRfcommConfig {
             outbound_enabled: default_bluetooth_rfcomm_outbound_enabled(),
             poll_interval_ms: default_bluetooth_rfcomm_poll_interval_ms(),
             bridge_to_tcp: default_bluetooth_rfcomm_bridge_to_tcp(),
-            peer_cleanup_enabled: default_bluetooth_rfcomm_peer_cleanup_enabled(),
-            max_unreachable_lifetime_s: default_bluetooth_rfcomm_max_unreachable_lifetime_s(),
-            cleanup_interval_s: default_bluetooth_rfcomm_cleanup_interval_s(),
+            peer_cleanup: PeerCleanupConfig::bluetooth_default(),
         }
     }
 }
