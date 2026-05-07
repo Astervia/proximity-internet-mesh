@@ -16,6 +16,8 @@ use pim_core::PeerCleanupConfig;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
 
+#[path = "peer_cleanup/mesh_identity.rs"]
+pub(crate) mod mesh_identity;
 #[path = "peer_cleanup/rfcomm.rs"]
 pub(crate) mod rfcomm;
 
