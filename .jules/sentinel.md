@@ -25,3 +25,8 @@
 **Vulnerability:** In `pim-crypto`, the `decrypt` and `decrypt_in_place_detached` methods used an unsafe `.unwrap()` on the result of `try_into()` when parsing a slice (`[8..12]`) into an array. If an attacker could feed malformed, truncated, or otherwise corrupted frames to these methods, the program could panic and crash, leading to a Denial of Service (DoS).
 **Learning:** Relying on `.unwrap()` during conversion of dynamic length slices from network or external boundaries can trigger runtime panics.
 **Prevention:** Always use safe slice operations (like `.get()`) with appropriate error mapping (`.ok_or()`) and `.try_into().map_err()` instead of `.unwrap()` to ensure robust error handling without crashing the program.
+
+## 2026-05-09 - [Secure File Permissions for Atomic Replace]
+**Vulnerability:** The daemon's broadcast config was persisted using `std::fs::write` to a temporary file before renaming it over the original file. Since `std::fs::write` falls back to the system's default `umask`, the temporary file could be created world-readable and world-writable. The POSIX `rename` operation preserves the permissions of the source file, causing the sensitive configuration file to end up with insecure permissions.
+**Learning:** When performing atomic file writes using a temporary file and `rename`, the temporary file must be created with explicitly strict permissions (e.g., `0o600`), because its permissions will become the permissions of the final file.
+**Prevention:** Explicitly configure `std::fs::OpenOptions` with `OpenOptionsExt::mode(0o600)` on Unix systems when creating temporary files for atomic replacement, avoiding reliance on system umasks.
