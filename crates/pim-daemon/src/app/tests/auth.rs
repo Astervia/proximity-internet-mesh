@@ -80,10 +80,3 @@ async fn authorization_tofu_persists_new_peer() {
     );
     std::fs::remove_file(path).ok();
 }
-
-#[test]
-fn discovery_shared_key_requires_32_bytes_of_hex() {
-    assert!(parse_discovery_shared_key("abcd").is_err());
-    assert!(parse_discovery_shared_key(&"zz".repeat(32)).is_err());
-    assert!(parse_discovery_shared_key(&"11".repeat(32)).is_ok());
-}

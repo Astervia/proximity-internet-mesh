@@ -9,6 +9,7 @@ repository.workspace = true
 [dependencies]
 libc = { workspace = true }
 pim-core = { workspace = true }
+pim-crypto = { workspace = true }
 tokio = { workspace = true }
 tokio-util = { workspace = true }
 thiserror = { workspace = true }

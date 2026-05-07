@@ -556,6 +556,14 @@ async fn dispatch(
         "config.get" => method_config_get(state, req.params.as_ref()).await,
         "config.save" => method_config_save(state, req.params.as_ref()).await,
 
+        // §5.5b mesh — read-only status of the local node's mesh
+        // membership. Returns `{ mode, mesh_id, fingerprint }`. The
+        // passphrase itself is never returned. Mutating the mesh
+        // (set/clear passphrase, change mode) goes through `config.save`
+        // because it requires a daemon restart to re-derive the
+        // Argon2id-stretched key.
+        "mesh.status" => Ok(build_mesh_status(state).await),
+
         // §5.6 logs — `logs.event` notifications are pumped by the
         // per-connection forwarder spawned in `handle_connection`.
         // `logs.subscribe` only triggers the one-shot history replay
@@ -1924,6 +1932,33 @@ fn build_gateway_status(state: &Arc<DaemonState>) -> Value {
         "active": state.is_gateway,
         "nat_interface": state.gateway_nat_interface,
         "advertised_routes": Vec::<String>::new(),
+    })
+}
+
+// ── §5.5b mesh ────────────────────────────────────────────────────────────
+
+/// Read-only snapshot of the local node's mesh membership.
+///
+/// Returns `{ mode: "open"|"private", mesh_id: string|null,
+/// fingerprint: hex|null }`. Never includes the passphrase or any
+/// derived key bytes — `fingerprint` is the
+/// `pim_crypto::MeshSecret::fingerprint` 8-byte value, intended for
+/// UI confirmation that two nodes share a mesh.
+async fn build_mesh_status(state: &Arc<DaemonState>) -> Value {
+    let (mode, fingerprint) = match (&state.mesh_handshake_key, &state.mesh_fingerprint) {
+        (Some(_), Some(fp)) => {
+            let mut hex = String::with_capacity(16);
+            for b in fp {
+                hex.push_str(&format!("{b:02x}"));
+            }
+            ("private", Some(hex))
+        }
+        _ => ("open", None),
+    };
+    json!({
+        "mode": mode,
+        "mesh_id": state.mesh_id,
+        "fingerprint": fingerprint,
     })
 }
 

@@ -17,7 +17,7 @@ fn parse_minimal_config() {
         AuthorizationPolicy::AllowAll
     );
     assert!(config.security.authorized_peers.is_empty());
-    assert!(config.discovery.shared_key.is_none());
+    assert_eq!(config.mesh.mode, MeshMode::Open);
 }
 
 #[test]
@@ -30,10 +30,7 @@ fn parse_full_config() {
     assert_eq!(config.transport.listen_port, 9100);
     assert_eq!(config.transport.max_reconnect_attempts, 20);
     assert_eq!(config.transport.connect_timeout_ms, 3000);
-    assert_eq!(
-        config.discovery.shared_key.as_deref(),
-        Some("00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff")
-    );
+    assert_eq!(config.mesh.mode, MeshMode::Private);
     assert_eq!(
         config.security.authorization_policy,
         AuthorizationPolicy::AllowList

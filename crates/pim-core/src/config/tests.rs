@@ -1,6 +1,7 @@
 mod bluetooth;
 mod discovery;
 mod general;
+mod mesh;
 mod messaging;
 mod peers;
 mod relay;
@@ -31,7 +32,16 @@ broadcast_interval_ms = 5000
 peer_timeout_ms = 30000
 connect_relays = true
 connect_gateways = true
-shared_key = "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"
+
+[mesh]
+mode = "private"
+passphrase = "correct horse battery staple"
+mesh_id = "test-mesh"
+
+[mesh.kdf]
+m_cost_kib = 8
+t_cost = 1
+p_cost = 1
 
 [relay]
 enabled = false

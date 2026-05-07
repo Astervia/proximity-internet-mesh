@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result};
 use pim_core::{AuthorizationPolicy, NodeId};
 use serde::{Deserialize, Serialize};
 use tokio::sync::RwLock;
@@ -127,17 +127,4 @@ async fn persist_trusted_peers(path: &Path, peers: &HashSet<NodeId>) -> Result<(
     )
     .await
     .with_context(|| format!("write trust store {}", path.display()))
-}
-
-pub(crate) fn parse_discovery_shared_key(value: &str) -> Result<[u8; 32]> {
-    if value.len() != 64 {
-        bail!("discovery.shared_key must be 64 hex characters");
-    }
-    let mut key = [0u8; 32];
-    for (idx, chunk) in value.as_bytes().chunks_exact(2).enumerate() {
-        let hex = std::str::from_utf8(chunk).context("discovery.shared_key must be valid UTF-8")?;
-        key[idx] = u8::from_str_radix(hex, 16)
-            .with_context(|| format!("invalid discovery key byte {hex}"))?;
-    }
-    Ok(key)
 }

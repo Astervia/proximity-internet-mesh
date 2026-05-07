@@ -64,8 +64,8 @@ pub(crate) fn cmd_config_generate(
 // Conventions:
 //   - Active values are written verbatim.
 //   - Optional fields (`Option<T>` in the model — `mesh_ipv6`,
-//     `shared_key`, `dhcp_range`, `dhcp_dns`) are emitted commented-out
-//     with a one-line explanation of how to enable them.
+//     `dhcp_range`, `dhcp_dns`) are emitted commented-out with a
+//     one-line explanation of how to enable them.
 //   - Sections that are role-conditional (`[gateway]`) are emitted as
 //     a commented placeholder when the role is absent — preserving the
 //     existing CLI ergonomic where users uncomment-to-enable.
@@ -96,6 +96,7 @@ pub(crate) fn render_config_template(roles: &[NodeRole], override_name: Option<&
     push_node(&mut out, &node_name);
     push_interface(&mut out, mesh_ip);
     push_discovery(&mut out);
+    push_mesh(&mut out);
     push_transport(&mut out);
     push_routing(&mut out);
     push_gateway(&mut out, is_gateway);
@@ -202,18 +203,54 @@ fn push_discovery(out: &mut String) {
         "# Auto-connect to discovered peers advertising gateway capability.",
     );
     push_line(out, "connect_gateways = true");
+    push_blank(out);
+}
+
+fn push_mesh(out: &mut String) {
+    push_line(out, "[mesh]");
     push_line(
         out,
-        "# Optional 64-hex-character group key. When set, only nodes with the same key can",
+        "# Private-mesh membership (optional). Absent or `mode = \"open\"` means any peer",
     );
     push_line(
         out,
-        "# decode discovery broadcasts (gates discovery, NOT transport security).",
+        "# can connect — this is the default. `mode = \"private\"` requires every node in",
     );
     push_line(
         out,
-        "# shared_key = \"00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff\"",
+        "# the mesh to know the same `passphrase`; non-members can't decrypt discovery",
     );
+    push_line(
+        out,
+        "# broadcasts and can't complete the encrypted handshake.",
+    );
+    push_line(out, "mode = \"open\"");
+    push_line(
+        out,
+        "# Required when mode = \"private\". UTF-8 string, stretched via Argon2id at startup.",
+    );
+    push_line(out, "# passphrase = \"correct horse battery staple\"");
+    push_line(
+        out,
+        "# Optional cosmetic label. Mixed into the KDF salt, so two meshes that share a",
+    );
+    push_line(
+        out,
+        "# passphrase but use different mesh_ids derive distinct secrets and won't",
+    );
+    push_line(
+        out,
+        "# interconnect. Renaming mesh_id invalidates existing peer sessions.",
+    );
+    push_line(out, "# mesh_id = \"office\"");
+    push_line(
+        out,
+        "# Argon2id parameters. Defaults target ~100 ms on a desktop; tune down for embedded.",
+    );
+    push_line(out, "# [mesh.kdf]");
+    push_line(out, "# m_cost_kib = 65536");
+    push_line(out, "# t_cost = 3");
+    push_line(out, "# p_cost = 1");
     push_blank(out);
 }
 

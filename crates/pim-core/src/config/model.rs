@@ -19,6 +19,13 @@ pub struct Config {
     /// LAN peer discovery settings.
     #[serde(default)]
     pub discovery: DiscoveryConfig,
+    /// Optional private-mesh membership settings. Absent or `mode = "open"` →
+    /// open mesh (any peer can connect; default behaviour). When configured
+    /// with `mode = "private"` and a passphrase, only peers that derive the
+    /// same mesh secret can complete the handshake or decrypt discovery
+    /// advertisements. See [`MeshConfig`] for the schema.
+    #[serde(default)]
+    pub mesh: MeshConfig,
     /// Peer-to-peer transport settings.
     #[serde(default)]
     pub transport: TransportConfig,
@@ -100,9 +107,68 @@ pub struct DiscoveryConfig {
     /// Automatically initiate connections to discovered peers advertising gateway capability.
     #[serde(default = "default_connect_gateways")]
     pub connect_gateways: bool,
-    /// Optional 32-byte discovery group key encoded as 64 hex characters.
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+/// Mesh-membership mode. `Open` admits any authenticated peer (mode default
+/// when `[mesh]` is absent). `Private` requires every peer to derive the
+/// same mesh secret from a shared passphrase.
+pub enum MeshMode {
+    /// No mesh-level gating. Behaves identically to a daemon configured
+    /// without a `[mesh]` section.
+    #[default]
+    Open,
+    /// Passphrase-gated mesh: only peers that derive the same secret can
+    /// complete the handshake or decrypt discovery advertisements.
+    Private,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+/// Private-mesh membership configuration.
+///
+/// All fields are optional; an absent `[mesh]` section is treated as
+/// `mode = "open"`. When `mode = "private"`, `passphrase` must be a
+/// non-empty UTF-8 string. The passphrase is stretched once at daemon
+/// startup via Argon2id (see [`MeshKdfConfig`]) into a 32-byte master,
+/// then split via HKDF-SHA256 into purpose-bound sub-keys for discovery
+/// encryption and handshake binding.
+pub struct MeshConfig {
+    /// Mesh mode. Defaults to [`MeshMode::Open`] (open mesh).
     #[serde(default)]
-    pub shared_key: Option<String>,
+    pub mode: MeshMode,
+    /// Passphrase used to derive the mesh secret. Required when
+    /// `mode = "private"`. Empty string in private mode is rejected at
+    /// startup. Ignored entirely when `mode = "open"`.
+    #[serde(default)]
+    pub passphrase: Option<String>,
+    /// Optional cosmetic mesh label used by the UI / CLI. Also mixed into
+    /// the Argon2id salt, so two meshes that happen to share a passphrase
+    /// but use different `mesh_id` values derive distinct secrets and
+    /// cannot interconnect. Renaming `mesh_id` therefore invalidates
+    /// every existing peer connection — UI surfaces a warning.
+    #[serde(default)]
+    pub mesh_id: Option<String>,
+    /// Argon2id parameters used to stretch the passphrase. The default
+    /// targets ~100 ms on a desktop. Tunable for embedded targets.
+    #[serde(default)]
+    pub kdf: MeshKdfConfig,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+/// Argon2id KDF parameters used when stretching the mesh passphrase. The
+/// derivation runs once at daemon startup and the result is cached, so
+/// values can be conservative without affecting per-handshake latency.
+pub struct MeshKdfConfig {
+    /// Memory cost in KiB. Default 65536 (64 MiB).
+    #[serde(default = "default_mesh_kdf_m_cost_kib")]
+    pub m_cost_kib: u32,
+    /// Number of iterations. Default 3.
+    #[serde(default = "default_mesh_kdf_t_cost")]
+    pub t_cost: u32,
+    /// Parallelism. Default 1.
+    #[serde(default = "default_mesh_kdf_p_cost")]
+    pub p_cost: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
@@ -683,9 +749,30 @@ impl Default for DiscoveryConfig {
             peer_timeout_ms: default_peer_timeout_ms(),
             connect_relays: default_connect_relays(),
             connect_gateways: default_connect_gateways(),
-            shared_key: None,
         }
     }
+}
+
+impl Default for MeshKdfConfig {
+    fn default() -> Self {
+        Self {
+            m_cost_kib: default_mesh_kdf_m_cost_kib(),
+            t_cost: default_mesh_kdf_t_cost(),
+            p_cost: default_mesh_kdf_p_cost(),
+        }
+    }
+}
+
+fn default_mesh_kdf_m_cost_kib() -> u32 {
+    65536
+}
+
+fn default_mesh_kdf_t_cost() -> u32 {
+    3
+}
+
+fn default_mesh_kdf_p_cost() -> u32 {
+    1
 }
 
 impl Default for TransportConfig {

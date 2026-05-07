@@ -1,0 +1,32 @@
+[node]
+name = "intruder"
+data_dir = "/var/lib/pim"
+
+[interface]
+mesh_ip = "10.77.0.200/24"
+mtu = 1400
+
+[discovery]
+enabled = true
+
+# Same mesh_id but a *different* passphrase — derives a different
+# mesh secret. The intruder should not be able to decrypt the
+# gateway/client advertisements and should never form a session.
+[mesh]
+mode = "private"
+passphrase = "wrong wrong wrong wrong"
+mesh_id = "office"
+
+[mesh.kdf]
+m_cost_kib = 8
+t_cost = 1
+p_cost = 1
+
+[transport]
+listen_port = 9100
+
+[security]
+key_file = "/var/lib/pim/node.key"
+require_encryption = true
+authorization_policy = "allow_all"
+trust_store_file = "/var/lib/pim/trusted-peers.toml"

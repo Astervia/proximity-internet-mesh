@@ -1,17 +1,6 @@
 title = "Gitleaks config"
 
 [[allowlists]]
-description = "Example shared discovery key in config parsing tests"
-condition = "AND"
-paths = [
-  '''crates/pim-core/src/config.rs'''
-]
-regexes = [
-  '''shared_key\s*=\s*"00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"''',
-  '''Some\("00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"\)'''
-]
-
-[[allowlists]]
 description = "Fixed AES test keys in discovery advertisement unit tests"
 condition = "AND"
 paths = [

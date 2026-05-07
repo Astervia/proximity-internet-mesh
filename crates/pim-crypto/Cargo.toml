@@ -15,6 +15,7 @@ hkdf = { workspace = true }
 sha2 = { workspace = true }
 hmac = { workspace = true }
 rand = { workspace = true }
+argon2 = { workspace = true }
 tracing = { workspace = true }
 thiserror = { workspace = true }
 

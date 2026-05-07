@@ -59,12 +59,23 @@ pub struct HandshakeConfirm {
 /// Usage:
 /// - Initiator: `initiate()` → send Init → receive Response → `finalize_initiator()` → send Confirm
 /// - Responder: receive Init → `respond()` → send Response → receive Confirm → `verify_confirm()`
+///
+/// **Private-mesh binding.** If both sides call
+/// [`Handshaker::with_mesh_handshake_key`] with the same 32-byte secret
+/// (typically [`crate::MeshSecret::handshake_key`]), the secret is mixed
+/// into the HKDF IKM and both sides derive the same session key. If the
+/// secrets differ — or if one side sets it and the other doesn't — the
+/// derived session keys diverge, the transcript HMAC fails, and the
+/// handshake is rejected. This is how the open-mesh ↔ private-mesh
+/// boundary is enforced: the divergence is silent on the wire (no new
+/// frame fields) but cryptographically definitive.
 pub struct Handshaker {
     identity: HandshakeIdentity,
     ephemeral_secret: Option<StaticSecret>,
     ephemeral_pub: Option<[u8; 32]>,
     session_key: Option<SessionKey>,
     transcript: Vec<u8>,
+    mesh_handshake_key: Option<[u8; 32]>,
 }
 
 /// Subset of Identity needed for handshake (avoids lifetime issues).
@@ -85,7 +96,30 @@ impl Handshaker {
             ephemeral_pub: None,
             session_key: None,
             transcript: Vec::new(),
+            mesh_handshake_key: None,
         }
+    }
+
+    /// Bind this handshake to a private mesh by mixing the supplied
+    /// 32-byte secret into the session-key derivation IKM. Must be
+    /// called before [`Self::respond`] or [`Self::finalize_initiator`].
+    /// See struct docs for the open ↔ private rejection semantics.
+    pub fn with_mesh_handshake_key(mut self, key: [u8; 32]) -> Self {
+        self.mesh_handshake_key = Some(key);
+        self
+    }
+
+    /// Build the HKDF input keying material: X25519 shared secret
+    /// optionally followed by the mesh handshake key. Empty mesh key →
+    /// open-mesh derivation; populated → private-mesh derivation that
+    /// won't match an open peer's HKDF output.
+    fn ikm_with_mesh(&self, shared_secret: &[u8]) -> Vec<u8> {
+        let mut ikm = Vec::with_capacity(shared_secret.len() + 32);
+        ikm.extend_from_slice(shared_secret);
+        if let Some(mesh_key) = &self.mesh_handshake_key {
+            ikm.extend_from_slice(mesh_key);
+        }
+        ikm
     }
 
     /// Initiator step 1: produce a HandshakeInit.
@@ -168,12 +202,14 @@ impl Handshaker {
         self.transcript.extend_from_slice(&ephemeral_pub_bytes);
         self.transcript.extend_from_slice(&nonce);
 
-        // Derive session key via HKDF
+        // Derive session key via HKDF. IKM = X25519 || optional mesh key
+        // (see struct docs for the open ↔ private rejection semantics).
         let mut salt = Vec::with_capacity(64);
         salt.extend_from_slice(&init.nonce);
         salt.extend_from_slice(&nonce);
 
-        let hk = Hkdf::<Sha256>::new(Some(&salt), shared_secret.as_bytes());
+        let ikm = self.ikm_with_mesh(shared_secret.as_bytes());
+        let hk = Hkdf::<Sha256>::new(Some(&salt), &ikm);
         let mut key = [0u8; 32];
         hk.expand(b"pim-session-v1", &mut key)
             .expect("32 bytes is valid for HKDF-SHA256");
@@ -220,7 +256,7 @@ impl Handshaker {
         self.transcript.extend_from_slice(&response.ephemeral_pub);
         self.transcript.extend_from_slice(&response.nonce);
 
-        // Derive session key via HKDF (same salt construction as responder)
+        // Derive session key via HKDF (same salt + IKM construction as responder).
         // The init nonce is the first 32 bytes of our existing transcript after sender_pub + ephemeral_pub
         // We stored: init.sender_pub(32) + init.ephemeral_pub(32) + init.nonce(32) = bytes 64..96
         let init_nonce = &self.transcript[64..96];
@@ -228,7 +264,8 @@ impl Handshaker {
         salt.extend_from_slice(init_nonce);
         salt.extend_from_slice(&response.nonce);
 
-        let hk = Hkdf::<Sha256>::new(Some(&salt), shared_secret.as_bytes());
+        let ikm = self.ikm_with_mesh(shared_secret.as_bytes());
+        let hk = Hkdf::<Sha256>::new(Some(&salt), &ikm);
         let mut key = [0u8; 32];
         hk.expand(b"pim-session-v1", &mut key)
             .expect("32 bytes is valid for HKDF-SHA256");
