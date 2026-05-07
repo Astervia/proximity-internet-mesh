@@ -94,6 +94,42 @@ pub struct DiscoveredDevice {
     pub name: String,
 }
 
+/// Per-peer lifecycle event surfaced by [`BluetoothDiscovery`] when a
+/// caller has registered a sender via
+/// [`BluetoothDiscovery::set_peer_event_tx`]. Used by the daemon's
+/// peer-cleanup subsystem to maintain the `bluetooth_pan_lifecycle`
+/// freshness table, which the PAN cleanup tracker ages out and
+/// unpairs.
+///
+/// Without a registered sender no per-peer events are produced — the
+/// discovery loop's existing `mpsc::Sender<SocketAddr>` output stays
+/// the canonical signal for the daemon's connection initiation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PanPeerEvent {
+    /// Bluetooth device address (`AA:BB:CC:DD:EE:FF`, uppercase).
+    pub mac: String,
+    /// BlueZ-cached friendly name. May be the empty string when the
+    /// controller never resolved one (e.g. a peer paired by `bt-agent`
+    /// before its name became visible).
+    pub name: String,
+    /// What just happened.
+    pub kind: PanPeerEventKind,
+}
+
+/// Discriminator for [`PanPeerEvent`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PanPeerEventKind {
+    /// Radio scan observed the peer in BlueZ's paired list with the
+    /// configured device-name prefix. Fired before any connection is
+    /// attempted; the cleanup table uses this as the initial
+    /// `first_paired_at_s` stamp.
+    Paired,
+    /// Successful PAN connection (after `pair_and_request_pan` and a
+    /// PAN client process spawn on Linux). Bumps
+    /// `last_connected_at_s`; cleanup treats it as fresh contact.
+    Connected,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ResolvedPanInterface {
     name: String,
@@ -123,6 +159,12 @@ pub struct BluetoothDiscovery {
     #[allow(dead_code)]
     nat_interface: Option<String>,
     peer_tx: mpsc::Sender<SocketAddr>,
+    /// Optional sink for per-peer pairing/connection events — see
+    /// [`PanPeerEvent`]. Set via
+    /// [`BluetoothDiscovery::set_peer_event_tx`] before the service
+    /// is started; if `None`, the discovery loop never emits per-
+    /// peer events and the existing `peer_tx` flow is unaffected.
+    peer_event_tx: Option<mpsc::Sender<PanPeerEvent>>,
     /// Cached BD address of the local Bluetooth controller, populated
     /// lazily on first discovery cycle. Used as a self-filter when
     /// scanning so a remote whose BlueZ-cached name happens to equal our
@@ -213,6 +255,7 @@ impl BluetoothDiscovery {
                 resolv_conf_path: resolv_conf_path.into(),
                 nat_interface: nat_interface.map(Into::into),
                 peer_tx,
+                peer_event_tx: None,
                 local_controller_mac: Arc::new(OnceCell::new()),
             },
             peer_rx,
@@ -222,6 +265,15 @@ impl BluetoothDiscovery {
     /// Returns the statically configured peer socket addresses.
     pub fn target_socket_addrs(&self) -> &[SocketAddr] {
         &self.static_targets
+    }
+
+    /// Register a sink for per-peer pairing/connection events — see
+    /// [`PanPeerEvent`]. Caller must invoke this before
+    /// [`BluetoothDiscovery::run`] (or whichever method spawns the
+    /// service); registering after the loop has started is a no-op
+    /// for already-emitted events.
+    pub fn set_peer_event_tx(&mut self, tx: mpsc::Sender<PanPeerEvent>) {
+        self.peer_event_tx = Some(tx);
     }
 }
 
