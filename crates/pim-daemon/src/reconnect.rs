@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet};
 use std::net::SocketAddr;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use pim_core::NodeId;
 use rand::Rng as _;
@@ -32,7 +32,11 @@ pub(crate) struct ReconnectManager {
     /// Configured peer targets from `[[peers]]` config: always reconnect if lost.
     configured_targets: HashSet<ConnectTarget>,
     /// Targets learned from dynamic discovery: also reconnect if lost.
-    discovered_targets: Mutex<HashSet<ConnectTarget>>,
+    /// Each entry tracks when it was last (re-)observed so the
+    /// `[transport.peer_cleanup]` sweep can drop entries that haven't
+    /// been refreshed in a long time. Without this the set grows
+    /// monotonically over the lifetime of the daemon.
+    discovered_targets: Mutex<HashMap<ConnectTarget, Instant>>,
     /// Maps real peer NodeId to connection target, learned after handshake.
     target_by_peer: Mutex<HashMap<NodeId, ConnectTarget>>,
     /// Addresses that currently have an active reconnect task.
@@ -43,7 +47,7 @@ impl ReconnectManager {
     pub(crate) fn new(targets: impl IntoIterator<Item = ConnectTarget>) -> Self {
         Self {
             configured_targets: targets.into_iter().collect(),
-            discovered_targets: Mutex::new(HashSet::new()),
+            discovered_targets: Mutex::new(HashMap::new()),
             target_by_peer: Mutex::new(HashMap::new()),
             reconnecting: Mutex::new(HashSet::new()),
         }
@@ -62,8 +66,23 @@ impl ReconnectManager {
     }
 
     /// Register a target that came from dynamic peer discovery.
+    /// Refreshes the `last_seen` timestamp so a target that keeps
+    /// being re-observed never ages out.
     pub(crate) async fn register_discovered(&self, target: ConnectTarget) {
-        self.discovered_targets.lock().await.insert(target);
+        self.discovered_targets
+            .lock()
+            .await
+            .insert(target, Instant::now());
+    }
+
+    /// Drop discovered targets last observed more than `lifetime`
+    /// ago. Returns the number of evicted targets so the cleanup
+    /// driver can log it.
+    pub(crate) async fn expire_discovered_targets(&self, lifetime: Duration) -> usize {
+        let mut map = self.discovered_targets.lock().await;
+        let before = map.len();
+        map.retain(|_, last_seen| last_seen.elapsed() <= lifetime);
+        before.saturating_sub(map.len())
     }
 
     /// Return the target for `peer_id` if it is either a configured or
@@ -71,7 +90,7 @@ impl ReconnectManager {
     pub(crate) async fn is_reconnectable_target(&self, peer_id: &NodeId) -> Option<ConnectTarget> {
         let target = self.target_by_peer.lock().await.get(peer_id).copied()?;
         let is_configured = self.configured_targets.contains(&target);
-        let is_discovered = self.discovered_targets.lock().await.contains(&target);
+        let is_discovered = self.discovered_targets.lock().await.contains_key(&target);
         (is_configured || is_discovered).then_some(target)
     }
 
@@ -79,7 +98,7 @@ impl ReconnectManager {
     pub(crate) async fn peer_info(&self, peer_id: &NodeId) -> Option<(ConnectTarget, bool, bool)> {
         let target = self.target_by_peer.lock().await.get(peer_id).copied()?;
         let configured = self.configured_targets.contains(&target);
-        let discovered = self.discovered_targets.lock().await.contains(&target);
+        let discovered = self.discovered_targets.lock().await.contains_key(&target);
         Some((target, configured, discovered))
     }
 
