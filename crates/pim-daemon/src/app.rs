@@ -1020,6 +1020,36 @@ pub(crate) async fn run() -> Result<()> {
         );
     }
 
+    // Broadcast rate-limit map cleanup. Bounds the in-memory
+    // `state.broadcast_peer_last_seen` map, which would otherwise
+    // grow with every unique broadcaster ever seen.
+    {
+        let tracker: std::sync::Arc<dyn peer_cleanup::PeerCleanupTracker> = std::sync::Arc::new(
+            peer_cleanup::broadcast::BroadcastTracker::new(state.broadcast_peer_last_seen.clone()),
+        );
+        peer_cleanup::spawn(
+            config.messaging.broadcast.peer_cleanup.clone(),
+            tracker,
+            cancel.clone(),
+        );
+    }
+
+    // Reconnect-discovered targets cleanup. Bounds the
+    // `ReconnectManager.discovered_targets` map; configured peers
+    // are unaffected.
+    {
+        let tracker: std::sync::Arc<dyn peer_cleanup::PeerCleanupTracker> = std::sync::Arc::new(
+            peer_cleanup::reconnect_discovered::ReconnectDiscoveredTracker::new(
+                state.reconnect.clone(),
+            ),
+        );
+        peer_cleanup::spawn(
+            config.transport.peer_cleanup.clone(),
+            tracker,
+            cancel.clone(),
+        );
+    }
+
     // ── Background tasks ──────────────────────────────────────────────────
     tokio::spawn(run_reassembly_gc(state.clone()));
     tokio::spawn(run_route_advertisements(state.clone()));
