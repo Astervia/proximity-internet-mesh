@@ -374,6 +374,37 @@ impl PeerDirectoryService {
         Ok(out)
     }
 
+    /// List peers whose `last_seen_ms` is older than `threshold_ms`.
+    /// Returned tuples are `(NodeId, last_seen_ms, last_known_name)`
+    /// — the name is included for log readability when the cleanup
+    /// loop reports what it dropped.
+    pub fn list_peers_older_than(&self, threshold_ms: i64) -> Result<Vec<(NodeId, i64, String)>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT node_id, last_seen_ms, last_known_name \
+             FROM peers_seen \
+             WHERE last_seen_ms < ?1 \
+             ORDER BY last_seen_ms ASC",
+        )?;
+        let rows = stmt
+            .query_map(params![threshold_ms], |row| {
+                let hex: String = row.get(0)?;
+                let ts: i64 = row.get(1)?;
+                let name: String = row.get(2)?;
+                Ok((hex, ts, name))
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+
+        let mut out = Vec::with_capacity(rows.len());
+        for (hex, ts, name) in rows {
+            match hex.parse::<NodeId>() {
+                Ok(id) => out.push((id, ts, name)),
+                Err(_) => continue,
+            }
+        }
+        Ok(out)
+    }
+
     // ── RFCOMM peer lifecycle ─────────────────────────────────────────
     //
     // Phase 1 of `plans/rfcomm-reconnect/plan.md`. The

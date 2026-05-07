@@ -1005,6 +1005,21 @@ pub(crate) async fn run() -> Result<()> {
         );
     }
 
+    // Mesh-identity (peers_seen) cleanup. Daemon-essential; runs on
+    // every platform regardless of which transports are enabled.
+    {
+        let tracker: std::sync::Arc<dyn peer_cleanup::PeerCleanupTracker> =
+            std::sync::Arc::new(peer_cleanup::mesh_identity::MeshIdentityTracker::new(
+                state.peer_directory.clone(),
+                state.sessions.clone(),
+            ));
+        peer_cleanup::spawn(
+            config.messaging.peer_cleanup.clone(),
+            tracker,
+            cancel.clone(),
+        );
+    }
+
     // ── Background tasks ──────────────────────────────────────────────────
     tokio::spawn(run_reassembly_gc(state.clone()));
     tokio::spawn(run_route_advertisements(state.clone()));
