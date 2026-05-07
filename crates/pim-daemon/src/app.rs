@@ -57,6 +57,8 @@ mod logs_subscriber;
 mod net;
 #[path = "observability.rs"]
 mod observability;
+#[path = "peer_cleanup.rs"]
+mod peer_cleanup;
 #[path = "peer_directory.rs"]
 pub(crate) mod peer_directory;
 #[path = "peer_tasks.rs"]
@@ -71,9 +73,6 @@ mod reconnect;
 mod reconnect_task;
 #[path = "reputation.rs"]
 mod reputation;
-#[cfg(target_os = "linux")]
-#[path = "rfcomm_cleanup.rs"]
-mod rfcomm_cleanup;
 #[path = "rpc.rs"]
 mod rpc;
 #[path = "runtime_config.rs"]
@@ -993,13 +992,17 @@ pub(crate) async fn run() -> Result<()> {
     // enabled (no point cleaning lifecycle rows we never write to)
     // and the operator has explicitly enabled cleanup.
     #[cfg(target_os = "linux")]
-    if config.bluetooth_rfcomm.enabled && config.bluetooth_rfcomm.peer_cleanup.enabled {
-        let cleanup_cfg = rfcomm_cleanup::build_cleanup_config(
-            bluetoothctl_command(),
-            config.bluetooth_rfcomm.peer_cleanup.max_unreachable_lifetime_s,
-            config.bluetooth_rfcomm.peer_cleanup.cleanup_interval_s,
+    if config.bluetooth_rfcomm.enabled {
+        let tracker: std::sync::Arc<dyn peer_cleanup::PeerCleanupTracker> =
+            std::sync::Arc::new(peer_cleanup::rfcomm::RfcommTracker::new(
+                bluetoothctl_command(),
+                state.peer_directory.clone(),
+            ));
+        peer_cleanup::spawn(
+            config.bluetooth_rfcomm.peer_cleanup.clone(),
+            tracker,
+            cancel.clone(),
         );
-        rfcomm_cleanup::spawn(cleanup_cfg, state.peer_directory.clone(), cancel.clone());
     }
 
     // ── Background tasks ──────────────────────────────────────────────────
