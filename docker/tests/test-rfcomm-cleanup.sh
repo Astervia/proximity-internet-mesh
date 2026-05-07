@@ -39,9 +39,15 @@ start_stack "$COMPOSE_FILE"
 wait_healthy "$COMPOSE_FILE" "$SVC" 60
 
 log_section "Cleanup task spawned"
+# After the centralized peer-cleanup refactor each tracker logs a
+# uniform "peer cleanup task started" line. The unique field
+# (`tracker=rfcomm`) carries ANSI escape codes in the rendered
+# format that defeat literal greps, so match on the message text
+# instead — its presence means the centralized driver started at
+# least one tracker.
 assert_logs_contain "$COMPOSE_FILE" "$SVC" \
-    "rfcomm peer cleanup task started" \
-    "cleanup task started log line emitted"
+    "peer cleanup task started" \
+    "centralized cleanup driver started log line emitted"
 
 log_section "Cleanup runs and removes the stale peer"
 

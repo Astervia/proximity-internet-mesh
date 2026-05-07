@@ -44,9 +44,11 @@ outbound_enabled = true
 poll_interval_ms = 1500
 bridge_to_tcp = false
 
-# Cleanup knobs — both clamped to their respective floors at runtime
-# (`build_cleanup_config`). The seeded row is far older than 1 hour,
-# so the first sweep removes it.
-peer_cleanup_enabled = true
+# Cleanup knobs — subsection-style after the centralized
+# `PeerCleanupConfig` refactor. Lifetime + interval clamp to their
+# floors at runtime (1 h / 60 s); the seeded row is two days old
+# so the first sweep removes it regardless.
+[bluetooth_rfcomm.peer_cleanup]
+enabled = true
 max_unreachable_lifetime_s = 60
 cleanup_interval_s = 1
