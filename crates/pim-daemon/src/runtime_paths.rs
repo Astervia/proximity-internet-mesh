@@ -106,6 +106,12 @@ pub(crate) fn default_pid_file() -> PathBuf {
 /// restarts (notably the messages database). Distinct from
 /// [`runtime_dir`], which holds transient sockets / PIDs.
 pub(crate) fn data_dir() -> PathBuf {
+    // `PIM_DATA_DIR` always wins. On Android this is the only sane
+    // path (the JNI bridge sets it to `Context.getFilesDir()`); on
+    // desktop it's primarily a test override.
+    if let Some(p) = std::env::var_os("PIM_DATA_DIR") {
+        return PathBuf::from(p);
+    }
     #[cfg(target_os = "linux")]
     {
         if let Some(xdg) = std::env::var_os("XDG_DATA_HOME") {

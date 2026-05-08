@@ -248,6 +248,7 @@ pub(crate) fn ipv6_destination(packet: &[u8]) -> Option<Ipv6Addr> {
     Some(Ipv6Addr::from(octets))
 }
 
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 pub(crate) fn lookup_interface_ipv4(interface: &str) -> Result<Ipv4Addr> {
     #[cfg(target_os = "linux")]
     let output = Command::new("ip")
@@ -259,8 +260,6 @@ pub(crate) fn lookup_interface_ipv4(interface: &str) -> Result<Ipv4Addr> {
         .arg(interface)
         .output()
         .with_context(|| format!("failed to inspect IPv4 address for {interface}"))?;
-    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
-    bail!("interface IPv4 lookup is not supported on this platform");
 
     if !output.status.success() {
         #[cfg(target_os = "linux")]
@@ -273,13 +272,16 @@ pub(crate) fn lookup_interface_ipv4(interface: &str) -> Result<Ipv4Addr> {
             "ifconfig {interface} exited with {:?}",
             output.status.code()
         );
-        #[cfg(not(any(target_os = "linux", target_os = "macos")))]
-        unreachable!();
     }
 
     let stdout = String::from_utf8(output.stdout).context("invalid UTF-8 from ip addr output")?;
     parse_interface_ipv4_output(&stdout)
         .with_context(|| format!("no IPv4 address found on interface {interface}"))
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+pub(crate) fn lookup_interface_ipv4(_interface: &str) -> Result<Ipv4Addr> {
+    bail!("interface IPv4 lookup is not supported on this platform");
 }
 
 /// Scan all interfaces (except the mesh TUN) for any global IPv6 address. Used
@@ -318,6 +320,7 @@ pub(crate) fn find_any_ipv6_uplink(_exclude: &[&str]) -> Option<(String, Ipv6Add
     None
 }
 
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 pub(crate) fn lookup_interface_ipv6(interface: &str) -> Result<Ipv6Addr> {
     #[cfg(target_os = "linux")]
     let output = Command::new("ip")
@@ -331,8 +334,6 @@ pub(crate) fn lookup_interface_ipv6(interface: &str) -> Result<Ipv6Addr> {
         .arg(interface)
         .output()
         .with_context(|| format!("failed to inspect IPv6 address for {interface}"))?;
-    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
-    bail!("interface IPv6 lookup is not supported on this platform");
 
     if !output.status.success() {
         #[cfg(target_os = "linux")]
@@ -345,14 +346,17 @@ pub(crate) fn lookup_interface_ipv6(interface: &str) -> Result<Ipv6Addr> {
             "ifconfig {interface} exited with {:?}",
             output.status.code()
         );
-        #[cfg(not(any(target_os = "linux", target_os = "macos")))]
-        unreachable!();
     }
 
     let stdout =
         String::from_utf8(output.stdout).context("invalid UTF-8 from interface IPv6 output")?;
     parse_interface_ipv6_output(&stdout)
         .with_context(|| format!("no global IPv6 address found on interface {interface}"))
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+pub(crate) fn lookup_interface_ipv6(_interface: &str) -> Result<Ipv6Addr> {
+    bail!("interface IPv6 lookup is not supported on this platform");
 }
 
 pub(crate) async fn lookup_interface_ipv6_with_retry(interface: &str) -> Result<Ipv6Addr> {
