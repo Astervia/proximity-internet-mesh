@@ -48,8 +48,12 @@ impl ReassemblyBuffer {
     /// Returns `Some(packet)` when all bytes `[0, total_length)` have been
     /// received, otherwise `None`.
     fn try_reassemble(&self) -> Option<Vec<u8>> {
-        let mut buf = vec![0u8; self.total_length as usize];
+        // PERFORMANCE: Pre-validate that all chunks are present before
+        // allocating the target vector. If we allocate unconditionally,
+        // every fragment arrival costs a redundant `Vec` allocation
+        // equal to `total_length` that gets immediately discarded.
         let mut covered_up_to = 0usize;
+        let total = self.total_length as usize;
 
         for (&offset, chunk) in &self.chunks {
             let start = offset as usize;
@@ -58,21 +62,28 @@ impl ReassemblyBuffer {
                 return None;
             }
             let end = start + chunk.len();
-            if end > buf.len() {
+            if end > total {
                 // Chunk extends past declared total — malformed, bail out.
                 return None;
             }
-            buf[start..end].copy_from_slice(chunk);
             if end > covered_up_to {
                 covered_up_to = end;
             }
         }
 
-        if covered_up_to == self.total_length as usize {
-            Some(buf)
-        } else {
-            None
+        if covered_up_to != total {
+            return None;
         }
+
+        // All bytes present. Perform the final allocation and copy.
+        let mut buf = vec![0u8; total];
+        for (&offset, chunk) in &self.chunks {
+            let start = offset as usize;
+            let end = start + chunk.len();
+            buf[start..end].copy_from_slice(chunk);
+        }
+
+        Some(buf)
     }
 
     fn is_expired(&self, timeout: Duration) -> bool {
