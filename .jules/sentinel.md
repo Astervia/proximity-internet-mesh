@@ -21,3 +21,7 @@
 **Vulnerability:** The daemon's config generation (`pim-cli/src/main.rs`) and identity key generation (`pim-crypto/src/identity.rs`) checked `path.exists()` before calling `create(true).truncate(true)`. This creates a Time-of-Check to Time-of-Use (TOCTOU) race condition where an attacker could replace the file with a symlink between the check and the use, potentially leading to arbitrary file overwrites or key theft.
 **Learning:** Checking for file existence before creating a sensitive file is inherently racy and insecure.
 **Prevention:** Always rely on the filesystem to enforce exclusivity. Use `OpenOptions::new().create_new(true)` to atomically create a file only if it does not already exist, and handle `ErrorKind::AlreadyExists` errors gracefully.
+## 2026-04-23 - [Prevent DoS via Panic on Invalid Nonce Length]
+**Vulnerability:** In `pim-crypto`, the `decrypt` and `decrypt_in_place_detached` methods used an unsafe `.unwrap()` on the result of `try_into()` when parsing a slice (`[8..12]`) into an array. If an attacker could feed malformed, truncated, or otherwise corrupted frames to these methods, the program could panic and crash, leading to a Denial of Service (DoS).
+**Learning:** Relying on `.unwrap()` during conversion of dynamic length slices from network or external boundaries can trigger runtime panics.
+**Prevention:** Always use safe slice operations (like `.get()`) with appropriate error mapping (`.ok_or()`) and `.try_into().map_err()` instead of `.unwrap()` to ensure robust error handling without crashing the program.
