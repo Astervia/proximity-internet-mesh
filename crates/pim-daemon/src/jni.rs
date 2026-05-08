@@ -157,7 +157,12 @@ pub extern "system" fn Java_org_astervia_pim_PimDaemon_nativeStart(
 
     let rt = ensure_runtime();
     let join = rt.spawn(async move {
-        crate::app::run_in_process(config, config_path_buf, cancel_for_run).await
+        let result =
+            crate::app::run_in_process(config, config_path_buf, cancel_for_run).await;
+        if let Err(e) = &result {
+            tracing::error!(error = ?e, "run_in_process exited with error");
+        }
+        result
     });
 
     let handle = Box::new(DaemonHandle { cancel, join });
