@@ -70,7 +70,14 @@ impl SessionCipher {
     /// Rejects replayed frames: the counter embedded in `frame.nonce[8..12]` must
     /// be strictly greater than the last accepted counter.
     pub fn decrypt(&self, frame: &EncryptedFrame) -> Result<Vec<u8>, SessionError> {
-        let counter = u32::from_be_bytes(frame.nonce[8..12].try_into().unwrap()) as u64;
+        let counter = u32::from_be_bytes(
+            frame
+                .nonce
+                .get(8..12)
+                .ok_or(SessionError::InvalidNonce)?
+                .try_into()
+                .map_err(|_| SessionError::InvalidNonce)?,
+        ) as u64;
         let last = self.last_recv_counter.load(Ordering::SeqCst);
         if last != u64::MAX && counter <= last {
             return Err(SessionError::ReplayedNonce);
@@ -122,7 +129,13 @@ impl SessionCipher {
         payload: &mut [u8],
         tag_bytes: &[u8; 16],
     ) -> Result<(), SessionError> {
-        let counter = u32::from_be_bytes(nonce_bytes[8..12].try_into().unwrap()) as u64;
+        let counter = u32::from_be_bytes(
+            nonce_bytes
+                .get(8..12)
+                .ok_or(SessionError::InvalidNonce)?
+                .try_into()
+                .map_err(|_| SessionError::InvalidNonce)?,
+        ) as u64;
         let last = self.last_recv_counter.load(Ordering::SeqCst);
         if last != u64::MAX && counter <= last {
             return Err(SessionError::ReplayedNonce);
@@ -155,6 +168,9 @@ impl SessionCipher {
 #[derive(Debug, thiserror::Error)]
 /// Errors returned by [`SessionCipher`].
 pub enum SessionError {
+    /// The nonce length or format is invalid.
+    #[error("invalid nonce format")]
+    InvalidNonce,
     /// The nonce counter reached its maximum and the session must be replaced.
     #[error("nonce counter exhausted — session must be rekeyed")]
     NonceExhausted,
