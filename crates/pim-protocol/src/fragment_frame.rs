@@ -79,7 +79,7 @@ impl FragmentFrame {
 /// identifier.  Each fragment carries at most [`MAX_FRAGMENT_PAYLOAD`] bytes.
 ///
 /// Returns an empty `Vec` only when `data` is empty.
-pub fn fragment_packet(data: &[u8], fragment_id: u32) -> Vec<FragmentFrame> {
+pub fn fragment_packet(data: bytes::Bytes, fragment_id: u32) -> Vec<FragmentFrame> {
     if data.is_empty() {
         return Vec::new();
     }
@@ -94,7 +94,7 @@ pub fn fragment_packet(data: &[u8], fragment_id: u32) -> Vec<FragmentFrame> {
             fragment_id,
             fragment_offset: offset as u16,
             total_length,
-            payload: bytes::Bytes::copy_from_slice(&data[offset..end]),
+            payload: data.slice(offset..end),
         });
         offset = end;
     }
