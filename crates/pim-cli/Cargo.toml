@@ -1,6 +1,6 @@
 [package]
 name = "pim-cli"
-version = "0.1.21"
+version = "0.1.22"
 edition = "2021"
 description = "Command-line interface for the Proximity Internet Mesh daemon"
 license.workspace = true
