@@ -8,7 +8,7 @@ fn big_packet(size: usize) -> Vec<u8> {
 #[test]
 fn small_packet_single_fragment_reassembled() {
     let data = big_packet(100);
-    let frags = fragment_packet(&data, 1);
+    let frags = fragment_packet(bytes::Bytes::from(data.clone()), 1);
     assert_eq!(frags.len(), 1);
 
     let mut r = Reassembler::new();
@@ -19,7 +19,7 @@ fn small_packet_single_fragment_reassembled() {
 #[test]
 fn large_packet_in_order_reassembled() {
     let data = big_packet(4000);
-    let frags = fragment_packet(&data, 42);
+    let frags = fragment_packet(bytes::Bytes::from(data.clone()), 42);
     assert!(frags.len() > 1);
 
     let mut r = Reassembler::new();
@@ -34,7 +34,7 @@ fn large_packet_in_order_reassembled() {
 #[test]
 fn out_of_order_fragments_reassembled() {
     let data = big_packet(4000);
-    let mut frags = fragment_packet(&data, 7);
+    let mut frags = fragment_packet(bytes::Bytes::from(data.clone()), 7);
     // Reverse the order
     frags.reverse();
 
@@ -49,7 +49,7 @@ fn out_of_order_fragments_reassembled() {
 #[test]
 fn duplicate_fragment_is_ignored() {
     let data = big_packet(2500);
-    let frags = fragment_packet(&data, 99);
+    let frags = fragment_packet(bytes::Bytes::from(data.clone()), 99);
     let mut r = Reassembler::new();
 
     // Send the first fragment twice.
@@ -66,7 +66,7 @@ fn duplicate_fragment_is_ignored() {
 #[test]
 fn missing_fragment_prevents_reassembly() {
     let data = big_packet(4000);
-    let frags = fragment_packet(&data, 5);
+    let frags = fragment_packet(bytes::Bytes::from(data.clone()), 5);
 
     let mut r = Reassembler::new();
     // Skip the second fragment.
@@ -83,7 +83,7 @@ fn missing_fragment_prevents_reassembly() {
 #[test]
 fn timeout_discards_incomplete_buffer() {
     let data = big_packet(2500);
-    let frags = fragment_packet(&data, 3);
+    let frags = fragment_packet(bytes::Bytes::from(data.clone()), 3);
 
     // Use a zero-duration timeout so it expires immediately.
     let mut r = Reassembler::with_timeout(Duration::ZERO);
@@ -98,8 +98,8 @@ fn timeout_discards_incomplete_buffer() {
 fn multiple_concurrent_streams() {
     let data_a = big_packet(2500);
     let data_b = big_packet(3600);
-    let frags_a = fragment_packet(&data_a, 10);
-    let frags_b = fragment_packet(&data_b, 20);
+    let frags_a = fragment_packet(bytes::Bytes::from(data_a.clone()), 10);
+    let frags_b = fragment_packet(bytes::Bytes::from(data_b.clone()), 20);
 
     let mut r = Reassembler::new();
 

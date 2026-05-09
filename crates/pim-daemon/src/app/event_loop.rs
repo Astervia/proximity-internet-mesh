@@ -122,7 +122,7 @@ pub(super) async fn run_event_loop(state: Arc<DaemonState>) -> Result<()> {
                     dst_id,
                     8,
                     flags,
-                    &payload,
+                    payload,
                 )
                 .await;
                 debug!(%dst_id, "dispatched TUN packet");
@@ -402,7 +402,7 @@ pub(super) async fn run_event_loop(state: Arc<DaemonState>) -> Result<()> {
                                         send_mesh_data(
                                             &state, &session, state.self_id,
                                             mesh.src_id, 8, DataFlags::empty(),
-                                            &reply,
+                                            bytes::Bytes::from(reply),
                                         ).await;
                                     }
                                 }
@@ -484,7 +484,7 @@ pub(super) async fn run_event_loop(state: Arc<DaemonState>) -> Result<()> {
                                 mesh.dst_id,
                                 mesh.ttl - 1,
                                 mesh.flags,
-                                &mesh.payload,
+                                mesh.payload.clone(),
                             )
                             .await;
                             state.packets_forwarded.fetch_add(1, Ordering::Relaxed);

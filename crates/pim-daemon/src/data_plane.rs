@@ -24,15 +24,15 @@ pub(crate) async fn send_mesh_data(
     dst_id: NodeId,
     ttl: u8,
     flags: DataFlags,
-    payload: &[u8],
+    payload: bytes::Bytes,
 ) {
     let threshold = pim_protocol::MAX_FRAGMENT_PAYLOAD.saturating_sub(40); // minus mesh header
     if payload.len() > threshold {
         let frag_id = state.next_frag_id();
         for frag in fragment_packet(payload, frag_id) {
-            let frag_bytes = frag.serialize();
+            let frag_bytes = bytes::Bytes::from(frag.serialize());
             let mesh_flags = flags | DataFlags::IS_FRAGMENT;
-            send_single_mesh(state, session, src_id, dst_id, ttl, mesh_flags, &frag_bytes).await;
+            send_single_mesh(state, session, src_id, dst_id, ttl, mesh_flags, frag_bytes).await;
         }
     } else {
         send_single_mesh(state, session, src_id, dst_id, ttl, flags, payload).await;
@@ -46,7 +46,7 @@ pub(crate) async fn send_single_mesh(
     dst_id: NodeId,
     ttl: u8,
     flags: DataFlags,
-    payload: &[u8],
+    payload: bytes::Bytes,
 ) {
     let mut mesh_buf = BytesMut::new();
     MeshDataFrame {
@@ -55,7 +55,7 @@ pub(crate) async fn send_single_mesh(
         session_id: 0,
         ttl,
         flags,
-        payload: bytes::Bytes::copy_from_slice(payload),
+        payload,
     }
     .encode(&mut mesh_buf);
 

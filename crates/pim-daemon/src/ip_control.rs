@@ -73,10 +73,10 @@ fn has_dynamic_mesh_ip(state: &DaemonState) -> bool {
     state.mesh_ip.load(Ordering::Relaxed) != 0
 }
 
-fn encode_control_frame(cf: ControlFrame) -> Vec<u8> {
+fn encode_control_frame(cf: ControlFrame) -> bytes::Bytes {
     let mut buf = BytesMut::new();
     cf.encode(&mut buf);
-    buf.to_vec()
+    buf.freeze()
 }
 
 pub(crate) async fn send_routed_control_via(
@@ -98,7 +98,7 @@ pub(crate) async fn send_routed_control_via(
         dst_id,
         8,
         DataFlags::IS_CONTROL,
-        &payload,
+        payload,
     )
     .await;
     true

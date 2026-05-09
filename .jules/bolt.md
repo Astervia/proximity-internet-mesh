@@ -36,8 +36,11 @@
 
 **Learning:** `bytes::Bytes` holds a reference-counted buffer but its contents cannot be mutated via `.to_vec()` without forcing a clone and full allocation. However, if the network code owns the sole reference to the buffer (e.g. immediately after decoding), `.try_into_mut()` can safely reclaim mutable access to the underlying `BytesMut` with zero allocations. In high-throughput network daemons like PIM, allocating memory for every frame on the read path becomes a major performance bottleneck.
 **Action:** When a frame buffer needs to be mutated directly (like in `decrypt_in_place_detached`), avoid `.to_vec()`. Instead, attempt to use `.try_into_mut()` when we know the `Bytes` object is uniquely owned to recover zero-copy mutability.
-
 ## 2026-05-08 - Fragment reassembly vector allocation optimization
 
 **Learning:** Reassembling fragmented mesh packets created unnecessary memory pressure due to redundant heap allocations. The `try_reassemble` function was allocating a `vec![0u8; self.total_length]` on *every* fragment insertion attempt, even when the fragment stream was incomplete (causing N redundant allocations for a packet needing N fragments).
 **Action:** When optimizing iterative data reassembly, perform a fast O(N) validation pass over the fragment map to ensure data completeness (e.g., all chunks are present and contiguous) *before* allocating the target heap vector. This reduces allocations per packet from N to 1.
+
+## 2026-05-09 - Zero-copy packet fragmentation
+**Learning:** `fragment_packet` previously took a `&[u8]` slice and forced memory allocation for every fragmented packet via `Bytes::copy_from_slice()`. For large packets traversing the mesh, this creates massive memory pressure due to repeated allocation at every network boundary. Passing the original `Bytes` buffer lets us utilize `.slice(offset..end)` to create cheap references.
+**Action:** When designing API boundaries for networking, protocol layers, and fragmentation, pass payloads as `bytes::Bytes` by value instead of `&[u8]`. This preserves the ability to perform O(1) zero-copy slicing (`payload.slice()`) downstream and avoids unnecessary O(N) memory reallocations like `Bytes::copy_from_slice()`.
