@@ -8,6 +8,7 @@ MASTER_CRATE="${MASTER_CRATE:-pim-cli}"
 REMOTE="${REMOTE:-origin}"
 CHANGED_BUMP_KIND="${CHANGED_BUMP_KIND:-patch}"
 MASTER_BUMP_KIND="${MASTER_BUMP_KIND:-patch}"
+SKIP_CRATES_RAW="${SKIP_CRATES:-}"
 TAG_PATTERN='v[0-9]*.[0-9]*.[0-9]*'
 
 usage() {
@@ -22,6 +23,9 @@ Options:
   --changed-bump <kind>        patch|minor|major for changed crates. Default: patch
   --master-bump <kind>         patch|minor|major for the master crate. Default: patch
   --remote <name>              Git remote to fetch tags from. Default: origin
+  --skip <name>                Crate to exclude from bumps even if changed.
+                               May be repeated or comma-separated. Cannot
+                               include the master crate.
   --no-fetch                   Skip 'git fetch --tags'
   --dry-run                    Show planned changes without editing files
   -h, --help                   Show this help
@@ -31,6 +35,7 @@ Environment overrides:
   CHANGED_BUMP_KIND
   MASTER_BUMP_KIND
   REMOTE
+  SKIP_CRATES                  Space- or comma-separated list of crates to skip
 
 Notes:
   - Release tags are expected to look like vX.Y.Z.
@@ -191,6 +196,11 @@ while [[ $# -gt 0 ]]; do
             REMOTE="$2"
             shift 2
             ;;
+        --skip)
+            [[ $# -ge 2 ]] || die "--skip requires a value"
+            SKIP_CRATES_RAW+=" $2"
+            shift 2
+            ;;
         --no-fetch)
             FETCH_TAGS=false
             shift
@@ -217,6 +227,19 @@ require_tool cargo
 is_valid_bump_kind "$CHANGED_BUMP_KIND" || die "invalid changed bump kind: $CHANGED_BUMP_KIND"
 is_valid_bump_kind "$MASTER_BUMP_KIND" || die "invalid master bump kind: $MASTER_BUMP_KIND"
 
+declare -A SKIP_CRATES_SET=()
+if [[ -n "$SKIP_CRATES_RAW" ]]; then
+    skip_normalized="${SKIP_CRATES_RAW//,/ }"
+    for name in $skip_normalized; do
+        [[ -n "$name" ]] || continue
+        if [[ "$name" == "$MASTER_CRATE" ]]; then
+            die "cannot skip the master crate: $MASTER_CRATE"
+        fi
+        crate_manifest_for_name "$name" >/dev/null
+        SKIP_CRATES_SET[$name]=1
+    done
+fi
+
 if $FETCH_TAGS; then
     git fetch --tags "$REMOTE"
 fi
@@ -236,13 +259,24 @@ fi
 echo "Latest release tag: $LATEST_TAG"
 echo "Latest release version: $LATEST_VERSION"
 echo "Master crate: $MASTER_CRATE -> $MASTER_TARGET_VERSION"
+if [[ ${#SKIP_CRATES_SET[@]} -gt 0 ]]; then
+    printf 'Skip list: %s\n' "${!SKIP_CRATES_SET[*]}"
+fi
 echo ""
 
 declare -a changed_manifests=()
+declare -a skipped_changed=()
 
 while IFS= read -r manifest; do
     [[ -n "$manifest" ]] || continue
     if [[ "$manifest" == "$MASTER_MANIFEST" ]]; then
+        continue
+    fi
+    crate_name="$(crate_name_from_manifest "$manifest")"
+    if [[ -n "${SKIP_CRATES_SET[$crate_name]:-}" ]]; then
+        if crate_changed_since_tag "$LATEST_TAG" "$manifest"; then
+            skipped_changed+=("$crate_name")
+        fi
         continue
     fi
     if crate_changed_since_tag "$LATEST_TAG" "$manifest"; then
@@ -259,6 +293,14 @@ else
         current_version="$(crate_version_from_manifest "$manifest")"
         next_version="$(bump_version "$current_version" "$CHANGED_BUMP_KIND")"
         printf '  %s: %s -> %s\n' "$crate_name" "$current_version" "$next_version"
+    done
+    echo ""
+fi
+
+if [[ ${#skipped_changed[@]} -gt 0 ]]; then
+    echo "Skipped (changed but excluded by --skip):"
+    for crate_name in "${skipped_changed[@]}"; do
+        printf '  %s\n' "$crate_name"
     done
     echo ""
 fi
