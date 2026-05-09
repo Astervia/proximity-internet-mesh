@@ -2,8 +2,8 @@ use super::super::*;
 
 #[test]
 fn single_fragment_for_small_packet() {
-    let data = vec![0xAB; 100];
-    let frags = fragment_packet(&data, 1);
+    let data = bytes::Bytes::from(vec![0xAB; 100]);
+    let frags = fragment_packet(data, 1);
     assert_eq!(frags.len(), 1);
     assert_eq!(frags[0].fragment_offset, 0);
     assert_eq!(frags[0].total_length, 100);
@@ -12,8 +12,8 @@ fn single_fragment_for_small_packet() {
 
 #[test]
 fn large_packet_produces_multiple_fragments() {
-    let data = vec![0x55; 4000];
-    let frags = fragment_packet(&data, 42);
+    let data = bytes::Bytes::from(vec![0x55; 4000]);
+    let frags = fragment_packet(data, 42);
 
     // 4000 / 1200 = 3 full + 1 partial → 4 fragments
     let expected = 4000_usize.div_ceil(MAX_FRAGMENT_PAYLOAD);
@@ -72,5 +72,5 @@ fn deserialize_offset_past_total_returns_none() {
 
 #[test]
 fn empty_data_produces_no_fragments() {
-    assert!(fragment_packet(&[], 0).is_empty());
+    assert!(fragment_packet(bytes::Bytes::new(), 0).is_empty());
 }

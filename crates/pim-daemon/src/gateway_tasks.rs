@@ -143,7 +143,7 @@ pub(crate) async fn run_gateway_return(state: Arc<DaemonState>) {
                     if let Some((dst_id, next_hop)) = state.routing.lock().await.lookup_mesh_ip(dest_ip) {
                         let session = state.sessions.read().await.get(&next_hop).cloned();
                         if let Some(session) = session {
-                            send_mesh_data(&state, &session, state.self_id, dst_id, 8, DataFlags::IS_INTERNET, &pkt).await;
+                            send_mesh_data(&state, &session, state.self_id, dst_id, 8, DataFlags::IS_INTERNET, bytes::Bytes::from(pkt)).await;
                         }
                     }
                 } else if version == 6 {
@@ -157,7 +157,7 @@ pub(crate) async fn run_gateway_return(state: Arc<DaemonState>) {
                     if let Some(next_hop) = state.routing.lock().await.lookup(dst_id) {
                         let session = state.sessions.read().await.get(&next_hop).cloned();
                         if let Some(session) = session {
-                            send_mesh_data(&state, &session, state.self_id, dst_id, 8, DataFlags::IS_INTERNET, &pkt).await;
+                            send_mesh_data(&state, &session, state.self_id, dst_id, 8, DataFlags::IS_INTERNET, bytes::Bytes::from(pkt)).await;
                         }
                     }
                 }
