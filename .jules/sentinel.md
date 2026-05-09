@@ -21,3 +21,7 @@
 **Vulnerability:** The daemon's config generation (`pim-cli/src/main.rs`) and identity key generation (`pim-crypto/src/identity.rs`) checked `path.exists()` before calling `create(true).truncate(true)`. This creates a Time-of-Check to Time-of-Use (TOCTOU) race condition where an attacker could replace the file with a symlink between the check and the use, potentially leading to arbitrary file overwrites or key theft.
 **Learning:** Checking for file existence before creating a sensitive file is inherently racy and insecure.
 **Prevention:** Always rely on the filesystem to enforce exclusivity. Use `OpenOptions::new().create_new(true)` to atomically create a file only if it does not already exist, and handle `ErrorKind::AlreadyExists` errors gracefully.
+## 2026-05-09 - [Secure File Permissions for Temporary Configuration Files]
+**Vulnerability:** The daemon's `persist_broadcast_config_to_disk` function used `std::fs::write` to create a temporary configuration file before atomic renaming, which relies on the system's default `umask` and could leave sensitive broadcast configuration data world-readable.
+**Learning:** Using `std::fs::write` for temporary files in an atomic write workflow still exposes the file to insecure default permissions before the rename occurs.
+**Prevention:** Explicitly use `std::fs::OpenOptions` with `OpenOptionsExt::mode(0o600)` on Unix systems and `create_new(true)` to ensure strict permissions and prevent TOCTOU vulnerabilities when writing temporary files prior to atomic renames.
