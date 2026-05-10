@@ -59,6 +59,8 @@ CRATES=(
     pim-discovery
     pim-cli
     pim-daemon
+    pim-plugin
+    pim-messaging
 )
 
 publish_flags="--locked"
