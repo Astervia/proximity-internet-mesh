@@ -6,7 +6,7 @@ that ship in the workspace today and their host-OS requirements. Each transport
 is enabled independently via its own config section; the daemon runs them
 additively when more than one is enabled.
 
-## Architectural placement
+## In-kernel vs out-of-kernel — the rule
 
 `pim-daemon` is a **portable bridge between transports and the mesh
 logic**. It speaks `pim-protocol::TransportFrame` over its local TCP
@@ -14,25 +14,55 @@ listener and runs the mesh routing, gateway, NAT, identity, and
 security stack on top. It does not own the platform-specific socket
 APIs that bring transport bytes in.
 
-Each transport ships as one or more **wire-protocol specs** (in this
-folder) plus implementations that conform to the spec. An
-implementation lives wherever the platform's native socket API is
-reachable:
+The rule for deciding where new (or existing) transport code lives:
 
-- In-tree as a Rust crate when libc is enough (e.g.
-  `pim-bluetooth` for Linux RFCOMM, `pim-discovery` for UDP
-  broadcasts).
-- As a sidecar binary when the platform requires a host stack (e.g.
-  `ui/tools/pim-bt-rfcomm-mac/` for IOBluetooth).
-- As a Tauri plugin when the platform locks the API behind a
-  managed runtime (e.g. the Android Kotlin BluetoothPlugin behind
-  Java `BluetoothSocket`).
+> A piece of transport code **stays in the daemon (in-kernel)** if its
+> wire/socket access is reachable from portable Rust — `tokio`,
+> `libc` on Linux, `std::net`. It **lives outside the daemon
+> (out-of-kernel)** when the wire access requires a platform-specific
+> managed runtime (Java `BluetoothSocket`, `IOBluetooth`, Wi-Fi P2P
+> managed APIs, NetworkExtension on iOS).
+>
+> Out-of-kernel implementations conform to a documented wire-protocol
+> spec in this folder and bridge their post-handshake bytes into the
+> daemon's TCP transport at `127.0.0.1:[transport].listen_port`. The
+> daemon never needs to know which transport the bytes came in on.
 
-The daemon never sees Bluetooth, Wi-Fi Direct, or any other transport
-directly — it sees a TCP socket on `127.0.0.1:[transport].listen_port`
-that some external bridge dropped a peer into. To add a new transport,
-add a new wire-protocol doc here and one or more implementations that
-satisfy it.
+Out-of-kernel implementations come in two shapes:
+
+- **Sidecar binary** — a separate process the platform shell spawns
+  (e.g. `ui/tools/pim-bt-rfcomm-mac/` for macOS IOBluetooth).
+- **Tauri plugin** — Kotlin/Swift code linked into the mobile app
+  shell, talking to the in-process daemon library via JNI helpers
+  (e.g. the Android `BluetoothPlugin.kt` for Java `BluetoothSocket`).
+
+To add a new transport, write a wire-protocol doc in this folder, then
+ship one or more implementations that satisfy it.
+
+### Platform-lifecycle hooks for in-kernel transports
+
+Some in-kernel transports use portable sockets (UDP, raw libc) but
+need a *lifecycle* hook from the platform shell — e.g. Android's
+`WifiManager.MulticastLock` so UDP broadcast frames keep flowing when
+the screen is off. The lifecycle hook lives at the platform layer
+(Kotlin/Swift); the socket I/O stays in the kernel daemon.
+
+Reference patterns:
+
+- `pim-tun` adopts a TUN fd from the platform layer via the
+  `PIM_TUN_FD` env var on Android (`VpnService.establish()` →
+  `detachFd()` → in-process daemon library). Same pattern works for
+  any kernel-owned interface that needs platform-specific
+  fd-acquisition.
+- `pim-discovery` UDP broadcast on Android needs the `MulticastLock`
+  acquired by `PimVpnService.kt` for the lifetime of the daemon.
+  Socket itself stays in `pim-discovery`.
+
+If a transport needs a platform-lifecycle hook AND a wire-protocol
+contract (e.g. a Wi-Fi P2P group formation step driven by Java
+`WifiP2pManager` followed by a Hello-style identity exchange), split
+the work: lifecycle bits in Kotlin/Swift, wire bytes either in the
+sidecar/plugin or bridged in for the kernel to handle.
 
 ## Implementations
 
