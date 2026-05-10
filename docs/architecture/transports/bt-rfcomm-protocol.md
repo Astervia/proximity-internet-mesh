@@ -1,21 +1,46 @@
 # Bluetooth RFCOMM wire protocol
 
 > Wire format used by every RFCOMM-capable PIM peer. The protocol is
-> independent of the platform — Linux, macOS, and Android each speak it
-> from their own implementation, and the kernel daemon's
-> [`pim-bluetooth`](../../../crates/pim-bluetooth) crate is just one of
-> them.
+> the cross-platform contract; the implementation lives wherever the
+> platform-specific Bluetooth socket lives.
+
+## Architectural placement
+
+PIM treats `pim-daemon` as **a portable bridge between transports and
+the mesh logic** — routing, gateway, NAT, identity, security — and
+nothing else. Wire-protocol bridges (RFCOMM, Wi-Fi Direct, future
+transports) are external to the daemon. They live wherever the
+platform's native socket API lives:
+
+- The Linux `pim-bluetooth` crate is in-tree only because Linux's
+  `AF_BLUETOOTH` socket is reachable from Rust without a host stack
+  callout. It is **not** privileged over other platforms — it's just
+  one implementation of the same wire contract.
+- macOS uses a Swift sidecar that the desktop Tauri shell spawns,
+  because `IOBluetooth` is the only public Classic-BT API on the
+  platform.
+- Android uses a Kotlin Tauri plugin, because Java `BluetoothSocket`
+  is the only RFCOMM API exposed to apps.
+
+Each implementation MUST be byte-compatible with this spec — same
+framing, same JSON shape, same `mesh_tag` derivation. After Hello /
+HelloAck, the channel is bridged to the daemon's local TCP transport
+(`127.0.0.1:[transport].listen_port`); the daemon doesn't know or
+care which transport the bytes came in on.
+
+When pim-daemon adds a new transport (LoRa, Thread, Matter, …), it
+adds **a new wire-protocol spec under `kernel/docs/architecture/transports/`**
+and one or more sidecar/plugin implementations. The daemon itself
+gains nothing transport-specific; it keeps speaking
+`pim-protocol::TransportFrame` over a TCP socket.
 
 ## Implementations
 
 | Platform | Location | Notes |
 | --- | --- | --- |
-| Linux   | `kernel/crates/pim-bluetooth/src/rfcomm/` (in-tree) | Raw `AF_BLUETOOTH` / `BTPROTO_RFCOMM` socket via `libc`. `#[cfg(target_os = "linux")]`. |
+| Linux   | `kernel/crates/pim-bluetooth/src/rfcomm/` (in-tree) | Raw `AF_BLUETOOTH` / `BTPROTO_RFCOMM` socket via `libc`. `#[cfg(target_os = "linux")]`. Could move to a sidecar binary if Linux ever grows a non-libc BT story; today the in-tree crate is just convenience. |
 | macOS   | `ui/tools/pim-bt-rfcomm-mac/` | Swift sidecar binary spawned by the desktop Tauri shell. Uses `IOBluetooth`. |
 | Android | `ui/src-tauri/gen/android/.../org/astervia/pim/BluetoothPlugin.kt` (forthcoming `RfcommSession.kt` helper) | Kotlin Tauri plugin. Uses Java `BluetoothSocket`. See `plans/android-port/phase-b-rfcomm-handshake.md`. |
-
-All three MUST be byte-compatible: the framing, the JSON shape, and the
-mesh-tag derivation are part of the protocol contract.
 
 ## Frame format
 
