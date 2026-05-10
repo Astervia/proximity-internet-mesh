@@ -157,8 +157,7 @@ pub extern "system" fn Java_org_astervia_pim_PimDaemon_nativeStart(
 
     let rt = ensure_runtime();
     let join = rt.spawn(async move {
-        let result =
-            crate::app::run_in_process(config, config_path_buf, cancel_for_run).await;
+        let result = crate::app::run_in_process(config, config_path_buf, cancel_for_run).await;
         if let Err(e) = &result {
             tracing::error!(error = ?e, "run_in_process exited with error");
         }
@@ -213,4 +212,241 @@ pub extern "system" fn Java_org_astervia_pim_PimDaemon_nativeProvideProtect(
     _socket: jint,
 ) -> jboolean {
     0
+}
+
+// ─── Hello-envelope JNI exports ────────────────────────────────────────
+//
+// The Android RFCOMM bridge runs in Kotlin (it owns the Java
+// `BluetoothSocket`), but the Hello/HelloAck protocol is a kernel
+// concern: node identity, capability flags, and the optional
+// `mesh_tag` HMAC all derive from data the daemon already loaded.
+//
+// We expose two helpers so the Kotlin side never sees the raw mesh
+// handshake key:
+//   * `nativeLocalIdentity(configPath)` — returns the JSON envelope
+//     fields the Kotlin side needs to assemble its outgoing Hello.
+//   * `nativeComputeMeshTag(configPath, peerNodeIdHex)` — returns the
+//     32-hex `HMAC-SHA256(mesh_handshake_key, peer_node_id_hex)` so
+//     the Kotlin side can verify an inbound Hello's `mesh_tag`.
+//
+// Both are stateless: they re-load the config + identity per call.
+// That keeps the JNI surface narrow and avoids any cross-thread
+// state. The cost is ~1 ms of disk + Argon2 work per call; fine
+// because the Kotlin side calls them at most twice per RFCOMM
+// session.
+
+#[derive(serde::Serialize)]
+struct LocalIdentityJson {
+    /// 32-character lowercase hex of the local NodeId.
+    node_id: String,
+    /// Human-readable node label, with the
+    /// `[bluetooth_rfcomm].device_name_prefix` already prepended.
+    name: String,
+    /// Always `"android"` — included so the JS layer doesn't have
+    /// to hardcode it and the wire envelope stays self-describing.
+    platform: &'static str,
+    /// Capability flags for the Hello payload.
+    caps: Vec<String>,
+    /// `null` on the open mesh, otherwise the 32-hex
+    /// `HMAC-SHA256(mesh_handshake_key, node_id_hex)`.
+    mesh_tag: Option<String>,
+}
+
+/// Load the config + identity at `config_path` and return the local
+/// Hello-envelope fields as a JSON string. Returns `null` on any
+/// failure; the cause is logged at `error` level.
+///
+/// The Kotlin side calls this once per session-startup pass to build
+/// its outbound `Hello` JSON. Repeated calls re-do the disk + Argon2
+/// work; that's intentional so the Rust side never has to expose the
+/// mesh handshake key over JNI or hold it in a global static.
+///
+/// # Safety
+///
+/// Standard JNI: must be called by the JVM on a thread that has
+/// already attached to the JNI environment.
+#[no_mangle]
+pub extern "system" fn Java_org_astervia_pim_PimDaemon_nativeLocalIdentity<'local>(
+    mut env: JNIEnv<'local>,
+    _class: JClass<'local>,
+    config_path: JString<'local>,
+) -> jni::objects::JString<'local> {
+    let config_path = match jstring_to_string(&mut env, &config_path) {
+        Ok(s) => s,
+        Err(e) => {
+            tracing::error!(?e, "nativeLocalIdentity: failed to decode config_path");
+            return jni::objects::JString::default();
+        }
+    };
+    match build_local_identity(&config_path) {
+        Ok(json) => match env.new_string(json) {
+            Ok(s) => s,
+            Err(e) => {
+                tracing::error!(?e, "nativeLocalIdentity: failed to build JString");
+                jni::objects::JString::default()
+            }
+        },
+        Err(e) => {
+            tracing::error!(?e, %config_path, "nativeLocalIdentity: failed to build identity");
+            jni::objects::JString::default()
+        }
+    }
+}
+
+/// Verify or build a `mesh_tag` for the given peer NodeId hex.
+/// Returns the 32-hex tag, or `null` on the open mesh / on failure.
+///
+/// The Kotlin side calls this when validating an inbound Hello's
+/// `mesh_tag` field: compute the expected tag for the peer's
+/// `node_id`, then constant-time compare it against the received
+/// value.
+///
+/// # Safety
+///
+/// Standard JNI.
+#[no_mangle]
+pub extern "system" fn Java_org_astervia_pim_PimDaemon_nativeComputeMeshTag<'local>(
+    mut env: JNIEnv<'local>,
+    _class: JClass<'local>,
+    config_path: JString<'local>,
+    peer_node_id_hex: JString<'local>,
+) -> jni::objects::JString<'local> {
+    let config_path = match jstring_to_string(&mut env, &config_path) {
+        Ok(s) => s,
+        Err(e) => {
+            tracing::error!(?e, "nativeComputeMeshTag: failed to decode config_path");
+            return jni::objects::JString::default();
+        }
+    };
+    let peer_hex = match jstring_to_string(&mut env, &peer_node_id_hex) {
+        Ok(s) => s,
+        Err(e) => {
+            tracing::error!(
+                ?e,
+                "nativeComputeMeshTag: failed to decode peer_node_id_hex"
+            );
+            return jni::objects::JString::default();
+        }
+    };
+    match compute_mesh_tag_for(&config_path, &peer_hex) {
+        Ok(Some(tag)) => match env.new_string(tag) {
+            Ok(s) => s,
+            Err(e) => {
+                tracing::error!(?e, "nativeComputeMeshTag: failed to build JString");
+                jni::objects::JString::default()
+            }
+        },
+        Ok(None) => jni::objects::JString::default(),
+        Err(e) => {
+            tracing::error!(?e, %config_path, "nativeComputeMeshTag: failed to compute tag");
+            jni::objects::JString::default()
+        }
+    }
+}
+
+/// Re-load the config + identity at `config_path` and assemble the
+/// local Hello envelope as a JSON string. Pulls `[node].name`,
+/// `[security].key_file`, `[bluetooth_rfcomm].device_name_prefix`,
+/// `[gateway].enabled`, and `[mesh]` together exactly the way
+/// `app::run_in_process` does on Linux — so a Kotlin-driven Hello
+/// is byte-compatible with the Linux-driven one.
+fn build_local_identity(config_path: &str) -> anyhow::Result<String> {
+    let config = pim_core::Config::load(std::path::Path::new(config_path))?;
+    let key_file_str = config.security.key_file.to_string_lossy();
+    let key_path = expand_home(&key_file_str);
+    let identity = pim_crypto::Identity::load_or_generate(std::path::Path::new(&key_path))?;
+    let node_id_hex = identity.node_id().to_hex();
+
+    let prefix = if config.bluetooth_rfcomm.device_name_prefix.is_empty() {
+        pim_bluetooth::rfcomm::DEFAULT_PREFIX.to_string()
+    } else {
+        config.bluetooth_rfcomm.device_name_prefix.clone()
+    };
+    let name = format!("{prefix}{}", config.node.name);
+
+    let mut caps = vec!["mesh-v1".to_string()];
+    if config.gateway.enabled {
+        caps.push("gateway-v1".to_string());
+    }
+
+    let mesh_tag = derive_mesh_handshake_key(&config.mesh)?
+        .map(|key| pim_crypto::compute_rfcomm_hello_tag(&key, &node_id_hex))
+        .map(|raw| bytes_to_hex(&raw));
+
+    let payload = LocalIdentityJson {
+        node_id: node_id_hex,
+        name,
+        platform: "android",
+        caps,
+        mesh_tag,
+    };
+    Ok(serde_json::to_string(&payload)?)
+}
+
+/// Compute `HMAC-SHA256(mesh_handshake_key, peer_node_id_hex)` for the
+/// given peer. Returns `Ok(None)` when the local node is on the open
+/// mesh (no handshake key derived).
+fn compute_mesh_tag_for(
+    config_path: &str,
+    peer_node_id_hex: &str,
+) -> anyhow::Result<Option<String>> {
+    let config = pim_core::Config::load(std::path::Path::new(config_path))?;
+    let key = derive_mesh_handshake_key(&config.mesh)?;
+    Ok(key.map(|k| {
+        let raw = pim_crypto::compute_rfcomm_hello_tag(&k, peer_node_id_hex);
+        bytes_to_hex(&raw)
+    }))
+}
+
+/// Mirror of `pim_daemon::app::build_mesh_secret` that returns just
+/// the 32-byte handshake key. Kept in jni.rs because the daemon-side
+/// builder is `pub(crate)` and we don't want to widen its visibility
+/// just for this caller.
+fn derive_mesh_handshake_key(
+    mesh: &pim_core::config::MeshConfig,
+) -> anyhow::Result<Option<[u8; 32]>> {
+    use pim_core::config::MeshMode;
+    match mesh.mode {
+        MeshMode::Open => Ok(None),
+        MeshMode::Private => {
+            let passphrase = mesh
+                .passphrase
+                .as_deref()
+                .filter(|s| !s.is_empty())
+                .ok_or_else(|| {
+                    anyhow::anyhow!("[mesh] mode = \"private\" requires a non-empty passphrase")
+                })?;
+            let kdf = pim_crypto::MeshKdfParams {
+                m_cost_kib: mesh.kdf.m_cost_kib,
+                t_cost: mesh.kdf.t_cost,
+                p_cost: mesh.kdf.p_cost,
+            };
+            let secret = pim_crypto::MeshSecret::derive(passphrase, mesh.mesh_id.as_deref(), kdf)?;
+            Ok(Some(*secret.handshake_key()))
+        }
+    }
+}
+
+/// Lowercase hex encode a byte slice.
+fn bytes_to_hex(bytes: &[u8]) -> String {
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for b in bytes {
+        out.push_str(&format!("{b:02x}"));
+    }
+    out
+}
+
+/// Mirror of `pim_daemon::auth::expand_tilde` for the JNI bridge —
+/// expands `~` and `~user` style paths so a config that points at
+/// `~/.pim/node.key` resolves correctly inside the Android sandbox.
+fn expand_home(path: &str) -> String {
+    if let Some(rest) = path.strip_prefix("~/") {
+        if let Some(home) = std::env::var_os("HOME") {
+            return std::path::Path::new(&home)
+                .join(rest)
+                .to_string_lossy()
+                .to_string();
+        }
+    }
+    path.to_string()
 }
