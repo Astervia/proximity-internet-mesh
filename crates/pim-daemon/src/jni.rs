@@ -293,6 +293,40 @@ pub extern "system" fn Java_org_astervia_pim_PimDaemon_nativeLocalIdentity<'loca
     }
 }
 
+/// Notify the running daemon that the Kotlin RFCOMM bridge has
+/// completed its Hello handshake with `peer_node_id_hex` and stood
+/// the byte-bridge up. Calls into [`crate::app::notify_rfcomm_peer_discovered`]
+/// which mirrors what the Linux-side `RfcommEvent::Discovered` handler
+/// does — spawns the Noise initiator election so one side breaks the
+/// responder-vs-responder deadlock that otherwise blocks the loopback
+/// TCP transports from completing the Noise handshake.
+///
+/// No-op when the daemon hasn't booted yet (the Kotlin side may call
+/// this from the BT accept loop before `nativeStart` has finished
+/// publishing state); the Linux-side path has the same guard.
+///
+/// # Safety
+///
+/// Standard JNI.
+#[no_mangle]
+pub extern "system" fn Java_org_astervia_pim_PimDaemon_nativeNotifyRfcommPeerDiscovered<'local>(
+    mut env: JNIEnv<'local>,
+    _class: JClass<'local>,
+    peer_node_id_hex: JString<'local>,
+) {
+    let peer_hex = match jstring_to_string(&mut env, &peer_node_id_hex) {
+        Ok(s) => s,
+        Err(e) => {
+            tracing::error!(
+                ?e,
+                "nativeNotifyRfcommPeerDiscovered: failed to decode peer_node_id_hex"
+            );
+            return;
+        }
+    };
+    crate::app::notify_rfcomm_peer_discovered(peer_hex);
+}
+
 /// Verify or build a `mesh_tag` for the given peer NodeId hex.
 /// Returns the 32-hex tag, or `null` on the open mesh / on failure.
 ///
