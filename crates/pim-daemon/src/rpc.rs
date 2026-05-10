@@ -880,7 +880,9 @@ async fn build_peers_discovered(state: &Arc<DaemonState>) -> Value {
         None => return Value::Array(vec![]),
     };
     let table = table.lock().await;
-    let mut out: Vec<Value> = Vec::new();
+    // Bolt Optimization: pre-allocate output vector exactly to table.len()
+    // Avoids vector reallocation on the RPC hot path.
+    let mut out: Vec<Value> = Vec::with_capacity(table.len());
     for record in table.all() {
         let last_seen_s = record.last_seen.elapsed().as_secs();
         let first_seen_s = record.last_seen.elapsed().as_secs(); // best effort
