@@ -769,6 +769,14 @@ pub async fn run_in_process(
         mesh_id: config.mesh.mesh_id.clone(),
     });
 
+    // Publish the running daemon's state so the JNI bridge (and any
+    // future external trigger) can reach it. We DO NOT replace an
+    // existing entry — `OnceLock::set` is no-op on second call, which
+    // is fine: a daemon restart in the same process leaves the *new*
+    // process owning the lock; for in-process Android the lock holds
+    // for the lifetime of the JVM, which is one daemon at a time.
+    let _ = JNI_EXPOSED_STATE.set(state.clone());
+
     // ── Plugin registry ───────────────────────────────────────────────────
     // Plugins consume daemon services through `pim_plugin::PluginContext`.
     // The adapters bind to the freshly-built `Arc<DaemonState>` so they
@@ -1287,12 +1295,49 @@ fn unix_seconds_now() -> i64 {
         .unwrap_or(0)
 }
 
+/// Global handle to the running daemon's [`DaemonState`] published
+/// during [`run_in_process`]. Used by [`notify_rfcomm_peer_discovered`]
+/// (and the JNI bridge that calls it) to inject events into the
+/// daemon from outside the kernel — currently the Android Kotlin
+/// RFCOMM session uses this hook to trigger the Noise initiator
+/// election that the Linux-side RFCOMM listener triggers natively
+/// via `RfcommEvent::Discovered`.
+///
+/// `OnceLock` because we install at most one daemon per process and
+/// don't want to thread the state through every JNI call.
+static JNI_EXPOSED_STATE: std::sync::OnceLock<Arc<DaemonState>> = std::sync::OnceLock::new();
+
+/// Public hook for out-of-kernel transport bridges that can't emit
+/// [`RfcommEvent::Discovered`] themselves (today: the Android Kotlin
+/// RFCOMM session). Mirrors what the Linux-side RFCOMM event handler
+/// does on `RfcommEvent::Discovered`: spawns the Noise initiator
+/// election so one side stops responder-deadlocking on the other.
+///
+/// No-op when the daemon hasn't booted yet. Allowed-dead-code on
+/// Linux because the linux-side `RfcommEvent` handler calls
+/// `spawn_rfcomm_initiator_if_lower` directly; this public wrapper
+/// only has callers on android.
+#[cfg_attr(target_os = "linux", allow(dead_code))]
+pub fn notify_rfcomm_peer_discovered(peer_node_id_hex: String) {
+    let Some(state) = JNI_EXPOSED_STATE.get() else {
+        tracing::warn!(
+            peer = %peer_node_id_hex,
+            "notify_rfcomm_peer_discovered: daemon state not yet published"
+        );
+        return;
+    };
+    spawn_rfcomm_initiator_if_lower(state.clone(), peer_node_id_hex);
+}
+
 /// so when this fires the loopback TCP listener has typically already
 /// `register_peer`'d the peer in `state.transport`'s session map.
 /// We poll briefly for that registration to land, then call
 /// `handshake_initiator` — exactly what the regular UDP-discovery
 /// dialer path does after `transport.connect`.
-#[cfg(target_os = "linux")]
+///
+/// Pub on android too because the JNI bridge calls it via
+/// [`notify_rfcomm_peer_discovered`] when the Kotlin RFCOMM session
+/// completes its Hello handshake and stands the byte-bridge up.
 fn spawn_rfcomm_initiator_if_lower(state: Arc<DaemonState>, peer_node_id_hex: String) {
     use std::str::FromStr;
     tokio::spawn(async move {
