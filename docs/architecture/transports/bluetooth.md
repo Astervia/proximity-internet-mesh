@@ -21,6 +21,12 @@ identity frames, and bridges the RFCOMM byte stream to the local TCP transport
 listener. That makes an RFCOMM peer behave like a normal authenticated PIM
 session after the channel is established.
 
+The RFCOMM wire protocol — Hello/HelloAck JSON envelopes, frame format,
+versioning policy — is documented separately in
+[`bt-rfcomm-protocol.md`](./bt-rfcomm-protocol.md). It is the
+cross-platform contract: the macOS Swift sidecar and the Android Kotlin
+plugin both implement the same wire format.
+
 ## Scope
 
 - Bluetooth is opt-in via `[bluetooth] enabled = true`
