@@ -86,7 +86,7 @@ mod session;
 
 use std::collections::{HashMap, HashSet};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
-use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU32, AtomicU64, AtomicU8, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU32, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -113,10 +113,7 @@ use ed25519_dalek::VerifyingKey;
 use gateway_tasks::PENDING_PING_TTL;
 use gateway_tasks::{ensure_gateway_ipv6_engine, run_gateway_probes, run_gateway_return};
 use handshake::{decode_handshake_wire, handshake_initiator, handshake_responder};
-use ip_control::{
-    apply_dynamic_ip_assignment, cancel_pending_outbound_for_ip, classify_ip_request,
-    maybe_request_dynamic_ip, send_routed_control, IpRequestDisposition, PendingOutbound,
-};
+use ip_control::{cancel_pending_outbound_for_ip, PendingOutbound};
 use net::{
     find_any_ipv6_uplink, lookup_interface_ipv4, lookup_interface_ipv6_with_retry,
     packet_ip_version, InternetGatewayLink,
@@ -134,12 +131,15 @@ use peer_tasks::{
 use pim_bluetooth::BluetoothDiscovery;
 #[cfg(test)]
 use pim_core::AuthorizationPolicy;
-use pim_core::{BroadcastConfig, Config, DiscoveryConfig, FrameCodec, NodeId};
+use pim_core::{
+    derive_mesh_ipv4, derive_mesh_ipv6, BroadcastConfig, Config, DiscoveryConfig, FrameCodec,
+    Ipv4Prefix, Ipv6Prefix, NodeId,
+};
 use pim_crypto::{e2e_decrypt_in_place, e2e_encrypt, x25519_public_from_seed, Identity};
 #[cfg(test)]
 use pim_discovery::NodeCapabilities;
 use pim_discovery::{DiscoveryService, PeerTable};
-use pim_gateway::{GatewayEngine, GatewayEngineV6, IpPool};
+use pim_gateway::{GatewayEngine, GatewayEngineV6};
 use pim_protocol::{
     ControlFrame, DataFlags, FrameType, HandshakeFrameType, HandshakeWireFrame, HeartbeatFrame,
     MeshDataFrame, Reassembler, RouteUpdateFrame,
@@ -159,8 +159,8 @@ use reconnect::ReconnectManager;
 use reconnect_task::run_reconnect_task;
 use reputation::ReputationTracker;
 use runtime_config::{
-    icmp_echo_reply, install_signal_handler, node_capabilities, parse_cidr, parse_ipv6_cidr,
-    resolve_configured_peer_targets,
+    icmp_echo_reply, install_signal_handler, node_capabilities, parse_mesh_ipv4_prefix,
+    parse_mesh_ipv6_prefix, resolve_configured_peer_targets,
 };
 use send_buffer::{SendBuffer, DEFAULT_CAPACITY, DEFAULT_TIMEOUT};
 use session::Session;
@@ -178,15 +178,23 @@ pub(crate) struct DaemonState {
     self_id: NodeId,
     identity: Arc<Identity>,
     is_gateway: bool,
-    /// Our mesh-local IP (e.g. 10.77.0.1 for gateway). Stored as u32 to allow
-    /// atomic update when a dynamic IP is assigned.
-    mesh_ip: AtomicU32,
-    /// Mesh prefix length used when deriving the first gateway host in the subnet.
-    mesh_prefix_len: AtomicU8,
-    /// Optional mesh IPv6 address and prefix configured on the TUN interface.
-    mesh_ipv6: Arc<RwLock<Option<(Ipv6Addr, u8)>>>,
-    /// Whether this node expects a dynamic mesh IP from a gateway.
-    request_dynamic_ip: bool,
+    /// Our mesh IPv4 address — derived deterministically from
+    /// `self_id` and the configured `mesh_ipv4_prefix` at boot. Stays
+    /// fixed for the lifetime of the daemon (rotating it requires a
+    /// new identity, which is a separate flow).
+    mesh_ipv4: Ipv4Addr,
+    /// Mesh IPv4 prefix this node lives in. Read by event-loop hot
+    /// paths that need to verify a peer-advertised mesh IP against
+    /// derivation, and by routing-table inserts.
+    mesh_ipv4_prefix: Ipv4Prefix,
+    /// Our mesh IPv6 address — derived from `self_id` + the
+    /// configured `mesh_ipv6_prefix`. IPv6 host bits are 64-wide at
+    /// the default `/64` prefix, so derivation is collision-free at
+    /// PIM scale.
+    mesh_ipv6: Ipv6Addr,
+    /// Mesh IPv6 prefix used by the routing layer for the IPv6
+    /// reverse-lookup and split-default install path.
+    mesh_ipv6_prefix: Ipv6Prefix,
     /// Our own X25519 public key (set only when is_gateway = true).
     own_x25519_pub: [u8; 32],
     sessions: SessionMap,
@@ -203,12 +211,6 @@ pub(crate) struct DaemonState {
     gw_engine_v6: Arc<RwLock<Option<Arc<GatewayEngineV6>>>>,
     gateway_nat_interface: Option<String>,
     internet_link: Option<Arc<InternetGatewayLink>>,
-    /// IP address pool — gateway only.
-    ip_pool: Option<Arc<Mutex<IpPool>>>,
-    /// Requesters currently being serviced for mesh IP assignment.
-    pending_ip_assignments: Arc<Mutex<HashSet<NodeId>>>,
-    /// Selected gateway for the current outstanding dynamic IP request, if any.
-    pending_dynamic_ip_gateway: Arc<Mutex<Option<NodeId>>>,
     /// Last heartbeat received per peer, used for liveness detection.
     peer_last_hb: Arc<Mutex<HashMap<NodeId, Instant>>>,
     /// Reconnect manager for configured peers.
@@ -445,34 +447,35 @@ pub(crate) async fn run() -> Result<()> {
     let own_x25519_pub = x25519_public_from_seed(&identity.signing_key().to_bytes());
 
     // ── TUN setup ──────────────────────────────────────────────────────────
-    let mesh_cidr = config.interface.mesh_ip.clone();
-    let request_dynamic_ip = mesh_cidr == "auto";
-    let (mesh_ip, prefix_len) = if request_dynamic_ip {
-        // Placeholder; real address will be assigned via IpAssign control frame.
-        (Ipv4Addr::UNSPECIFIED, 24u8)
-    } else {
-        parse_cidr(&mesh_cidr)?
-    };
-    let mesh_ipv6 = config
-        .interface
-        .mesh_ipv6
-        .as_deref()
-        .map(parse_ipv6_cidr)
-        .transpose()
-        .context("invalid interface.mesh_ipv6")?;
+    //
+    // Mesh addresses are derived deterministically from `self_id`
+    // (see `pim_core::derive_mesh_ipv4`/`derive_mesh_ipv6`). No
+    // gateway round-trip, no dynamic lease, no `"auto"` sentinel —
+    // every node knows its own address before the TUN comes up.
+    let mesh_ipv4_prefix = parse_mesh_ipv4_prefix(&config.interface.mesh_ipv4_prefix)
+        .context("invalid interface.mesh_ipv4_prefix")?;
+    let mesh_ipv6_prefix = parse_mesh_ipv6_prefix(&config.interface.mesh_ipv6_prefix)
+        .context("invalid interface.mesh_ipv6_prefix")?;
+    let mesh_ip = derive_mesh_ipv4(&self_id, mesh_ipv4_prefix);
+    let prefix_len = mesh_ipv4_prefix.prefix_len;
+    let mesh_ipv6 = derive_mesh_ipv6(&self_id, mesh_ipv6_prefix);
+    let mesh_ipv6_prefix_len = mesh_ipv6_prefix.prefix_len;
     let tun = Arc::new(
         TunInterface::create(&config.interface.name).context("failed to create TUN interface")?,
     );
-    if !request_dynamic_ip {
-        tun.set_ip(mesh_ip, prefix_len).context("set TUN IP")?;
-    }
-    if let Some((mesh_ipv6_addr, mesh_ipv6_prefix)) = mesh_ipv6 {
-        tun.set_ipv6(mesh_ipv6_addr, mesh_ipv6_prefix)
-            .context("set TUN IPv6")?;
-    }
+    tun.set_ip(mesh_ip, prefix_len).context("set TUN IP")?;
+    tun.set_ipv6(mesh_ipv6, mesh_ipv6_prefix_len)
+        .context("set TUN IPv6")?;
     tun.set_mtu(config.interface.mtu).context("set TUN MTU")?;
     tun.up().context("bring TUN up")?;
-    info!(iface = %tun.name(), addr = %mesh_ip, prefix = prefix_len, "TUN up");
+    info!(
+        iface = %tun.name(),
+        addr = %mesh_ip,
+        prefix = prefix_len,
+        ipv6 = %mesh_ipv6,
+        ipv6_prefix = mesh_ipv6_prefix_len,
+        "TUN up"
+    );
 
     // ── Cancellation (created early so transport listeners honour it) ─────
     let cancel = CancellationToken::new();
@@ -545,7 +548,10 @@ pub(crate) async fn run() -> Result<()> {
                 external_ip,
                 &config.gateway.nat_interface,
             ));
-            let cidr = format!("{}/{}", mesh_ip, prefix_len);
+            // Source CIDR is the entire derivation prefix — every
+            // mesh node lives somewhere inside it, so the gateway
+            // MASQUERADEs the whole space.
+            let cidr = mesh_ipv4_prefix.to_cidr_string();
             if let Err(e) = gw.setup_masquerade(&cidr) {
                 warn!("iptables setup failed (may need root): {e}");
             }
@@ -579,21 +585,6 @@ pub(crate) async fn run() -> Result<()> {
                 )
             })?,
         ))
-    } else {
-        None
-    };
-
-    // ── IP pool (gateway) ─────────────────────────────────────────────────
-    let ip_pool: Option<Arc<Mutex<IpPool>>> = if is_gateway {
-        // Network address is the subnet base (e.g. 10.77.0.0 for 10.77.0.1/24)
-        let n = u32::from(mesh_ip);
-        let mask: u32 = if prefix_len >= 32 {
-            0xffff_ffff
-        } else {
-            !((1u32 << (32 - prefix_len)) - 1)
-        };
-        let network_addr = Ipv4Addr::from(n & mask);
-        Some(Arc::new(Mutex::new(IpPool::new(network_addr, prefix_len))))
     } else {
         None
     };
@@ -659,10 +650,8 @@ pub(crate) async fn run() -> Result<()> {
     };
 
     // ── Build shared state ────────────────────────────────────────────────
-    let mut routing_table = RoutingTable::new(self_id, is_gateway);
-    if !request_dynamic_ip {
-        routing_table.set_self_mesh_ip(mesh_ip);
-    }
+    let mut routing_table = RoutingTable::new(self_id, is_gateway, mesh_ipv4_prefix);
+    routing_table.set_self_mesh_ip(mesh_ip);
     let routing = Arc::new(Mutex::new(routing_table));
 
     let peers_db_path = runtime_paths::peers_db_path();
@@ -676,10 +665,10 @@ pub(crate) async fn run() -> Result<()> {
         self_id,
         identity: identity.clone(),
         is_gateway,
-        mesh_ip: AtomicU32::new(u32::from(mesh_ip)),
-        mesh_prefix_len: AtomicU8::new(prefix_len),
-        mesh_ipv6: Arc::new(RwLock::new(mesh_ipv6)),
-        request_dynamic_ip,
+        mesh_ipv4: mesh_ip,
+        mesh_ipv4_prefix,
+        mesh_ipv6,
+        mesh_ipv6_prefix,
         own_x25519_pub,
         sessions: Arc::new(RwLock::new(HashMap::new())),
         hs_channels: Arc::new(Mutex::new(HashMap::new())),
@@ -694,9 +683,6 @@ pub(crate) async fn run() -> Result<()> {
         gw_engine_v6: Arc::new(RwLock::new(gw_engine_v6)),
         gateway_nat_interface: is_gateway.then(|| config.gateway.nat_interface.clone()),
         internet_link,
-        ip_pool,
-        pending_ip_assignments: Arc::new(Mutex::new(HashSet::new())),
-        pending_dynamic_ip_gateway: Arc::new(Mutex::new(None)),
         peer_last_hb: Arc::new(Mutex::new(HashMap::new())),
         reconnect,
         max_reconnect_attempts: config.transport.max_reconnect_attempts,

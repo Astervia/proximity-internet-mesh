@@ -1,16 +1,25 @@
-use std::collections::HashSet;
-use std::net::{IpAddr, Ipv4Addr};
-use std::sync::atomic::Ordering;
+//! Routed control-frame send + reconnect-cancellation helpers.
+//!
+//! This module used to host the dynamic mesh-IP allocation protocol
+//! (`IpRequest` / `IpAssign`, gateway pool round-trips). All of that
+//! is gone now that mesh addresses are derived deterministically from
+//! each node's `NodeId` (see `pim_core::derive_mesh_ipv4`). What
+//! remains is the small surface that other daemon modules still rely
+//! on: a routed control-frame sender (used by the identity broadcast
+//! task and by the plugin host) plus the `pending_outbound`
+//! cancellation bookkeeping that protects the reconnect path against
+//! double-dial races.
+
+use std::net::IpAddr;
 use std::sync::Arc;
 
 use bytes::BytesMut;
 use pim_core::{FrameCodec, NodeId};
 use pim_protocol::{ControlFrame, DataFlags};
 use pim_transport::Transport;
-use tracing::{debug, info, warn};
+use tracing::warn;
 
 use super::data_plane::send_single_mesh;
-use super::peer_tasks::send_control;
 use super::reconnect::ConnectTarget;
 use super::DaemonState;
 
@@ -18,27 +27,6 @@ use super::DaemonState;
 pub(crate) struct PendingOutbound {
     pub(crate) transport_key: NodeId,
     pub(crate) target: ConnectTarget,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum IpRequestDisposition {
-    Process,
-    DuplicateInFlight,
-    SpoofedRequester,
-}
-
-pub(crate) fn classify_ip_request(
-    pending: &mut HashSet<NodeId>,
-    requester_id: NodeId,
-    from_peer: NodeId,
-) -> IpRequestDisposition {
-    if requester_id != from_peer {
-        return IpRequestDisposition::SpoofedRequester;
-    }
-    if !pending.insert(requester_id) {
-        return IpRequestDisposition::DuplicateInFlight;
-    }
-    IpRequestDisposition::Process
 }
 
 pub(crate) async fn register_pending_outbound(
@@ -67,10 +55,6 @@ pub(crate) async fn clear_pending_outbound(
     {
         pending.remove(&target.addr().ip());
     }
-}
-
-fn has_dynamic_mesh_ip(state: &DaemonState) -> bool {
-    state.mesh_ip.load(Ordering::Relaxed) != 0
 }
 
 fn encode_control_frame(cf: ControlFrame) -> bytes::Bytes {
@@ -115,86 +99,6 @@ pub(crate) async fn send_routed_control(
         return false;
     };
     send_routed_control_via(state, next_hop, dst_id, cf).await
-}
-
-pub(crate) async fn maybe_request_dynamic_ip(state: &Arc<DaemonState>) {
-    if !state.request_dynamic_ip || has_dynamic_mesh_ip(state) {
-        return;
-    }
-
-    let Some((gateway_id, next_hop)) = state.routing.lock().await.nearest_gateway_route() else {
-        return;
-    };
-
-    {
-        let pending = state.pending_dynamic_ip_gateway.lock().await;
-        if *pending == Some(gateway_id) {
-            return;
-        }
-    }
-
-    if send_routed_control_via(
-        state,
-        next_hop,
-        gateway_id,
-        ControlFrame::IpRequest {
-            requester_id: state.self_id,
-        },
-    )
-    .await
-    {
-        *state.pending_dynamic_ip_gateway.lock().await = Some(gateway_id);
-        debug!(%gateway_id, via = %next_hop, "sent routed IpRequest");
-    }
-}
-
-pub(crate) async fn request_dynamic_ip_from_peer(state: &Arc<DaemonState>, peer_id: NodeId) {
-    if !state.request_dynamic_ip || has_dynamic_mesh_ip(state) {
-        return;
-    }
-
-    let is_direct_gateway = {
-        let rt = state.routing.lock().await;
-        rt.lookup(peer_id) == Some(peer_id)
-            && rt
-                .all_gateways()
-                .into_iter()
-                .any(|(gateway_id, hops)| gateway_id == peer_id && hops == 1)
-    };
-
-    if is_direct_gateway {
-        send_control(
-            state,
-            &peer_id,
-            ControlFrame::IpRequest {
-                requester_id: state.self_id,
-            },
-        )
-        .await;
-        *state.pending_dynamic_ip_gateway.lock().await = Some(peer_id);
-        debug!(%peer_id, "sent direct IpRequest");
-        return;
-    }
-
-    maybe_request_dynamic_ip(state).await;
-}
-
-pub(crate) async fn apply_dynamic_ip_assignment(
-    state: &Arc<DaemonState>,
-    assigned_ip: [u8; 4],
-    subnet_mask: u8,
-    gateway_ip: [u8; 4],
-) {
-    let ip = Ipv4Addr::from(assigned_ip);
-    let gw = Ipv4Addr::from(gateway_ip);
-    info!(%ip, prefix = subnet_mask, %gw, "received IP assignment");
-    if let Err(e) = state.tun.set_ip(ip, subnet_mask) {
-        warn!("TUN set_ip failed: {e}");
-    }
-    state.mesh_ip.store(u32::from(ip), Ordering::Relaxed);
-    state.mesh_prefix_len.store(subnet_mask, Ordering::Relaxed);
-    state.routing.lock().await.set_self_mesh_ip(ip);
-    *state.pending_dynamic_ip_gateway.lock().await = None;
 }
 
 pub(crate) async fn cancel_pending_outbound_for_ip(

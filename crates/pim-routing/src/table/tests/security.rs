@@ -7,7 +7,7 @@ fn replay_rejected_same_sequence() {
     let b = id(2);
     let c = id(3);
 
-    let mut rt = RoutingTable::new(a, false);
+    let mut rt = super::new_table(a, false);
     rt.add_peer(b);
 
     let upd = advertisement(b, 5, vec![(c, 1, false)]);
@@ -24,7 +24,7 @@ fn replay_rejected_lower_sequence() {
     let b = id(2);
     let c = id(3);
 
-    let mut rt = RoutingTable::new(a, false);
+    let mut rt = super::new_table(a, false);
     rt.add_peer(b);
 
     rt.apply_update(&advertisement(b, 10, vec![(c, 1, false)]), b);
@@ -39,7 +39,7 @@ fn sequence_window_resets_when_peer_rejoins() {
     let b = id(2);
     let c = id(3);
 
-    let mut rt = RoutingTable::new(a, false);
+    let mut rt = super::new_table(a, false);
     rt.add_peer(b);
     assert_eq!(
         rt.apply_update(&advertisement(b, 10, vec![(c, 1, false)]), b),
@@ -62,7 +62,7 @@ fn higher_sequence_accepted() {
     let b = id(2);
     let c = id(3);
 
-    let mut rt = RoutingTable::new(a, false);
+    let mut rt = super::new_table(a, false);
     rt.add_peer(b);
 
     rt.apply_update(&advertisement(b, 1, vec![(c, 2, false)]), b);
@@ -78,7 +78,7 @@ fn origin_mismatch_rejected() {
     let c = id(3);
     let impostor = id(99);
 
-    let mut rt = RoutingTable::new(a, false);
+    let mut rt = super::new_table(a, false);
     rt.add_peer(b);
 
     // Frame claims origin=impostor but is sent by b
@@ -108,7 +108,7 @@ fn zero_hop_to_non_self_rejected() {
     let b = id(2);
     let victim = id(42);
 
-    let mut rt = RoutingTable::new(a, false);
+    let mut rt = super::new_table(a, false);
     rt.add_peer(b);
 
     // b claims to be 0 hops from victim (impossible unless b == victim)
@@ -137,7 +137,7 @@ fn zero_hop_self_entry_allowed() {
     let b = id(2);
     let c = id(3);
 
-    let mut rt = RoutingTable::new(a, false);
+    let mut rt = super::new_table(a, false);
     rt.add_peer(b);
 
     // b claims 0 hops to itself (normal — every advertisement includes this)
@@ -175,7 +175,7 @@ fn blacklisted_peer_route_invisible() {
     let b = id(2);
     let c = id(3);
 
-    let mut rt = RoutingTable::new(a, false);
+    let mut rt = super::new_table(a, false);
     rt.add_peer(b);
     rt.apply_update(&advertisement(b, 1, vec![(c, 1, false)]), b);
 
@@ -195,7 +195,7 @@ fn blacklisted_gateway_excluded_from_selection() {
     let gw1 = id(10);
     let gw2 = id(11);
 
-    let mut rt = RoutingTable::new(a, false);
+    let mut rt = super::new_table(a, false);
     rt.add_peer(gw1);
     rt.add_peer(gw2);
     rt.apply_update(&advertisement(gw1, 1, vec![(gw1, 0, true)]), gw1);
@@ -214,7 +214,7 @@ fn unblacklist_restores_visibility() {
     let a = id(1);
     let b = id(2);
 
-    let mut rt = RoutingTable::new(a, false);
+    let mut rt = super::new_table(a, false);
     rt.add_peer(b);
     rt.blacklist_peer(b);
     assert!(rt.lookup(b).is_none());

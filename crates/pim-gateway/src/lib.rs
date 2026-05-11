@@ -7,11 +7,9 @@
 #![warn(missing_docs)]
 
 mod engine;
-pub mod ip_pool;
 mod ipv6;
 
 pub use engine::{GatewayEngine, GatewayError, PROTO_ICMP, PROTO_TCP, PROTO_UDP};
-pub use ip_pool::{IpPool, IpPoolError, Lease};
 pub use ipv6::{GatewayEngineV6, PROTO_ICMPV6};
 
 pub(crate) use engine::{run_cmd, PORT_MAX, PORT_MIN};

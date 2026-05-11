@@ -32,12 +32,15 @@ pim config generate client --output /etc/pim/pim.toml
 
 - `name`: TUN interface name, default `pim0`
 - `mtu`: interface MTU, default `1400`
-- `mesh_ip`: mesh CIDR or `auto`
+- `mesh_ipv4_prefix`: mesh IPv4 prefix (default `"10.77.0.0/16"`).
+  Each node's host bits are derived from its `NodeId` —
+  see [routing.md](../architecture/routing.md#address-assignment).
+- `mesh_ipv6_prefix`: mesh IPv6 prefix (default `"fd77::/64"`).
 
-Notes:
-
-- Static lab setups in this repository use explicit CIDRs.
-- The daemon also contains `IpRequest` and `IpAssign` support for dynamic assignment when `mesh_ip = "auto"`, but that depends on reachable gateway behavior at runtime rather than a purely local startup path.
+The legacy `mesh_ip` / `mesh_ipv6` fields and the `"auto"` sentinel
+were removed when mesh addresses became deterministic. There is no
+longer a static `mesh_ip = "10.77.0.X/24"` line — the per-node
+address is whatever `derive_mesh_ipv4(self_id, prefix)` produces.
 
 ### `[discovery]`
 
@@ -81,7 +84,8 @@ data_dir = "/var/lib/pim"
 
 [interface]
 name = "pim0"
-mesh_ip = "10.77.0.100/24"
+mesh_ipv4_prefix = "10.77.0.0/16"
+mesh_ipv6_prefix = "fd77::/64"
 mtu = 1400
 
 [transport]
@@ -108,7 +112,8 @@ data_dir = "/var/lib/pim"
 
 [interface]
 name = "pim0"
-mesh_ip = "10.77.0.1/24"
+mesh_ipv4_prefix = "10.77.0.0/16"
+mesh_ipv6_prefix = "fd77::/64"
 mtu = 1400
 
 [transport]
@@ -135,7 +140,8 @@ data_dir = "/var/lib/pim"
 
 [interface]
 name = "pim0"
-mesh_ip = "10.77.0.10/24"
+mesh_ipv4_prefix = "10.77.0.0/16"
+mesh_ipv6_prefix = "fd77::/64"
 mtu = 1400
 
 [transport]

@@ -1,6 +1,5 @@
 # Phase 7 — Auto-discovery client config.
 # NO [[peers]] — all connections formed via UDP broadcast discovery.
-# mesh_ip = "auto" → requests IP assignment from the discovered gateway.
 # Advertises: CLIENT (capabilities 0x01)
 
 [node]
@@ -8,7 +7,6 @@ name = "client-auto-discovery"
 data_dir = "/var/lib/pim"
 
 [interface]
-mesh_ip = "auto"
 mtu = 1400
 
 [discovery]

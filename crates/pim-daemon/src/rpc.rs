@@ -42,7 +42,6 @@
 //! shape (no `id`, just `method` + `params`).
 
 use std::collections::HashMap;
-use std::net::Ipv4Addr;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
@@ -708,10 +707,12 @@ fn method_hello(params: Option<&Value>) -> RpcResult {
 // ── §5.1 status ──────────────────────────────────────────────────────────
 
 async fn build_status(state: &Arc<DaemonState>) -> Value {
-    let mesh_ip_u32 = state.mesh_ip.load(Ordering::Relaxed);
-    let mesh_ip = Ipv4Addr::from(mesh_ip_u32);
-    let prefix_len = state.mesh_prefix_len.load(Ordering::Relaxed);
+    let mesh_ip = state.mesh_ipv4;
+    let prefix_len = state.mesh_ipv4_prefix.prefix_len;
     let mesh_ip_cidr = format!("{mesh_ip}/{prefix_len}");
+    let mesh_ipv6 = state.mesh_ipv6;
+    let mesh_ipv6_prefix_len = state.mesh_ipv6_prefix.prefix_len;
+    let mesh_ipv6_cidr = format!("{mesh_ipv6}/{mesh_ipv6_prefix_len}");
 
     let routing = state.routing.lock().await;
     let route_count = routing.route_count();
@@ -737,7 +738,13 @@ async fn build_status(state: &Arc<DaemonState>) -> Value {
         "node_id": state.self_id.to_hex(),
         "node_id_short": state.self_id.to_string(),
         "x25519_pubkey": x25519_pubkey_self,
+        // Self mesh address as CIDR — the longstanding `mesh_ip` key
+        // is kept on the status response for compatibility with the
+        // UI's existing display path. Per-peer mesh addresses live
+        // under each peer's `mesh_ipv4`/`mesh_ipv6` fields below.
         "mesh_ip": mesh_ip_cidr,
+        "mesh_ipv4": mesh_ip_cidr,
+        "mesh_ipv6": mesh_ipv6_cidr,
         "interface": {
             "name": interface_name,
             "up": true,
@@ -852,11 +859,22 @@ async fn peer_summaries(state: &Arc<DaemonState>) -> Vec<Value> {
         let peer_hex = peer_id.to_hex();
         let x25519_pubkey = x25519_by_node_hex.get(&peer_hex).cloned();
 
+        // Mesh addresses are derived from the peer's NodeId — no
+        // dependence on the routing-table entry. `transport_addr`
+        // replaces the historical `mesh_ip` field, which actually
+        // carried the transport (socket) address; the old key is
+        // kept on the response for one release while UIs migrate.
+        let mesh_ipv4 = pim_core::derive_mesh_ipv4(peer_id, state.mesh_ipv4_prefix).to_string();
+        let mesh_ipv6 = pim_core::derive_mesh_ipv6(peer_id, state.mesh_ipv6_prefix).to_string();
+
         out.push(json!({
             "node_id": peer_hex,
             "node_id_short": peer_id.to_string(),
             "label": null,
-            "mesh_ip": addr,
+            "transport_addr": addr,
+            "mesh_ip": addr, // deprecated: misnomer carrying the transport address
+            "mesh_ipv4": mesh_ipv4,
+            "mesh_ipv6": mesh_ipv6,
             "transport": mechanism,
             "state": "active",
             "route_hops": route_hops,

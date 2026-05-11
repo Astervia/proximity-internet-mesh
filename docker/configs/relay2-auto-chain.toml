@@ -6,7 +6,6 @@ name = "relay2-auto-chain"
 data_dir = "/var/lib/pim"
 
 [interface]
-mesh_ip = "auto"
 mtu = 1400
 
 [relay]

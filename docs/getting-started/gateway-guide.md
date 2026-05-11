@@ -110,7 +110,8 @@ data_dir = "/var/lib/pim"
 
 [interface]
 name = "pim0"
-mesh_ip = "10.77.0.1/24"
+mesh_ipv4_prefix = "10.77.0.0/16"
+mesh_ipv6_prefix = "fd77::/64"
 mtu = 1400
 
 [transport]

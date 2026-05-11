@@ -1,3 +1,4 @@
+#[allow(unused_imports)]
 use super::super::*;
 use super::{advertisement, id};
 
@@ -6,7 +7,7 @@ fn own_node_included_in_advertisement() {
     let a = id(1);
     let b = id(2);
 
-    let mut rt = RoutingTable::new(a, false);
+    let mut rt = super::new_table(a, false);
     rt.add_peer(b);
 
     let adv = rt.generate_advertisement(b);
@@ -20,7 +21,7 @@ fn sequence_increments_per_advertisement() {
     let a = id(1);
     let b = id(2);
 
-    let mut rt = RoutingTable::new(a, false);
+    let mut rt = super::new_table(a, false);
     rt.add_peer(b);
 
     let s1 = rt.generate_advertisement(b).sequence;
@@ -33,7 +34,7 @@ fn no_loop_route_self() {
     let a = id(1);
     let b = id(2);
 
-    let mut rt = RoutingTable::new(a, false);
+    let mut rt = super::new_table(a, false);
     rt.add_peer(b);
 
     // B tries to advertise A back to A (shouldn't be installed)

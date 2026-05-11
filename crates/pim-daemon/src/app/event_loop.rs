@@ -35,7 +35,7 @@ pub(super) async fn run_event_loop(state: Arc<DaemonState>) -> Result<()> {
 
                     let dest_ip = Ipv4Addr::new(packet[16], packet[17], packet[18], packet[19]);
 
-                    if dest_ip == Ipv4Addr::from(state.mesh_ip.load(Ordering::Relaxed)) {
+                    if dest_ip == state.mesh_ipv4 {
                         continue;
                     }
 
@@ -235,98 +235,6 @@ pub(super) async fn run_event_loop(state: Arc<DaemonState>) -> Result<()> {
                                 let mut buf = BytesMut::from(&mesh.payload[..]);
                                 match ControlFrame::decode(&mut buf) {
                                     Ok(cf) => match cf {
-                                        ControlFrame::IpRequest { requester_id } => {
-                                            if let Some(pool) = &state.ip_pool {
-                                                let disposition = {
-                                                    let mut pending =
-                                                        state.pending_ip_assignments.lock().await;
-                                                    classify_ip_request(
-                                                        &mut pending,
-                                                        requester_id,
-                                                        mesh.src_id,
-                                                    )
-                                                };
-                                                match disposition {
-                                                    IpRequestDisposition::SpoofedRequester => {
-                                                        warn!(
-                                                            src_id = %mesh.src_id,
-                                                            %requester_id,
-                                                            "rejecting routed IpRequest with mismatched requester_id"
-                                                        );
-                                                        continue;
-                                                    }
-                                                    IpRequestDisposition::DuplicateInFlight => {
-                                                        debug!(
-                                                            %requester_id,
-                                                            "dropping duplicate in-flight routed IpRequest"
-                                                        );
-                                                        continue;
-                                                    }
-                                                    IpRequestDisposition::Process => {}
-                                                }
-
-                                                let result = pool
-                                                    .lock()
-                                                    .await
-                                                    .allocate_assignment(*requester_id.as_bytes());
-                                                match result {
-                                                    Ok(assignment) => {
-                                                        let sent = send_routed_control(
-                                                            &state,
-                                                            requester_id,
-                                                            ControlFrame::IpAssign {
-                                                                assigned_ip: assignment.assigned_ip.octets(),
-                                                                subnet_mask: assignment.subnet_mask,
-                                                                gateway_ip: assignment.gateway_ip.octets(),
-                                                                lease_seconds: assignment.lease_seconds,
-                                                            },
-                                                        )
-                                                        .await;
-                                                        if sent {
-                                                            info!(
-                                                                %requester_id,
-                                                                ip = %assignment.assigned_ip,
-                                                                "assigned IP"
-                                                            );
-                                                        }
-                                                    }
-                                                    Err(e) => {
-                                                        warn!(%requester_id, "IP allocation failed: {e}")
-                                                    }
-                                                }
-                                                state
-                                                    .pending_ip_assignments
-                                                    .lock()
-                                                    .await
-                                                    .remove(&requester_id);
-                                            } else {
-                                                debug!(
-                                                    src_id = %mesh.src_id,
-                                                    "received routed IpRequest but not a gateway"
-                                                );
-                                            }
-                                        }
-                                        ControlFrame::IpAssign {
-                                            assigned_ip,
-                                            subnet_mask,
-                                            gateway_ip,
-                                            ..
-                                        } => {
-                                            if state.request_dynamic_ip {
-                                                apply_dynamic_ip_assignment(
-                                                    &state,
-                                                    assigned_ip,
-                                                    subnet_mask,
-                                                    gateway_ip,
-                                                )
-                                                .await;
-                                            } else {
-                                                debug!(
-                                                    src_id = %mesh.src_id,
-                                                    "ignoring routed IpAssign for statically configured mesh IP"
-                                                );
-                                            }
-                                        }
                                         ControlFrame::PeerInfo {
                                             x25519_pub,
                                             friendly_name,
@@ -389,7 +297,7 @@ pub(super) async fn run_event_loop(state: Arc<DaemonState>) -> Result<()> {
                                 && Ipv4Addr::new(
                                     ip_packet_slice[16], ip_packet_slice[17],
                                     ip_packet_slice[18], ip_packet_slice[19],
-                                ) == Ipv4Addr::from(state.mesh_ip.load(Ordering::Relaxed));
+                                ) == state.mesh_ipv4;
 
                             if dst_local {
                                 if let Some(reply) = icmp_echo_reply(ip_packet_slice) {
@@ -527,9 +435,6 @@ pub(super) async fn run_event_loop(state: Arc<DaemonState>) -> Result<()> {
                                         .await
                                         .apply_update(&update, from_peer);
                                     debug!(%from_peer, ?changed, "route update applied");
-                                    if changed == pim_routing::UpdateResult::Changed {
-                                        maybe_request_dynamic_ip(&state).await;
-                                    }
                                 }
                             }
                             Err(e) => warn!(%from_peer, "route frame decode: {e}"),
@@ -560,89 +465,6 @@ pub(super) async fn run_event_loop(state: Arc<DaemonState>) -> Result<()> {
                         let mut buf = BytesMut::from(&frame.payload[..]);
                         match ControlFrame::decode(&mut buf) {
                             Ok(cf) => match cf {
-                                ControlFrame::IpRequest { requester_id } => {
-                                    // Gateway allocates and responds
-                                    if let Some(pool) = &state.ip_pool {
-                                        let disposition = {
-                                            let mut pending =
-                                                state.pending_ip_assignments.lock().await;
-                                            classify_ip_request(
-                                                &mut pending,
-                                                requester_id,
-                                                from_peer,
-                                            )
-                                        };
-                                        match disposition {
-                                            IpRequestDisposition::SpoofedRequester => {
-                                                warn!(
-                                                    %from_peer,
-                                                    %requester_id,
-                                                    "rejecting IpRequest with mismatched requester_id"
-                                                );
-                                                continue;
-                                            }
-                                            IpRequestDisposition::DuplicateInFlight => {
-                                                debug!(
-                                                    %requester_id,
-                                                    "dropping duplicate in-flight IpRequest"
-                                                );
-                                                continue;
-                                            }
-                                            IpRequestDisposition::Process => {}
-                                        }
-
-                                        let result = pool
-                                            .lock()
-                                            .await
-                                            .allocate_assignment(*requester_id.as_bytes());
-                                        match result {
-                                            Ok(assignment) => {
-                                                send_control(
-                                                    &state,
-                                                    &from_peer,
-                                                    ControlFrame::IpAssign {
-                                                        assigned_ip: assignment.assigned_ip.octets(),
-                                                        subnet_mask: assignment.subnet_mask,
-                                                        gateway_ip: assignment.gateway_ip.octets(),
-                                                        lease_seconds: assignment.lease_seconds,
-                                                    },
-                                                )
-                                                .await;
-                                                info!(
-                                                    %requester_id,
-                                                    ip = %assignment.assigned_ip,
-                                                    "assigned IP"
-                                                );
-                                            }
-                                            Err(e) => warn!(%requester_id, "IP allocation failed: {e}"),
-                                        }
-                                        state
-                                            .pending_ip_assignments
-                                            .lock()
-                                            .await
-                                            .remove(&requester_id);
-                                    } else {
-                                        debug!(%from_peer, "received IpRequest but not a gateway");
-                                    }
-                                }
-                                ControlFrame::IpAssign {
-                                    assigned_ip,
-                                    subnet_mask,
-                                    gateway_ip,
-                                    ..
-                                } => {
-                                    if state.request_dynamic_ip {
-                                        apply_dynamic_ip_assignment(
-                                            &state,
-                                            assigned_ip,
-                                            subnet_mask,
-                                            gateway_ip,
-                                        )
-                                        .await;
-                                    } else {
-                                        debug!(%from_peer, "ignoring unsolicited IpAssign for statically configured mesh IP");
-                                    }
-                                }
                                 ControlFrame::Goodbye { departing_id, .. } => {
                                     info!(%departing_id, "received Goodbye; removing peer");
                                     remove_peer(&state, departing_id).await;
@@ -716,9 +538,7 @@ pub(super) async fn run_event_loop(state: Arc<DaemonState>) -> Result<()> {
         // `setup_masquerade` so shutting pim down doesn't leave the host
         // dropping its own reply traffic.
         if let Some(gw) = state.gw_engine.as_ref() {
-            let mesh_ip = Ipv4Addr::from(state.mesh_ip.load(Ordering::Relaxed));
-            let prefix_len = state.mesh_prefix_len.load(Ordering::Relaxed);
-            let cidr = format!("{mesh_ip}/{prefix_len}");
+            let cidr = state.mesh_ipv4_prefix.to_cidr_string();
             gw.teardown_masquerade(&cidr);
         }
         if let Some(gw_v6) = state.gw_engine_v6.read().await.clone() {

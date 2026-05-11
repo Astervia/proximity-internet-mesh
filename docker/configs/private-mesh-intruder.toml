@@ -3,7 +3,6 @@ name = "intruder"
 data_dir = "/var/lib/pim"
 
 [interface]
-mesh_ip = "10.77.0.200/24"
 mtu = 1400
 
 [discovery]

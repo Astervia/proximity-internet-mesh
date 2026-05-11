@@ -34,7 +34,6 @@ pub struct DebugNodeSnapshot {
     pub is_gateway: bool,
     pub mesh_ip: String,
     pub mesh_prefix_len: u8,
-    pub request_dynamic_ip: bool,
 }
 
 /// Common stats for operator-facing debug commands.

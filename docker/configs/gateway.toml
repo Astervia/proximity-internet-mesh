@@ -1,12 +1,10 @@
 # Gateway node — single-hop and multi-hop tests.
-# Transport address: gateway:9100  Mesh IP: 10.77.0.1/24
 
 [node]
 name = "gateway"
 data_dir = "/var/lib/pim"
 
 [interface]
-mesh_ip = "10.77.0.1/24"
 mtu = 1400
 
 [transport]

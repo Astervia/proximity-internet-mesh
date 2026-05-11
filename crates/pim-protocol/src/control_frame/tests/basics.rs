@@ -1,28 +1,18 @@
 use super::super::*;
 
 #[test]
-fn ip_request_round_trip() {
-    let frame = ControlFrame::IpRequest {
-        requester_id: NodeId::from_bytes([0x42; 16]),
-    };
-    let mut buf = BytesMut::new();
-    frame.encode(&mut buf);
-    let decoded = ControlFrame::decode(&mut buf).unwrap();
-    assert_eq!(frame, decoded);
-}
-
-#[test]
-fn ip_assign_round_trip() {
-    let frame = ControlFrame::IpAssign {
-        assigned_ip: [10, 77, 0, 5],
-        subnet_mask: 16,
-        gateway_ip: [10, 77, 0, 1],
-        lease_seconds: 3600,
-    };
-    let mut buf = BytesMut::new();
-    frame.encode(&mut buf);
-    let decoded = ControlFrame::decode(&mut buf).unwrap();
-    assert_eq!(frame, decoded);
+fn ipv4_legacy_tags_are_rejected() {
+    // 0x01 = old IpRequest, 0x02 = old IpAssign — both removed when
+    // mesh addresses became deterministic. A daemon receiving a
+    // legacy frame from a mismatched peer should fail decoding
+    // cleanly rather than panic or silently mis-tag.
+    for tag in [0x01u8, 0x02] {
+        let mut buf = BytesMut::from(&[tag][..]);
+        assert!(
+            ControlFrame::decode(&mut buf).is_err(),
+            "control type 0x{tag:02x} must be rejected after removal"
+        );
+    }
 }
 
 #[test]
@@ -68,12 +58,6 @@ fn reject_empty() {
 #[test]
 fn reject_unknown_type() {
     let mut buf = BytesMut::from(&[0xFF][..]);
-    assert!(ControlFrame::decode(&mut buf).is_err());
-}
-
-#[test]
-fn reject_truncated_ip_assign() {
-    let mut buf = BytesMut::from(&[0x02, 10, 77, 0][..]); // too short
     assert!(ControlFrame::decode(&mut buf).is_err());
 }
 

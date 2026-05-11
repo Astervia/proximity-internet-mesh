@@ -213,8 +213,8 @@ INFO  Wi-Fi Direct: group formed (role=Go), peer addr=192.168.49.100:9100
 INFO  Wi-Fi Direct: new peer addr — initiating connection
 INFO  handshake complete, peer_id=…
 
-# Client — after IpAssign:
-INFO  mesh IP assigned: 10.X.X.Y/24
+# Mesh address derived from NodeId at boot (no allocation handshake).
+INFO  TUN up iface=pim0 addr=10.X.X.Y prefix=16 ipv6=fd77::… ipv6_prefix=64
 ```
 
 ### Verification

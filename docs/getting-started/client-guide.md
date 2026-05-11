@@ -11,7 +11,7 @@ Platform scope:
 The key distinction is:
 
 - `[interface].name`: the local TUN interface, usually `pim0`
-- `[interface].mesh_ip`: usually `"auto"` on clients so the gateway can assign it
+- `[interface].mesh_ipv4_prefix` / `mesh_ipv6_prefix`: shared by every node in this mesh; the per-node host bits are derived from `NodeId` automatically (no `"auto"` step, no gateway round-trip)
 - `transport.listen_port`: the TCP port used once a peer becomes reachable
 - `[wifi_direct].interface`: the physical Wi-Fi interface used for P2P
 - `[bluetooth].interface`: a preferred Bluetooth PAN interface hint; use `"auto"` on Linux unless you need to pin a specific interface
@@ -81,7 +81,8 @@ data_dir = "/var/lib/pim"
 
 [interface]
 name = "pim0"
-mesh_ip = "auto"
+mesh_ipv4_prefix = "10.77.0.0/16"
+mesh_ipv6_prefix = "fd77::/64"
 mtu = 1400
 
 [transport]
@@ -98,7 +99,7 @@ require_encryption = true
 
 Notes:
 
-- `mesh_ip = "auto"` lets the daemon request an address from a reachable gateway
+- the mesh IP is derived from `NodeId` at boot — no gateway round-trip is needed
 - a client does not need a `[gateway]` section enabled
 - a plain client usually does not set `relay.enabled = true`
 - on macOS, set `[interface].name` to a `utunN` name such as `utun0`
@@ -304,7 +305,8 @@ Example:
 
 ```toml
 [interface]
-mesh_ip = "auto"
+mesh_ipv4_prefix = "10.77.0.0/16"
+mesh_ipv6_prefix = "fd77::/64"
 
 [discovery]
 enabled = true
@@ -336,7 +338,7 @@ gateway-selection logic once a peer address becomes reachable.
 1. List local interfaces with `ip -br link`.
 2. If using Wi-Fi Direct, identify the Wi-Fi radio with `iw dev`.
 3. If using Bluetooth PAN, identify the active PAN interface with `ip -br link` and inspect it with `ip neigh show dev <pan-iface>`.
-4. Set `interface.mesh_ip = "auto"` unless you have a reason to force a static mesh CIDR.
+4. Confirm `[interface].mesh_ipv4_prefix` / `mesh_ipv6_prefix` match the rest of the mesh (every node derives its host bits from `NodeId` inside this prefix).
 5. Enable discovery if the client should auto-connect to nearby peers.
 6. Enable only the peer mechanisms you actually intend to use.
 7. Start the daemon with `sudo pim up --config /etc/pim/pim.toml`.
@@ -344,11 +346,11 @@ gateway-selection logic once a peer address becomes reachable.
 
 ## Troubleshooting
 
-If the client does not receive a mesh IP:
+If the client does not have the expected mesh IP:
 
-- verify `interface.mesh_ip = "auto"` if you expect dynamic assignment
-- verify a reachable gateway exists
-- verify discovery is enabled or that a static peer is configured
+- the address is `derive_mesh_ipv4(self_id, prefix)` — different `node.key` files derive to different IPs; preserve the keystore between runs to keep the address stable
+- verify `[interface].mesh_ipv4_prefix` / `mesh_ipv6_prefix` match the rest of the mesh
+- check `pim status` (or the debug snapshot) for the actual derived IP — that is what the daemon set on `pim0`
 
 If Wi-Fi Direct does not discover peers:
 
