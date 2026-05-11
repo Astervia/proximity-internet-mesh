@@ -1354,6 +1354,26 @@ pub fn notify_rfcomm_peer_discovered(peer_node_id_hex: String) {
     spawn_rfcomm_initiator_if_lower(state.clone(), peer_node_id_hex);
 }
 
+/// Public read-side hook for the Android shell to grab the
+/// `pim-discovery` UDP socket's raw fd so it can mark it
+/// VPN-bypassing via `VpnService.protect(fd)`.
+///
+/// Returns `None` until `pim-discovery::Service::run` has bound its
+/// socket (after `discovery.enabled = true` in `pim.toml`) and may
+/// return `None` permanently when discovery is disabled. The fd
+/// stays valid for the daemon's lifetime once published.
+///
+/// Why this lives outside the daemon's socket code: the bind+SO_BROADCAST
+/// path is portable Rust (in-kernel by the architecture rule) but
+/// `VpnService.protect` is a Java method only callable from a
+/// `VpnService` subclass — so the fd has to bridge to the platform
+/// shell at the socket's birth.
+#[cfg_attr(not(target_os = "android"), allow(dead_code))]
+pub fn current_discovery_socket_fd() -> Option<std::os::fd::RawFd> {
+    pim_discovery::current_socket_fd()
+}
+
+
 /// so when this fires the loopback TCP listener has typically already
 /// `register_peer`'d the peer in `state.transport`'s session map.
 /// We poll briefly for that registration to land, then call

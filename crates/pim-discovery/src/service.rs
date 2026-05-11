@@ -28,6 +28,35 @@ use crate::peer_table::{PeerRecord, PeerTable};
 /// Default UDP port used for discovery broadcasts.
 pub const DEFAULT_DISCOVERY_PORT: u16 = 9101;
 
+/// Published once `Service::run` binds its UDP socket. Lets out-of-
+/// kernel platform shells (today: the Android `PimVpnService`) reach
+/// the raw fd so they can call platform-specific `VpnService.protect(fd)`
+/// to mark the socket as "bypass our own VPN" — pim-discovery's
+/// 255.255.255.255 broadcasts otherwise leak onto the split-default
+/// routes that put internet traffic through the mesh.
+///
+/// The published value is a plain `RawFd` (an `i32`). The socket
+/// itself is owned by `Service::run`'s task; the fd stays valid until
+/// that task ends. Use [`current_socket_fd`] to read it.
+#[cfg(unix)]
+static DISCOVERY_SOCKET_FD: std::sync::OnceLock<std::os::fd::RawFd> = std::sync::OnceLock::new();
+
+/// Returns the bound discovery UDP socket's raw fd, or `None` if the
+/// service hasn't started or isn't compiled for a unix target.
+///
+/// Android-only consumer: `PimVpnService` polls this after
+/// `nativeStart` and calls `this.protect(fd)` so PIMD broadcasts
+/// bypass the VpnService TUN and go out the Wi-Fi/cellular underlay.
+#[cfg(unix)]
+pub fn current_socket_fd() -> Option<std::os::fd::RawFd> {
+    DISCOVERY_SOCKET_FD.get().copied()
+}
+
+#[cfg(not(unix))]
+pub fn current_socket_fd() -> Option<std::os::raw::c_int> {
+    None
+}
+
 /// Interval between presence broadcasts.
 pub const DEFAULT_BROADCAST_INTERVAL: Duration = Duration::from_secs(5);
 
@@ -180,6 +209,18 @@ impl DiscoveryService {
             .await
             .context("failed to bind discovery UDP socket")?;
         socket.set_broadcast(true).context("SO_BROADCAST")?;
+
+        // Publish the bound fd so platform shells can reach it for
+        // VPN-bypass marking (Android `VpnService.protect`). The
+        // socket is owned by this task; the fd stays valid for the
+        // task's lifetime. We use a `OnceLock`: discovery is started
+        // at most once per daemon process today, and re-publishing
+        // the same value on a hypothetical re-bind would be a no-op.
+        #[cfg(unix)]
+        {
+            use std::os::fd::AsRawFd;
+            let _ = DISCOVERY_SOCKET_FD.set(socket.as_raw_fd());
+        }
 
         info!(port = self.discovery_port, "discovery service started");
 

@@ -463,6 +463,26 @@ fn build_routing_config(config_path: &str) -> anyhow::Result<String> {
     Ok(serde_json::to_string(&payload)?)
 }
 
+/// Return the `pim-discovery` UDP socket's raw fd, or `0` if the
+/// service hasn't bound yet OR `[discovery].enabled = false` in
+/// `pim.toml`. The Kotlin side polls this from `PimVpnService` after
+/// `nativeStart` and feeds the fd to `VpnService.protect(fd)` so the
+/// PIMD broadcasts bypass the VPN TUN — otherwise they leak onto the
+/// split-default route, get NAT'd by the gateway, and (in the worst
+/// case before defence-in-depth filtering landed) hit raw-sendto
+/// EACCES on `255.255.255.255`.
+///
+/// Returning `0` is the "absent" signal: Unix fds are >0 in practice,
+/// and JNI doesn't carry Optional naturally.
+#[no_mangle]
+pub extern "system" fn Java_org_astervia_pim_PimDaemon_nativeDiscoverySocketFd(
+    _env: JNIEnv,
+    _class: JClass,
+) -> jint {
+    crate::app::current_discovery_socket_fd().unwrap_or(0)
+}
+
+
 /// Re-load the config + identity at `config_path` and assemble the
 /// local Hello envelope as a JSON string. Pulls `[node].name`,
 /// `[security].key_file`, `[bluetooth_rfcomm].device_name_prefix`,
