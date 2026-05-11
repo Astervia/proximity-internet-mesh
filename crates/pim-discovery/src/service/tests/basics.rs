@@ -114,3 +114,39 @@ async fn encrypted_service_accepts_keyed_packets() {
     assert!(result.is_some());
     assert!(rx.try_recv().is_ok());
 }
+
+/// `current_socket_fd` is the platform-shell hook for marking the
+/// discovery socket VPN-bypassing on Android (`VpnService.protect(fd)`).
+/// Verify it stays consistent with the running service: `Some(fd)`
+/// after `run()` binds, `> 0` (valid Unix fd).
+#[cfg(unix)]
+#[tokio::test]
+async fn current_socket_fd_publishes_after_bind() {
+    use crate::service::current_socket_fd;
+    use tokio_util::sync::CancellationToken;
+
+    let port = 9210;
+    let id = NodeId::from_bytes([42; 16]);
+    let (svc, _rx) = DiscoveryService::new(id, [42; 32], NodeCapabilities::client(), port);
+    let svc = Arc::new(svc.with_port(port));
+    let cancel = CancellationToken::new();
+    let svc_run = svc.clone();
+    let cancel_run = cancel.clone();
+    let join = tokio::spawn(async move { svc_run.run(cancel_run).await });
+
+    // Poll briefly for the OnceLock to populate. Most of the time
+    // the publish lands within milliseconds of `Service::run` start.
+    let mut fd = None;
+    for _ in 0..50 {
+        if let Some(v) = current_socket_fd() {
+            fd = Some(v);
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    cancel.cancel();
+    let _ = join.await;
+
+    let fd = fd.expect("discovery socket fd should be published after bind");
+    assert!(fd > 0, "expected a positive Unix fd, got {fd}");
+}
