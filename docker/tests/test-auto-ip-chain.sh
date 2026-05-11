@@ -26,10 +26,10 @@ cleanup() {
 }
 trap cleanup EXIT
 
-log_section "Phase 8 — Routed auto-IP chain"
+log_section "Phase 8 — Late gateway join over a relay chain"
 log_info "Compose file: $COMPOSE_FILE"
 log_info "Topology: gateway <-> relay1 <-> relay2 <-> client"
-log_info "relay1, relay2, and client all use mesh_ip = auto"
+log_info "Mesh IPs are derived from each node's NodeId — no allocation handshake."
 
 compose "$COMPOSE_FILE" down -v --remove-orphans >/dev/null 2>&1 || true
 
@@ -58,34 +58,39 @@ wait_healthy "$COMPOSE_FILE" gateway 90
 log_info "Waiting 45 s for reconnect, route convergence, and routed IP assignment..."
 sleep 45
 
-log_section "8C All auto peers receive mesh IPs"
+log_section "8C All chain nodes have derived mesh IPs"
+
+# Mesh IPs are derived from each NodeId at boot — no allocation
+# handshake — so each pim0 carries `derive_mesh_ipv4(self_id)`.
+GW_IPV4=$(mesh_ipv4_of "$COMPOSE_FILE" gateway) || {
+    log_fail "could not read gateway mesh IPv4"; exit 1; }
+RELAY1_IPV4=$(mesh_ipv4_of "$COMPOSE_FILE" relay1) || {
+    log_fail "could not read relay1 mesh IPv4"; exit 1; }
+RELAY2_IPV4=$(mesh_ipv4_of "$COMPOSE_FILE" relay2) || {
+    log_fail "could not read relay2 mesh IPv4"; exit 1; }
+CLIENT_IPV4=$(mesh_ipv4_of "$COMPOSE_FILE" client) || {
+    log_fail "could not read client mesh IPv4"; exit 1; }
+log_info "derived: gateway=$GW_IPV4 relay1=$RELAY1_IPV4 relay2=$RELAY2_IPV4 client=$CLIENT_IPV4"
 
 assert_iface_up "$COMPOSE_FILE" relay1 "pim0" \
     "relay1 pim0 interface is UP after late gateway join"
-assert_iface_addr "$COMPOSE_FILE" relay1 "10.77.0." \
-    "relay1 received mesh IP after late gateway join"
+assert_iface_addr "$COMPOSE_FILE" relay1 "$RELAY1_IPV4" \
+    "relay1 has derived mesh IP $RELAY1_IPV4"
 
 assert_iface_up "$COMPOSE_FILE" relay2 "pim0" \
     "relay2 pim0 interface is UP after late gateway join"
-assert_iface_addr "$COMPOSE_FILE" relay2 "10.77.0." \
-    "relay2 received mesh IP through relay chain"
+assert_iface_addr "$COMPOSE_FILE" relay2 "$RELAY2_IPV4" \
+    "relay2 has derived mesh IP $RELAY2_IPV4"
 
 assert_iface_up "$COMPOSE_FILE" client "pim0" \
     "client pim0 interface is UP after late gateway join"
-assert_iface_addr "$COMPOSE_FILE" client "10.77.0." \
-    "client received mesh IP through two relays"
-
-assert_logs_contain "$COMPOSE_FILE" relay1 "received IP assignment" \
-    "relay1 logs show routed/late IP assignment" 45
-assert_logs_contain "$COMPOSE_FILE" relay2 "received IP assignment" \
-    "relay2 logs show routed IP assignment through relay1" 45
-assert_logs_contain "$COMPOSE_FILE" client "received IP assignment" \
-    "client logs show routed IP assignment through relay chain" 45
+assert_iface_addr "$COMPOSE_FILE" client "$CLIENT_IPV4" \
+    "client has derived mesh IP $CLIENT_IPV4"
 
 log_section "8D End-to-end connectivity through the chain"
 
-assert_ping "$COMPOSE_FILE" client "10.77.0.1" \
-    "client can ping gateway mesh IP through relay1/relay2"
+assert_ping "$COMPOSE_FILE" client "$GW_IPV4" \
+    "client can ping gateway mesh IP ($GW_IPV4) through relay1/relay2"
 
 assert_cmd \
     "client enables split-default routing explicitly after routed auto-IP" \

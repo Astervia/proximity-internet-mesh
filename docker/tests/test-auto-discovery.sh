@@ -58,18 +58,24 @@ assert_cmd_output "client stats show peers keyword" "peers" \
     in_svc "$COMPOSE_FILE" client pim status --verbose
 
 # ── 7B Client auto-IP configured ─────────────────────────────────────────────
-log_section "7B Client auto-IP: TUN configured from gateway IpAssign"
+log_section "7B Client auto-discovery: TUN configured from derived NodeId"
 
-# The client healthcheck only verifies the daemon process, not the TUN, because
-# the TUN comes up only after IpAssign is received.  Check it explicitly here.
+# Mesh IPs are derived from each NodeId; pull the live values so the
+# pim0-iface assertion stays meaningful.
+GW_IPV4=$(mesh_ipv4_of "$COMPOSE_FILE" gateway) || {
+    log_fail "could not read gateway mesh IPv4"; exit 1; }
+CLIENT_IPV4=$(mesh_ipv4_of "$COMPOSE_FILE" client) || {
+    log_fail "could not read client mesh IPv4"; exit 1; }
+log_info "gateway mesh_ipv4 = $GW_IPV4 · client mesh_ipv4 = $CLIENT_IPV4"
+
 assert_iface_up "$COMPOSE_FILE" client "pim0" \
-    "client pim0 interface is UP after IpAssign"
+    "client pim0 interface is UP after discovery"
 
-assert_iface_addr "$COMPOSE_FILE" client "10.77.0." \
-    "client pim0 has mesh IP in 10.77.0.0/24"
+assert_iface_addr "$COMPOSE_FILE" client "$CLIENT_IPV4" \
+    "client pim0 has derived mesh IP $CLIENT_IPV4"
 
-assert_ping "$COMPOSE_FILE" client "10.77.0.1" \
-    "client can ping gateway mesh IP via discovered path"
+assert_ping "$COMPOSE_FILE" client "$GW_IPV4" \
+    "client can ping gateway mesh IP ($GW_IPV4) via discovered path"
 
 # ── 7C Internet via discovered relay chain ────────────────────────────────────
 log_section "7C Internet access through discovered relay chain"
@@ -106,11 +112,14 @@ sleep 20
 assert_iface_up "$COMPOSE_FILE" client "pim0" \
     "late-joiner pim0 interface is UP"
 
-assert_iface_addr "$COMPOSE_FILE" client "10.77.0." \
-    "late-joiner has mesh IP in 10.77.0.0/24"
+# A `compose stop client && compose start client` keeps the same volumes
+# (no `down -v`), so the persisted node.key gives the late-joiner the
+# same NodeId — and hence the same derived mesh IPv4 — as before.
+assert_iface_addr "$COMPOSE_FILE" client "$CLIENT_IPV4" \
+    "late-joiner keeps derived mesh IP $CLIENT_IPV4 (same identity key)"
 
-assert_ping "$COMPOSE_FILE" client "10.77.0.1" \
-    "late-joiner can reach gateway mesh IP"
+assert_ping "$COMPOSE_FILE" client "$GW_IPV4" \
+    "late-joiner can reach gateway mesh IP ($GW_IPV4)"
 
 assert_cmd \
     "late-joiner enables split-default routing explicitly" \
@@ -144,7 +153,7 @@ wait_healthy "$COMPOSE_FILE" relay 60
 log_info "Waiting 25 s for relay to re-broadcast and peers to reconnect..."
 sleep 25
 
-assert_ping "$COMPOSE_FILE" client "10.77.0.1" \
+assert_ping "$COMPOSE_FILE" client "$GW_IPV4" \
     "client can reach gateway after relay re-discovered"
 
 assert_cmd_output "relay stats show peers after restart" "peers" \
