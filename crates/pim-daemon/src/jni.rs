@@ -482,7 +482,6 @@ pub extern "system" fn Java_org_astervia_pim_PimDaemon_nativeDiscoverySocketFd(
     crate::app::current_discovery_socket_fd().unwrap_or(0)
 }
 
-
 /// Re-load the config + identity at `config_path` and assemble the
 /// local Hello envelope as a JSON string. Pulls `[node].name`,
 /// `[security].key_file`, `[bluetooth_rfcomm].device_name_prefix`,
