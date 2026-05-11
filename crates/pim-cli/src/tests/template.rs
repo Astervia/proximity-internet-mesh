@@ -7,11 +7,17 @@ fn client_template_has_commented_gateway_block_and_parses() {
     let rendered = render_config_template(&[NodeRole::Client], None);
     assert!(rendered.contains("# [gateway]"));
     assert!(rendered.contains("# mechanism = \"tcp\""));
-    assert!(rendered.contains("mesh_ip = \"auto\""));
+    assert!(rendered.contains(&format!(
+        "mesh_ipv4_prefix = {:?}",
+        pim_core::DEFAULT_MESH_IPV4_PREFIX
+    )));
 
     let config = pim_core::Config::from_toml_str(&rendered).unwrap();
     assert_eq!(config.node.name, "client-node");
-    assert_eq!(config.interface.mesh_ip, "auto");
+    assert_eq!(
+        config.interface.mesh_ipv4_prefix.as_deref(),
+        Some(pim_core::DEFAULT_MESH_IPV4_PREFIX)
+    );
     assert!(!config.gateway.enabled);
 }
 
@@ -24,7 +30,10 @@ fn gateway_template_enables_gateway_and_parses() {
     let config = pim_core::Config::from_toml_str(&rendered).unwrap();
     assert_eq!(config.node.name, "edge-a");
     assert!(config.gateway.enabled);
-    assert_eq!(config.interface.mesh_ip, "10.77.0.1/24");
+    assert_eq!(
+        config.interface.mesh_ipv4_prefix.as_deref(),
+        Some(pim_core::DEFAULT_MESH_IPV4_PREFIX)
+    );
 }
 
 #[test]
@@ -54,15 +63,27 @@ fn template_node_emits_data_dir() {
 }
 
 #[test]
-fn template_interface_emits_mtu_and_optional_ipv6() {
+fn template_interface_emits_mtu_and_default_prefixes() {
     let rendered = render_config_template(&[NodeRole::Client], None);
     assert!(rendered.contains("mtu = 1400"));
-    // Optional Option<String> field — should appear commented out so it
-    // round-trips as `None` after parse.
-    assert!(rendered.contains("# mesh_ipv6 ="));
+    assert!(rendered.contains(&format!(
+        "mesh_ipv4_prefix = {:?}",
+        pim_core::DEFAULT_MESH_IPV4_PREFIX
+    )));
+    assert!(rendered.contains(&format!(
+        "mesh_ipv6_prefix = {:?}",
+        pim_core::DEFAULT_MESH_IPV6_PREFIX
+    )));
     let cfg = pim_core::Config::from_toml_str(&rendered).unwrap();
     assert_eq!(cfg.interface.mtu, 1400);
-    assert_eq!(cfg.interface.mesh_ipv6, None);
+    assert_eq!(
+        cfg.interface.mesh_ipv4_prefix.as_deref(),
+        Some(pim_core::DEFAULT_MESH_IPV4_PREFIX)
+    );
+    assert_eq!(
+        cfg.interface.mesh_ipv6_prefix.as_deref(),
+        Some(pim_core::DEFAULT_MESH_IPV6_PREFIX)
+    );
 }
 
 #[test]

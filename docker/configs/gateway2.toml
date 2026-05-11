@@ -1,12 +1,10 @@
 # Second gateway for multi-gateway (Phase 5) tests.
-# Transport address: gateway2:9100  Mesh IP: 10.77.0.2/24
 
 [node]
 name = "gateway2"
 data_dir = "/var/lib/pim"
 
 [interface]
-mesh_ip = "10.77.0.2/24"
 mtu = 1400
 
 [transport]

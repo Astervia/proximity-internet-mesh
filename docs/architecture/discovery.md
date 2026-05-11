@@ -345,5 +345,5 @@ initial gateway selection smarter before any probes are exchanged.
 
 - [security.md](security.md) — handshake and session establishment after discovery
 - [routing.md](routing.md) — route exchange that follows a successful connection
-- [protocol.md](protocol.md) — wire format for all frame types including `ControlFrame::IpRequest / IpAssign`
+- [protocol.md](protocol.md) — wire format for all ControlFrame variants (note: IpRequest / IpAssign were removed when mesh addresses became deterministic from NodeId)
 - [overview.md](overview.md) — placement of discovery in the overall component architecture

@@ -1,7 +1,10 @@
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, ToSocketAddrs};
+use std::net::{IpAddr, SocketAddr, ToSocketAddrs};
 
 use anyhow::{bail, Context, Result};
-use pim_core::{Config, PeerEndpointConfig};
+use pim_core::{
+    Config, Ipv4Prefix, Ipv6Prefix, PeerEndpointConfig, DEFAULT_MESH_IPV4_PREFIX,
+    DEFAULT_MESH_IPV6_PREFIX,
+};
 use pim_discovery::NodeCapabilities;
 use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
@@ -79,27 +82,18 @@ pub(crate) fn icmp_echo_reply(packet: &[u8]) -> Option<Vec<u8>> {
     Some(reply)
 }
 
-pub(crate) fn parse_cidr(s: &str) -> Result<(Ipv4Addr, u8)> {
-    let parts: Vec<&str> = s.split('/').collect();
-    if parts.len() != 2 {
-        bail!("invalid CIDR: {s}");
-    }
-    let ip: Ipv4Addr = parts[0].parse().context("invalid IP in CIDR")?;
-    let prefix: u8 = parts[1].parse().context("invalid prefix in CIDR")?;
-    Ok((ip, prefix))
+/// Resolve `interface.mesh_ipv4_prefix` (with the `pim-core` default
+/// when the field is unset) into a canonical [`Ipv4Prefix`].
+pub(crate) fn parse_mesh_ipv4_prefix(value: &Option<String>) -> Result<Ipv4Prefix> {
+    let raw = value.as_deref().unwrap_or(DEFAULT_MESH_IPV4_PREFIX);
+    Ipv4Prefix::parse(raw).map_err(|e| anyhow::anyhow!("{e}"))
 }
 
-pub(crate) fn parse_ipv6_cidr(s: &str) -> Result<(Ipv6Addr, u8)> {
-    let parts: Vec<&str> = s.split('/').collect();
-    if parts.len() != 2 {
-        bail!("invalid CIDR: {s}");
-    }
-    let ip: Ipv6Addr = parts[0].parse().context("invalid IPv6 in CIDR")?;
-    let prefix: u8 = parts[1].parse().context("invalid IPv6 prefix in CIDR")?;
-    if prefix > 128 {
-        bail!("invalid IPv6 prefix in CIDR");
-    }
-    Ok((ip, prefix))
+/// Resolve `interface.mesh_ipv6_prefix` (with the `pim-core` default
+/// when the field is unset) into a canonical [`Ipv6Prefix`].
+pub(crate) fn parse_mesh_ipv6_prefix(value: &Option<String>) -> Result<Ipv6Prefix> {
+    let raw = value.as_deref().unwrap_or(DEFAULT_MESH_IPV6_PREFIX);
+    Ipv6Prefix::parse(raw).map_err(|e| anyhow::anyhow!("{e}"))
 }
 
 pub(crate) async fn install_signal_handler(cancel: CancellationToken) {

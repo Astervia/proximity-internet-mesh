@@ -11,7 +11,6 @@ use tokio::sync::mpsc;
 use tracing::info;
 
 use super::auth::AuthorizationDecision;
-use super::ip_control::request_dynamic_ip_from_peer;
 use super::peer_tasks::flush_send_buffer;
 use super::session::{nonce_prefix, Session};
 use super::DaemonState;
@@ -155,7 +154,6 @@ pub(crate) async fn handshake_initiator(
     info!(%peer_id, "session established (initiator)");
 
     flush_send_buffer(state, peer_id).await;
-    request_dynamic_ip_from_peer(state, peer_id).await;
     crate::app::identity_broadcast::send_peer_info(state, peer_id).await;
     Ok(peer_id)
 }
@@ -252,7 +250,6 @@ pub(crate) async fn handshake_responder(
     info!(%peer_id, "session established (responder)");
 
     flush_send_buffer(state, peer_id).await;
-    request_dynamic_ip_from_peer(state, peer_id).await;
     crate::app::identity_broadcast::send_peer_info(state, peer_id).await;
     Ok(())
 }

@@ -194,7 +194,8 @@ name = "relay-b"
 
 [interface]
 name = "pim0"
-mesh_ip = "10.77.0.2/24"
+mesh_ipv4_prefix = "10.77.0.0/16"
+mesh_ipv6_prefix = "fd77::/64"
 mtu = 1400
 
 [transport]
@@ -208,8 +209,11 @@ mechanism = "tcp"
 address = "10.0.0.1:9100"
 ```
 
-Current implementation note:
-`mesh_ip = "auto"` is supported by the daemon's control-plane IP-assignment path, but the repository's example labs still use explicit static mesh CIDRs because they are simpler to reason about and reproduce.
+The daemon derives its mesh IPv4 + IPv6 from `self_id` plus the
+configured prefixes via [`pim_core::derive_mesh_ipv4`] /
+[`derive_mesh_ipv6`](../../crates/pim-core/src/mesh_address.rs). There
+is no `mesh_ip = "auto"` step and no gateway round-trip — the address
+is final before the TUN comes up.
 
 ## Step 2. Create and configure the TUN interface
 
@@ -234,8 +238,7 @@ At this point, the node is reachable, but it still does not trust any peer until
 If `gateway.enabled = true`, the daemon:
 
 - builds a `GatewayEngine`
-- attempts to enable forwarding and MASQUERADE rules
-- builds an `IpPool` for mesh-side addresses
+- attempts to enable forwarding and MASQUERADE rules whose source CIDR is the entire `mesh_ipv4_prefix`
 
 This makes the node capable of translating mesh traffic to internet traffic.
 
@@ -425,14 +428,15 @@ Used for:
 
 - fast peer removal during graceful shutdown
 
-## `ControlFrame::IpRequest` and `IpAssign`
+## `ControlFrame::IpRequest` and `IpAssign` (removed)
 
-Designed for:
-
-- gateway-driven client mesh IP assignment
-
-Current status:
-The control messages and `IpPool` exist, but the daemon still requires an explicit `interface.mesh_ip` during startup. Dynamic client IP assignment is not the main path yet.
+These two control frames previously implemented gateway-driven mesh-IP
+allocation. They were deleted alongside the per-gateway `IpPool` once
+mesh addresses became deterministic from each `NodeId` — see
+[`pim_core::derive_mesh_ipv4`](../../crates/pim-core/src/mesh_address.rs).
+Tag values `0x01` / `0x02` are reserved on the wire so a daemon
+receiving a legacy frame from an old peer surfaces a clean decode
+error instead of aliasing future tags.
 
 ## Failure And Recovery Behavior
 

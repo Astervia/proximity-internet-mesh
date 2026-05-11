@@ -223,7 +223,8 @@ data_dir = "~/.pim"
 [interface]
 name = "pim0"
 mtu = 1400
-mesh_ip = "auto"          # assigned during mesh join, or static
+mesh_ipv4_prefix = "10.77.0.0/16"   # host bits derived from this node's NodeId
+mesh_ipv6_prefix = "fd77::/64"
 
 [discovery]
 broadcast_interval_ms = 5000

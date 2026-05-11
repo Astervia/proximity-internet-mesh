@@ -55,6 +55,7 @@ sha2 = "0.10"
 hmac = "0.12"
 rand = "0.8"
 argon2 = "0.5"
+blake3 = "1"
 
 # Networking
 nix = { version = "0.31", features = ["net", "ioctl"] }

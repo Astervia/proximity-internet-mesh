@@ -1,3 +1,4 @@
+#[allow(unused_imports)]
 use super::super::*;
 use super::{advertisement, id};
 
@@ -9,7 +10,7 @@ fn nearest_gateway_selected() {
     let c = id(3); // relay, 1 hop
     let gw2 = id(11); // gateway via c at 3 hops
 
-    let mut rt = RoutingTable::new(a, false);
+    let mut rt = super::new_table(a, false);
     rt.add_peer(b);
     rt.add_peer(c);
 
@@ -23,6 +24,6 @@ fn nearest_gateway_selected() {
 
 #[test]
 fn gateway_node_has_no_nearest_gateway() {
-    let rt = RoutingTable::new(id(1), true);
+    let rt = super::new_table(id(1), true);
     assert!(rt.nearest_gateway().is_none());
 }

@@ -7,7 +7,7 @@ fn split_horizon_does_not_advertise_back() {
     let b = id(2);
     let c = id(3);
 
-    let mut rt = RoutingTable::new(a, false);
+    let mut rt = super::new_table(a, false);
     rt.add_peer(b);
 
     // A learned C via B
@@ -29,7 +29,7 @@ fn non_poisoned_routes_advertised_normally() {
     let c = id(3);
     let d = id(4);
 
-    let mut rt = RoutingTable::new(a, false);
+    let mut rt = super::new_table(a, false);
     rt.add_peer(b);
     rt.add_peer(c);
 

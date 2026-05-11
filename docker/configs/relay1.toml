@@ -1,12 +1,10 @@
 # First relay for routing/failover tests (Phase 2.3).
-# Transport address: relay1:9100  Mesh IP: 10.77.0.10/24
 
 [node]
 name = "relay1"
 data_dir = "/var/lib/pim"
 
 [interface]
-mesh_ip = "10.77.0.10/24"
 mtu = 1400
 
 [transport]

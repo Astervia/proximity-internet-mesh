@@ -1,9 +1,10 @@
+#[allow(unused_imports)]
 use super::super::*;
 use super::{advertisement, id};
 
 #[test]
 fn direct_peer_route_installed_at_1_hop() {
-    let mut rt = RoutingTable::new(id(1), false);
+    let mut rt = super::new_table(id(1), false);
     rt.add_peer(id(2));
 
     assert_eq!(rt.lookup(id(2)), Some(id(2)));
@@ -17,7 +18,7 @@ fn three_node_chain_converges() {
     let b = id(2);
     let c = id(3);
 
-    let mut rt = RoutingTable::new(a, false);
+    let mut rt = super::new_table(a, false);
     rt.add_peer(b);
 
     // B advertises C at 1 hop
@@ -35,7 +36,7 @@ fn better_route_replaces_existing() {
     let c = id(3);
     let d = id(4);
 
-    let mut rt = RoutingTable::new(a, false);
+    let mut rt = super::new_table(a, false);
     rt.add_peer(b);
     rt.add_peer(c);
 
