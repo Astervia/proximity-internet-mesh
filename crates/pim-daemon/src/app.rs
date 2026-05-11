@@ -776,6 +776,12 @@ pub async fn run_in_process(
     // process owning the lock; for in-process Android the lock holds
     // for the lifetime of the JVM, which is one daemon at a time.
     let _ = JNI_EXPOSED_STATE.set(state.clone());
+    // Capture the daemon's Tokio runtime handle so JNI callers
+    // (Kotlin worker threads on Android) can spawn into it without
+    // being inside a runtime context themselves. Without this,
+    // `notify_rfcomm_peer_discovered` panics with "there is no
+    // reactor running" the moment a Kotlin thread fires it.
+    let _ = JNI_RUNTIME_HANDLE.set(tokio::runtime::Handle::current());
 
     // ── Plugin registry ───────────────────────────────────────────────────
     // Plugins consume daemon services through `pim_plugin::PluginContext`.
@@ -1307,6 +1313,12 @@ fn unix_seconds_now() -> i64 {
 /// don't want to thread the state through every JNI call.
 static JNI_EXPOSED_STATE: std::sync::OnceLock<Arc<DaemonState>> = std::sync::OnceLock::new();
 
+/// Tokio runtime handle captured at daemon-state publish time so JNI
+/// wrappers can spawn async work from non-runtime threads (the
+/// Android RFCOMM bridge fires JNI calls from a plain pthread).
+static JNI_RUNTIME_HANDLE: std::sync::OnceLock<tokio::runtime::Handle> =
+    std::sync::OnceLock::new();
+
 /// Public hook for out-of-kernel transport bridges that can't emit
 /// [`RfcommEvent::Discovered`] themselves (today: the Android Kotlin
 /// RFCOMM session). Mirrors what the Linux-side RFCOMM event handler
@@ -1326,6 +1338,19 @@ pub fn notify_rfcomm_peer_discovered(peer_node_id_hex: String) {
         );
         return;
     };
+    // Kotlin worker threads (the only caller today) aren't inside a
+    // Tokio runtime, so `tokio::spawn` in
+    // `spawn_rfcomm_initiator_if_lower` panics with
+    // "there is no reactor running". Borrow the daemon's runtime via
+    // its captured Handle so the spawn lands in the correct context.
+    let Some(handle) = JNI_RUNTIME_HANDLE.get() else {
+        tracing::warn!(
+            peer = %peer_node_id_hex,
+            "notify_rfcomm_peer_discovered: tokio runtime handle not yet published"
+        );
+        return;
+    };
+    let _guard = handle.enter();
     spawn_rfcomm_initiator_if_lower(state.clone(), peer_node_id_hex);
 }
 
@@ -1360,14 +1385,16 @@ fn spawn_rfcomm_initiator_if_lower(state: Arc<DaemonState>, peer_node_id_hex: St
         // Wait for the bridge to deliver the peer's 16-byte NodeId
         // prelude into our loopback listener and for `register_peer`
         // to land in transport.session_map.
+        //
+        // We use `peer_addr(...).await.is_some()` instead of
+        // `connected_peers()` because the latter calls `try_read()` on
+        // the transport's `peers` RwLock and returns `vec![]` whenever
+        // any writer is queued — easy to starve a 50ms poll for 5s when
+        // the daemon is busy with other transport activity. The blocking
+        // `read().await` inside `peer_addr` makes this race-free.
         let deadline = Instant::now() + Duration::from_secs(5);
         loop {
-            if state
-                .transport
-                .connected_peers()
-                .iter()
-                .any(|id| id == &peer_node_id)
-            {
+            if state.transport.peer_addr(&peer_node_id).await.is_some() {
                 break;
             }
             if Instant::now() >= deadline {
