@@ -1320,8 +1320,7 @@ static JNI_EXPOSED_STATE: std::sync::OnceLock<Arc<DaemonState>> = std::sync::Onc
 /// Tokio runtime handle captured at daemon-state publish time so JNI
 /// wrappers can spawn async work from non-runtime threads (the
 /// Android RFCOMM bridge fires JNI calls from a plain pthread).
-static JNI_RUNTIME_HANDLE: std::sync::OnceLock<tokio::runtime::Handle> =
-    std::sync::OnceLock::new();
+static JNI_RUNTIME_HANDLE: std::sync::OnceLock<tokio::runtime::Handle> = std::sync::OnceLock::new();
 
 /// Public hook for out-of-kernel transport bridges that can't emit
 /// [`RfcommEvent::Discovered`] themselves (today: the Android Kotlin
@@ -1376,7 +1375,6 @@ pub fn notify_rfcomm_peer_discovered(peer_node_id_hex: String) {
 pub fn current_discovery_socket_fd() -> Option<std::os::fd::RawFd> {
     pim_discovery::current_socket_fd()
 }
-
 
 /// so when this fires the loopback TCP listener has typically already
 /// `register_peer`'d the peer in `state.transport`'s session map.

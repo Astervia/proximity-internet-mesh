@@ -110,6 +110,35 @@ fn bluetooth_rfcomm_defaults_to_disabled() {
     assert!(config.bluetooth_rfcomm.outbound_enabled);
     assert_eq!(config.bluetooth_rfcomm.poll_interval_ms, 30_000);
     assert!(config.bluetooth_rfcomm.bridge_to_tcp);
+    // Phase 2 discovery defaults: opt-in by default; cadence 60 s
+    // (mirrors `BluetoothPlugin.kt` Android side). Regression-guard
+    // these so a future schema bump can't silently flip them.
+    assert!(config.bluetooth_rfcomm.discovery_enabled);
+    assert_eq!(config.bluetooth_rfcomm.inquiry_interval_ms, 60_000);
+}
+
+#[test]
+fn bluetooth_rfcomm_discovery_knobs_round_trip() {
+    // discovery_enabled = false + a custom inquiry cadence must
+    // survive a config save/reload cycle so users can opt out on
+    // headless gateways.
+    let toml = r#"
+[node]
+name = "t"
+
+[bluetooth_rfcomm]
+enabled = true
+discovery_enabled = false
+inquiry_interval_ms = 30000
+"#;
+    let config = Config::from_toml_str(toml).unwrap();
+    assert!(!config.bluetooth_rfcomm.discovery_enabled);
+    assert_eq!(config.bluetooth_rfcomm.inquiry_interval_ms, 30_000);
+
+    let serialized = config.to_toml_string().unwrap();
+    let reparsed = Config::from_toml_str(&serialized).unwrap();
+    assert!(!reparsed.bluetooth_rfcomm.discovery_enabled);
+    assert_eq!(reparsed.bluetooth_rfcomm.inquiry_interval_ms, 30_000);
 }
 
 #[test]
