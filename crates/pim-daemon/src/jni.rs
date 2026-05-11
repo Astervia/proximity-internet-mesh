@@ -378,6 +378,91 @@ pub extern "system" fn Java_org_astervia_pim_PimDaemon_nativeComputeMeshTag<'loc
     }
 }
 
+/// Re-load the config at `config_path` and return the routing knobs
+/// the Android `VpnService.Builder` needs to wire split-default + DNS
+/// before `establish()` freezes the VPN config. Mirrors what the
+/// Linux-side `route_installer` reads from `[routing]`.
+///
+/// The Kotlin side calls this once per `startDaemon` to feed
+/// `Builder.addDnsServer(...)` and `Builder.addRoute("0.0.0.0", 1)` +
+/// `Builder.addRoute("128.0.0.0", 1)` so the device's default-route
+/// traffic flows through the mesh once the daemon is up.
+///
+/// Returns `null` on any failure; the cause is logged at `error` level.
+#[no_mangle]
+pub extern "system" fn Java_org_astervia_pim_PimDaemon_nativeRoutingConfig<'local>(
+    mut env: JNIEnv<'local>,
+    _class: JClass<'local>,
+    config_path: JString<'local>,
+) -> jni::objects::JString<'local> {
+    let config_path = match jstring_to_string(&mut env, &config_path) {
+        Ok(s) => s,
+        Err(e) => {
+            tracing::error!(?e, "nativeRoutingConfig: failed to decode config_path");
+            return jni::objects::JString::default();
+        }
+    };
+    match build_routing_config(&config_path) {
+        Ok(json) => match env.new_string(json) {
+            Ok(s) => s,
+            Err(e) => {
+                tracing::error!(?e, "nativeRoutingConfig: failed to build JString");
+                jni::objects::JString::default()
+            }
+        },
+        Err(e) => {
+            tracing::error!(?e, %config_path, "nativeRoutingConfig: failed to load");
+            jni::objects::JString::default()
+        }
+    }
+}
+
+#[derive(serde::Serialize)]
+struct RoutingConfigJson {
+    /// DNS servers from `[routing].dns_servers`. Used by the Kotlin
+    /// `VpnService.Builder.addDnsServer(...)` calls so DNS resolution
+    /// survives disabling Wi-Fi.
+    dns_servers: Vec<String>,
+    /// Mesh IPv4 address this node will adopt at boot, derived
+    /// deterministically from the identity stored at
+    /// `[security].key_file` via `pim_core::derive_mesh_ipv4` inside
+    /// the configured `interface.mesh_ipv4_prefix`. The Kotlin side
+    /// feeds this straight to `VpnService.Builder.addAddress(tun_ip,
+    /// tun_prefix)` so the Android TUN matches the daemon's
+    /// `state.mesh_ipv4` from the first packet — no `IpAssign`
+    /// round-trip needed.
+    tun_ip: String,
+    /// CIDR prefix length of the mesh IPv4 prefix (default 16, from
+    /// `pim_core::DEFAULT_MESH_IPV4_PREFIX = "10.77.0.0/16"`).
+    tun_prefix: u8,
+}
+
+fn build_routing_config(config_path: &str) -> anyhow::Result<String> {
+    let config = pim_core::Config::load(std::path::Path::new(config_path))?;
+    // Resolve the configured mesh prefix (falls back to
+    // `pim_core::DEFAULT_MESH_IPV4_PREFIX = 10.77.0.0/16` when unset).
+    // Mirrors `app::runtime_config::parse_mesh_ipv4_prefix`, inlined
+    // here because that helper is `pub(crate)` inside a private
+    // submodule that `crate::app::*` doesn't re-export.
+    let prefix_str = config
+        .interface
+        .mesh_ipv4_prefix
+        .as_deref()
+        .unwrap_or(pim_core::DEFAULT_MESH_IPV4_PREFIX);
+    let prefix = pim_core::Ipv4Prefix::parse(prefix_str)
+        .map_err(|e| anyhow::anyhow!("invalid interface.mesh_ipv4_prefix: {e}"))?;
+    let key_file_str = config.security.key_file.to_string_lossy();
+    let key_path = expand_home(&key_file_str);
+    let identity = pim_crypto::Identity::load_or_generate(std::path::Path::new(&key_path))?;
+    let mesh_ip = pim_core::derive_mesh_ipv4(&identity.node_id(), prefix);
+    let payload = RoutingConfigJson {
+        dns_servers: config.routing.dns_servers.clone(),
+        tun_ip: mesh_ip.to_string(),
+        tun_prefix: prefix.prefix_len,
+    };
+    Ok(serde_json::to_string(&payload)?)
+}
+
 /// Re-load the config + identity at `config_path` and assemble the
 /// local Hello envelope as a JSON string. Pulls `[node].name`,
 /// `[security].key_file`, `[bluetooth_rfcomm].device_name_prefix`,
