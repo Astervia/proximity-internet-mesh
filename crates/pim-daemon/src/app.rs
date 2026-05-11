@@ -1037,6 +1037,10 @@ pub async fn run_in_process(
                     transport_listen_port,
                 ),
             ),
+            discovery_enabled: config.bluetooth_rfcomm.discovery_enabled,
+            inquiry_interval: std::time::Duration::from_millis(
+                config.bluetooth_rfcomm.inquiry_interval_ms.max(1),
+            ),
         };
         let (events_tx, mut events_rx) = tokio::sync::mpsc::channel(64);
         match RfcommService::start(rfcomm_cfg, local_identity, events_tx) {
