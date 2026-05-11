@@ -1,5 +1,5 @@
 use anyhow::{bail, Context, Result};
-use std::net::{Ipv4Addr, Ipv6Addr};
+use std::net::Ipv4Addr;
 use std::path::PathBuf;
 use std::process;
 
@@ -62,10 +62,11 @@ pub(crate) fn cmd_route_on(config_path: PathBuf) -> Result<()> {
     for cidr in split_default_cidrs() {
         replace_split_default_route(cidr, &route_info)?;
     }
-    if route_info.gateway_ipv6.is_some() {
-        for cidr in split_default_ipv6_cidrs() {
-            replace_split_default_route_v6(cidr, &route_info)?;
-        }
+    // Mesh IPv6 is always derived now, so the IPv6 split-default is
+    // unconditional — Linux installs `cidr dev pim0` with no via,
+    // matching the daemon's own route_installer.
+    for cidr in split_default_ipv6_cidrs() {
+        replace_split_default_route_v6(cidr, &route_info)?;
     }
 
     println!(
@@ -84,11 +85,9 @@ pub(crate) fn cmd_route_off(config_path: PathBuf) -> Result<()> {
             removed += 1;
         }
     }
-    if route_info.gateway_ipv6.is_some() {
-        for cidr in split_default_ipv6_cidrs() {
-            if remove_split_default_route_v6(cidr, &route_info)? {
-                removed += 1;
-            }
+    for cidr in split_default_ipv6_cidrs() {
+        if remove_split_default_route_v6(cidr, &route_info)? {
+            removed += 1;
         }
     }
 
@@ -105,15 +104,11 @@ pub(crate) fn cmd_route_status(config_path: PathBuf) -> Result<()> {
     let active_v4 = split_default_cidrs()
         .iter()
         .all(|cidr| split_default_route_present(cidr, &route_info).unwrap_or(false));
-    let active_v6 = route_info
-        .gateway_ipv6
-        .as_ref()
-        .map(|_| {
-            split_default_ipv6_cidrs()
-                .iter()
-                .all(|cidr| split_default_route_present_v6(cidr, &route_info).unwrap_or(false))
-        })
-        .unwrap_or(true);
+    // IPv6 split-default is unconditional — every node has a derived
+    // mesh IPv6, so check both halves alongside the v4 routes.
+    let active_v6 = split_default_ipv6_cidrs()
+        .iter()
+        .all(|cidr| split_default_route_present_v6(cidr, &route_info).unwrap_or(false));
 
     if active_v4 && active_v6 {
         println!(
@@ -142,7 +137,6 @@ pub(crate) struct ConfigInfo {
 pub(crate) struct RouteInfo {
     iface: String,
     gateway_ip: Ipv4Addr,
-    gateway_ipv6: Option<Ipv6Addr>,
 }
 
 const STATS_PATH: &str = "/run/pim.stats";
@@ -203,11 +197,7 @@ pub(crate) fn load_route_info(config_path: &PathBuf) -> Result<RouteInfo> {
         )
     })?;
 
-    Ok(RouteInfo {
-        iface,
-        gateway_ip,
-        gateway_ipv6: None,
-    })
+    Ok(RouteInfo { iface, gateway_ip })
 }
 
 pub(crate) fn ensure_pim_interface_present(iface: &str) -> Result<()> {
@@ -323,9 +313,6 @@ pub(crate) fn replace_split_default_route(_cidr: &str, _route_info: &RouteInfo) 
 
 #[cfg(target_os = "linux")]
 pub(crate) fn replace_split_default_route_v6(cidr: &str, route_info: &RouteInfo) -> Result<()> {
-    let _gateway_ipv6 = route_info
-        .gateway_ipv6
-        .with_context(|| format!("cannot determine IPv6 gateway for {}", route_info.iface))?;
     let status = process::Command::new("ip")
         .args(["-6", "route", "replace", cidr, "dev", &route_info.iface])
         .status()
@@ -338,9 +325,6 @@ pub(crate) fn replace_split_default_route_v6(cidr: &str, route_info: &RouteInfo)
 
 #[cfg(target_os = "macos")]
 pub(crate) fn replace_split_default_route_v6(cidr: &str, route_info: &RouteInfo) -> Result<()> {
-    let _gateway_ipv6 = route_info
-        .gateway_ipv6
-        .with_context(|| format!("cannot determine IPv6 gateway for {}", route_info.iface))?;
     let _ = process::Command::new("route")
         .args([
             "-n",
@@ -406,9 +390,6 @@ pub(crate) fn remove_split_default_route(_cidr: &str, _route_info: &RouteInfo) -
 
 #[cfg(target_os = "linux")]
 pub(crate) fn remove_split_default_route_v6(cidr: &str, route_info: &RouteInfo) -> Result<bool> {
-    let Some(_gateway_ipv6) = route_info.gateway_ipv6 else {
-        return Ok(false);
-    };
     let status = process::Command::new("ip")
         .args(["-6", "route", "del", cidr, "dev", &route_info.iface])
         .status()
@@ -476,9 +457,6 @@ pub(crate) fn split_default_route_present(_cidr: &str, _route_info: &RouteInfo) 
 
 #[cfg(target_os = "linux")]
 pub(crate) fn split_default_route_present_v6(cidr: &str, route_info: &RouteInfo) -> Result<bool> {
-    let Some(_gateway_ipv6) = route_info.gateway_ipv6 else {
-        return Ok(false);
-    };
     let routes = read_ip_route_table_v6()?;
     let expected = format!("{cidr} dev {}", route_info.iface);
     Ok(routes.lines().any(|line| line.contains(&expected)))

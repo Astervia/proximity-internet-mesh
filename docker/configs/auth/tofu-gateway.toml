@@ -3,12 +3,10 @@ name = "gateway"
 data_dir = "/var/lib/pim"
 
 [interface]
-mesh_ip = "10.77.0.1/24"
 mtu = 1400
 
 [discovery]
 enabled = true
-shared_key = "2222222222222222222222222222222222222222222222222222222222222222"
 
 [transport]
 listen_port = 9100

@@ -43,11 +43,20 @@ sleep 10
 # ── 2.1 End-to-end through relay ──────────────────────────────────────────────
 log_section "2.1 Client → relay → gateway → internet"
 
-assert_ping "$RELAY_FILE" client "10.77.0.1" \
-    "client pings gateway mesh IP via relay"
+# Mesh addresses are derived from each container's NodeId at boot —
+# read the live values out of the daemon and assert against those.
+GW_IPV4=$(mesh_ipv4_of "$RELAY_FILE" gateway) || {
+    log_fail "could not read gateway mesh IPv4 from RPC"; exit 1; }
+RELAY_IPV4=$(mesh_ipv4_of "$RELAY_FILE" relay) || {
+    log_fail "could not read relay mesh IPv4 from RPC"; exit 1; }
+log_info "gateway mesh_ipv4 = $GW_IPV4"
+log_info "relay   mesh_ipv4 = $RELAY_IPV4"
 
-assert_ping "$RELAY_FILE" client "10.77.0.10" \
-    "client pings relay mesh IP"
+assert_ping "$RELAY_FILE" client "$GW_IPV4" \
+    "client pings gateway mesh IP via relay ($GW_IPV4)"
+
+assert_ping "$RELAY_FILE" client "$RELAY_IPV4" \
+    "client pings relay mesh IP ($RELAY_IPV4)"
 
 assert_cmd \
     "client enables split-default routing explicitly" \
@@ -82,7 +91,7 @@ log_section "2.4 Large payload through mesh"
 
 # Send 10 KB of data from client to gateway via the mesh TUN and verify reception.
 # Use a simple loopback test on the gateway side.
-GW_IP="10.77.0.1"
+GW_IP="$GW_IPV4"
 if in_svc "$RELAY_FILE" gateway bash -c \
        "nc -l -p 19999 > /tmp/recv.bin &
         NCPID=\$!
@@ -122,14 +131,18 @@ assert_cmd_output "client routing table has routes" "routes" \
 assert_cmd_output "gateway routing table has routes" "routes" \
     in_svc "$ROUTING_FILE" gateway pim status --verbose
 
-assert_ping "$ROUTING_FILE" client "10.77.0.1" \
-    "client reaches gateway via dual-relay mesh"
+ROUTING_GW_IPV4=$(mesh_ipv4_of "$ROUTING_FILE" gateway) || {
+    log_fail "could not read routing-stack gateway mesh IPv4"; exit 1; }
+log_info "routing-stack gateway mesh_ipv4 = $ROUTING_GW_IPV4"
+
+assert_ping "$ROUTING_FILE" client "$ROUTING_GW_IPV4" \
+    "client reaches gateway via dual-relay mesh ($ROUTING_GW_IPV4)"
 
 # ── 2.3 Relay failover ────────────────────────────────────────────────────────
 log_section "2.3 Relay failover"
 
 log_info "Verifying connectivity before killing relay1..."
-assert_ping "$ROUTING_FILE" client "10.77.0.1" \
+assert_ping "$ROUTING_FILE" client "$ROUTING_GW_IPV4" \
     "client → gateway (before failover)"
 
 log_info "Killing relay1..."
@@ -138,7 +151,7 @@ compose "$ROUTING_FILE" stop relay1
 log_info "Waiting 20 s for peer timeout and route convergence..."
 sleep 20
 
-assert_ping "$ROUTING_FILE" client "10.77.0.1" \
+assert_ping "$ROUTING_FILE" client "$ROUTING_GW_IPV4" \
     "client → gateway (after relay1 removed, via relay2)"
 
 # ── 2.5 Full mesh connectivity ────────────────────────────────────────────────

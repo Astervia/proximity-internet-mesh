@@ -29,8 +29,11 @@ wait_all_healthy "$ALLOW_ALL_FILE" 120
 wait_for_peers "$ALLOW_ALL_FILE" client 1 40
 assert_peer_count "$ALLOW_ALL_FILE" client 1 \
     "allow_all client has one peer"
-assert_ping "$ALLOW_ALL_FILE" client "10.77.0.1" \
-    "allow_all client reaches gateway mesh IP"
+ALLOW_ALL_GW_IPV4=$(mesh_ipv4_of "$ALLOW_ALL_FILE" gateway) || {
+    log_fail "could not read allow_all gateway mesh IPv4"; exit 1; }
+log_info "allow_all gateway mesh_ipv4 = $ALLOW_ALL_GW_IPV4"
+assert_ping "$ALLOW_ALL_FILE" client "$ALLOW_ALL_GW_IPV4" \
+    "allow_all client reaches gateway mesh IP ($ALLOW_ALL_GW_IPV4)"
 stop_stack "$ALLOW_ALL_FILE"
 
 log_section "Authorization — allow_list"

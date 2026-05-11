@@ -43,11 +43,17 @@ assert_cmd_output "gateway sees peers in stats after discovery" "peers" \
 assert_cmd_output "relay sees peers in stats after discovery" "peers" \
     in_svc "$COMPOSE_FILE" relay pim status --verbose
 
-assert_ping "$COMPOSE_FILE" client "10.77.0.1" \
-    "client discovered gateway and can ping mesh IP"
+GW_IPV4=$(mesh_ipv4_of "$COMPOSE_FILE" gateway) || {
+    log_fail "could not read gateway mesh IPv4"; exit 1; }
+RELAY_IPV4=$(mesh_ipv4_of "$COMPOSE_FILE" relay) || {
+    log_fail "could not read relay mesh IPv4"; exit 1; }
+log_info "gateway mesh_ipv4 = $GW_IPV4 · relay mesh_ipv4 = $RELAY_IPV4"
 
-assert_ping "$COMPOSE_FILE" client "10.77.0.10" \
-    "client discovered relay and can ping relay mesh IP"
+assert_ping "$COMPOSE_FILE" client "$GW_IPV4" \
+    "client discovered gateway and can ping mesh IP ($GW_IPV4)"
+
+assert_ping "$COMPOSE_FILE" client "$RELAY_IPV4" \
+    "client discovered relay and can ping relay mesh IP ($RELAY_IPV4)"
 
 # ── 3.3 Peer loss detection ───────────────────────────────────────────────────
 log_section "3.3 Peer loss detection (15 s timeout)"
@@ -78,7 +84,7 @@ compose "$COMPOSE_FILE" start relay
 log_info "Waiting 30 s for relay to rejoin and routes to reconverge..."
 sleep 30
 
-assert_ping "$COMPOSE_FILE" client "10.77.0.1" \
+assert_ping "$COMPOSE_FILE" client "$GW_IPV4" \
     "client can reach gateway after relay rejoined"
 
 assert_cmd_output "gateway sees peers again after relay rejoined" "peers" \

@@ -41,8 +41,11 @@ assert_peer_count "$PRIVATE_MESH_FILE" client 1 \
     "client formed a session with the gateway"
 assert_peer_count "$PRIVATE_MESH_FILE" gateway 1 \
     "gateway sees exactly the client (intruder + outsider rejected)"
-assert_ping "$PRIVATE_MESH_FILE" client "10.77.0.1" \
-    "client reaches the gateway over the private mesh"
+PRIVATE_GW_IPV4=$(mesh_ipv4_of "$PRIVATE_MESH_FILE" gateway) || {
+    log_fail "could not read private-mesh gateway IPv4"; exit 1; }
+log_info "private-mesh gateway mesh_ipv4 = $PRIVATE_GW_IPV4"
+assert_ping "$PRIVATE_MESH_FILE" client "$PRIVATE_GW_IPV4" \
+    "client reaches the gateway over the private mesh ($PRIVATE_GW_IPV4)"
 assert_logs_contain "$PRIVATE_MESH_FILE" gateway "private mesh enabled" \
     "gateway logs the private-mesh fingerprint at startup"
 assert_logs_contain "$PRIVATE_MESH_FILE" client "private mesh enabled" \

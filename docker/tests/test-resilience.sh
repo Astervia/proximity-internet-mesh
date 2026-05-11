@@ -41,8 +41,11 @@ start_stack "$RESILIENCE_FILE"
 wait_all_healthy "$RESILIENCE_FILE" 120
 
 log_info "Verifying baseline connectivity..."
-assert_ping "$RESILIENCE_FILE" client "10.77.0.1" \
-    "baseline: client pings gateway"
+GW_IPV4=$(mesh_ipv4_of "$RESILIENCE_FILE" gateway) || {
+    log_fail "could not read gateway mesh IPv4"; exit 1; }
+log_info "gateway derived mesh_ipv4 = $GW_IPV4"
+assert_ping "$RESILIENCE_FILE" client "$GW_IPV4" \
+    "baseline: client pings gateway ($GW_IPV4)"
 
 log_section "4.1 Network disconnect and reconnect"
 
@@ -64,7 +67,7 @@ docker network connect --ip "$RESILIENCE_GATEWAY_IP" "$NETWORK_NAME" pim-resilie
 log_info "Waiting 40 s for reconnect and re-handshake (backoff up to 30 s)..."
 sleep 40
 
-assert_ping "$RESILIENCE_FILE" client "10.77.0.1" \
+assert_ping "$RESILIENCE_FILE" client "$GW_IPV4" \
     "client re-established connectivity after gateway reconnected"
 
 assert_cmd_output "client daemon still running after disruption" "running" \
@@ -78,7 +81,7 @@ log_info "Disconnecting gateway for store-and-forward test..."
 docker network disconnect "$NETWORK_NAME" pim-resilience-gw 2>/dev/null || true
 
 log_info "Sending traffic from client (will be buffered)..."
-in_svc "$RESILIENCE_FILE" client ping -c 3 -W 1 10.77.0.1 >/dev/null 2>&1 || true
+in_svc "$RESILIENCE_FILE" client ping -c 3 -W 1 $GW_IPV4 >/dev/null 2>&1 || true
 
 log_info "Reconnecting gateway after 5 s..."
 sleep 5
@@ -87,7 +90,7 @@ docker network connect --ip "$RESILIENCE_GATEWAY_IP" "$NETWORK_NAME" pim-resilie
 log_info "Waiting 35 s for buffer flush and route recovery..."
 sleep 35
 
-assert_ping "$RESILIENCE_FILE" client "10.77.0.1" \
+assert_ping "$RESILIENCE_FILE" client "$GW_IPV4" \
     "connectivity restored after store-and-forward reconnect"
 
 stop_stack "$RESILIENCE_FILE"
@@ -103,6 +106,13 @@ wait_all_healthy "$FLOW_FILE" 120
 
 log_section "4.3 Flood sender → no OOM"
 
+# Re-derive the gateway's mesh IP for this stack — fresh stack means
+# fresh keystore, so the previous $GW_IPV4 from the resilience stack
+# is meaningless here.
+FLOW_GW_IPV4=$(mesh_ipv4_of "$FLOW_FILE" gateway) || {
+    log_fail "could not read flow-control gateway mesh IPv4"; exit 1; }
+log_info "flow-control gateway mesh_ipv4 = $FLOW_GW_IPV4"
+
 # Record resident memory before flood.
 MEM_BEFORE=$(in_svc "$FLOW_FILE" "flood-sender" bash -c \
     "cat /proc/\$(cat /run/pim.pid)/status 2>/dev/null | grep VmRSS | awk '{print \$2}'" \
@@ -110,7 +120,7 @@ MEM_BEFORE=$(in_svc "$FLOW_FILE" "flood-sender" bash -c \
 
 log_info "Flooding gateway with ICMP for 10 s..."
 in_svc "$FLOW_FILE" "flood-sender" bash -c \
-    "ping -f -c 2000 -W 1 10.77.0.1 >/dev/null 2>&1 || true" &
+    "ping -f -c 2000 -W 1 $FLOW_GW_IPV4 >/dev/null 2>&1 || true" &
 sleep 10
 
 # Record resident memory after flood.
@@ -149,14 +159,19 @@ else
     start_stack "$RESILIENCE_FILE"
     wait_all_healthy "$RESILIENCE_FILE" 120
 
-    assert_ping "$RESILIENCE_FILE" client "10.77.0.1" \
+    # Fresh stack → fresh keystore → re-derive the gateway's mesh IP.
+    GW_IPV4=$(mesh_ipv4_of "$RESILIENCE_FILE" gateway) || {
+        log_fail "could not read gateway mesh IPv4 (NAT timeout stack)"; exit 1; }
+    log_info "NAT-timeout stack gateway mesh_ipv4 = $GW_IPV4"
+
+    assert_ping "$RESILIENCE_FILE" client "$GW_IPV4" \
         "baseline: mesh connectivity before timeout test"
 
     log_info "Testing TCP idle 4 min → connection should still be alive..."
     log_info "Sleeping 240 s (TCP idle timeout = 300 s)..."
     sleep 240
 
-    assert_ping "$RESILIENCE_FILE" client "10.77.0.1" \
+    assert_ping "$RESILIENCE_FILE" client "$GW_IPV4" \
         "TCP idle 4 min: mesh still alive (within conntrack timeout)"
 
     log_info "Testing TCP idle 6 min → conntrack should expire..."
@@ -164,7 +179,7 @@ else
     sleep 120
 
     # After 6 min, a new connection should establish fine (conntrack re-created).
-    assert_ping "$RESILIENCE_FILE" client "10.77.0.1" \
+    assert_ping "$RESILIENCE_FILE" client "$GW_IPV4" \
         "TCP idle 6 min: new connection works (conntrack re-established)"
 
     stop_stack "$RESILIENCE_FILE"
