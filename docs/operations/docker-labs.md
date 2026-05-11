@@ -68,44 +68,60 @@ docs/
 ## Network Topology
 
 Each stack uses its own Docker bridge subnet for transport to avoid cross-phase
-address collisions when multiple test networks exist on the same host.
-The mesh uses `10.77.0.0/24` for TUN addresses.
+address collisions when multiple test networks exist on the same host. The mesh
+uses `10.77.0.0/16` (the default `mesh_ipv4_prefix`) for TUN addresses, with
+each node's host bits **derived from its `NodeId`** at boot — see
+[`pim_core::derive_mesh_ipv4`](../architecture/routing.md). There is no
+`mesh_ip = "10.77.0.X/24"` field anymore: the previously-static addresses
+(gateway = `.1`, relay = `.10`, etc.) became per-container random IPs the
+moment we removed the field.
 
-| Role                                 | Transport IP                            | Mesh IP     | Config file                                |
-| ------------------------------------ | --------------------------------------- | ----------- | ------------------------------------------ |
-| gateway (phase 1 / 4)                | 172.30.0.10 / 172.34.0.10               | 10.77.0.1   | gateway.toml                               |
-| gateway (phase 2 relay)              | 172.31.0.10                             | 10.77.0.1   | gateway.toml                               |
-| gateway (phase 2 routing)            | 172.32.0.10                             | 10.77.0.1   | gateway.toml                               |
-| gateway1 (phase 5)                   | 172.36.0.10                             | 10.77.0.1   | gateway1.toml                              |
-| gateway2 (phase 5)                   | 172.36.0.11                             | 10.77.0.2   | gateway2.toml                              |
-| relay (phase 2 relay / 5)            | 172.31.0.20 / 172.36.0.20               | 10.77.0.10  | relay.toml / relay-multigateway.toml       |
-| relay1 (phase 2 routing / 3)         | 172.32.0.20 / 172.33.0.20               | 10.77.0.10  | relay1.toml / relay.toml                   |
-| relay2 (phase 2 routing)             | 172.32.0.21                             | 10.77.0.11  | relay2.toml                                |
-| client (phase 1 / 4 / 5)             | 172.30.0.30 / 172.34.0.30 / 172.36.0.30 | 10.77.0.100 | client.toml / client-relay.toml            |
-| client (phase 2 relay / routing / 3) | 172.31.0.30 / 172.32.0.30 / 172.33.0.30 | 10.77.0.100 | client-relay.toml / client-dual-relay.toml |
-| client2                              | 172.33.0.31                             | 10.77.0.101 | client2.toml                               |
+> **Lab assertions are temporarily out of date.** Test scripts that do
+> `ping 10.77.0.1` against a gateway need to either:
+>
+> 1. Seed each container's identity with a fixed Ed25519 key (so derivation
+>    yields a stable mesh IP), then re-derive the expected IP per role from
+>    the seeded key, or
+> 2. Read each container's actual mesh IP from `pim status` / the live `pim0`
+>    interface and assert against that.
+>
+> Until that follow-up lands, `make test-multi-gateway` (and any other lab
+> that pings a hard-coded `10.77.0.X`) will fail. The data plane still works;
+> only the assertion is stale.
+
+| Role                                 | Transport IP                            | Config file                                |
+| ------------------------------------ | --------------------------------------- | ------------------------------------------ |
+| gateway (phase 1 / 4)                | 172.30.0.10 / 172.34.0.10               | gateway.toml                               |
+| gateway (phase 2 relay)              | 172.31.0.10                             | gateway.toml                               |
+| gateway (phase 2 routing)            | 172.32.0.10                             | gateway.toml                               |
+| gateway1 (phase 5)                   | 172.36.0.10                             | gateway1.toml                              |
+| gateway2 (phase 5)                   | 172.36.0.11                             | gateway2.toml                              |
+| relay (phase 2 relay / 5)            | 172.31.0.20 / 172.36.0.20               | relay.toml / relay-multigateway.toml       |
+| relay1 (phase 2 routing / 3)         | 172.32.0.20 / 172.33.0.20               | relay1.toml / relay.toml                   |
+| relay2 (phase 2 routing)             | 172.32.0.21                             | relay2.toml                                |
+| client (phase 1 / 4 / 5)             | 172.30.0.30 / 172.34.0.30 / 172.36.0.30 | client.toml / client-relay.toml            |
+| client (phase 2 relay / routing / 3) | 172.31.0.30 / 172.32.0.30 / 172.33.0.30 | client-relay.toml / client-dual-relay.toml |
+| client2                              | 172.33.0.31                             | client2.toml                               |
 
 ### Phase 1 — Single-hop
 
 ```
   client (172.30.0.30)
     └──[TCP 9100]── gateway (172.30.0.10) ──── internet
-  mesh: 10.77.0.100       mesh: 10.77.0.1
 ```
 
 ### Phase 2 — Multi-hop relay
 
 ```
   client ──[TCP 9100]── relay ──[TCP 9100]── gateway ──── internet
-  10.77.0.100           10.77.0.10           10.77.0.1
 ```
 
 ### Phase 2 — Routing / failover (4 containers)
 
 ```
-         ┌──── relay1 (10.77.0.10) ────┐
-  client ┤                              ├── gateway ── internet
-  .100   └──── relay2 (10.77.0.11) ────┘   .1
+         ┌──── relay1 ────┐
+  client ┤                 ├── gateway ── internet
+         └──── relay2 ────┘
 ```
 
 ### Phase 5 — Multi-gateway
@@ -241,7 +257,9 @@ If you need a new topology:
 Config files live in `docker/configs/`. Each file maps to one role. Use the
 existing files as templates. Key rules:
 
-- `mesh_ip` must be a static CIDR — `"auto"` is not supported.
+- Set `[interface].mesh_ipv4_prefix` / `mesh_ipv6_prefix` only if you need to
+  override the defaults (`10.77.0.0/16`, `fd77::/64`) — the per-node host bits
+  are derived from `NodeId` automatically.
 - `key_file` should be `/var/lib/pim/node.key` (the data dir is writable).
 - `[[peers]]` addresses use Docker service hostnames (`gateway:9100`, etc.).
 
@@ -432,9 +450,12 @@ additional tooling:
   can no longer decrypt messages (requires crypto-level introspection).
 - **Packet capture cross-container**: assert that a pcap on the relay contains
   no plaintext IP headers while the client pings the internet.
-- **Dynamic IP assignment** (Phase 3.2): the daemon currently requires a static
-  `mesh_ip`; once `mesh_ip = "auto"` is supported the gateway IP-pool tests can
-  be automated.
+- **Seeded NodeIds for derivation labs**: the previous lab fixtures pinned
+  each container's mesh IP via `mesh_ip = "10.77.0.X/24"`. With derivation,
+  every container's IP depends on its `node.key` — so the existing
+  `ping 10.77.0.1` assertions need either (a) seeded identities so the gateway
+  derives to a known IP, or (b) reading the actual IP via `pim status` and
+  asserting on that value.
 
 ## Debugging Tips
 

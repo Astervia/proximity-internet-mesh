@@ -141,34 +141,24 @@ ControlFrame
 ### Control Types
 
 ```
-0x01  IpRequest       Client requests a mesh IP address
-0x02  IpAssign        Gateway assigns an IP to a client
+0x01  (reserved)      Formerly IpRequest — removed; mesh IPs are derived
+0x02  (reserved)      Formerly IpAssign  — removed; mesh IPs are derived
 0x03  Goodbye         Node is leaving the mesh
 0x04  Rekey           Initiate session rekeying
 0x05  Ping            Mesh-level ping (for latency measurement)
 0x06  Pong            Response to Ping
+0x07  PeerInfo        One-shot exchange of node identity metadata
+0x08  PluginPayload   Generic plugin-defined payload
 ```
 
-### IpRequest
-
-```
-IpRequest
-┌────────────────────────────────────────────────────┐
-│ requester_id: [u8; 16]                             │  16 bytes
-└────────────────────────────────────────────────────┘
-```
-
-### IpAssign
-
-```
-IpAssign
-┌────────────────────────────────────────────────────┐
-│ assigned_ip: [u8; 4]   (e.g., 10.77.0.5)          │  4 bytes
-│ subnet_mask: u8         (e.g., 16)                 │  1 byte
-│ gateway_ip: [u8; 4]     (gateway's mesh IP)        │  4 bytes
-│ lease_seconds: u32      (how long this IP is valid) │  4 bytes
-└────────────────────────────────────────────────────┘
-```
+> **Removed: IpRequest / IpAssign.** Mesh IPs used to be allocated by
+> the elected gateway via these two frames. They are gone now: every
+> daemon derives its own mesh IPv4 + IPv6 from its `NodeId` (see
+> [`pim_core::derive_mesh_ipv4`](../../crates/pim-core/src/mesh_address.rs)),
+> so no allocation handshake is needed. Tag values `0x01` and `0x02`
+> are kept reserved on the wire — a daemon receiving a legacy frame
+> from an old peer surfaces a clean decode error rather than aliasing
+> a future tag.
 
 ### Goodbye
 

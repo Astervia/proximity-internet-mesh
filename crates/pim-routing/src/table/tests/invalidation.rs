@@ -7,7 +7,7 @@ fn remove_routes_via_dead_peer() {
     let b = id(2);
     let c = id(3);
 
-    let mut rt = RoutingTable::new(a, false);
+    let mut rt = super::new_table(a, false);
     rt.add_peer(b);
     rt.apply_update(&advertisement(b, 1, vec![(c, 1, false)]), b);
 
@@ -25,7 +25,7 @@ fn poison_reverse_invalidates_route() {
     let b = id(2);
     let c = id(3);
 
-    let mut rt = RoutingTable::new(a, false);
+    let mut rt = super::new_table(a, false);
     rt.add_peer(b);
     rt.apply_update(&advertisement(b, 1, vec![(c, 1, false)]), b);
     assert!(rt.lookup(c).is_some());
@@ -43,7 +43,7 @@ fn missing_route_in_full_update_withdraws_old_path() {
     let b = id(2);
     let c = id(3);
 
-    let mut rt = RoutingTable::new(a, false);
+    let mut rt = super::new_table(a, false);
     rt.add_peer(b);
     rt.apply_update(&advertisement(b, 1, vec![(c, 1, false)]), b);
     assert!(rt.lookup(c).is_some());

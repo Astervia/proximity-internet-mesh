@@ -19,7 +19,7 @@ pub(crate) fn cmd_status(pid_file: PathBuf, verbose: bool) -> Result<()> {
                 // Try to read the config and show basic info
                 if let Some(config_info) = read_config_info() {
                     println!("  node:      {}", config_info.name);
-                    println!("  mesh_ip:   {}", config_info.mesh_ip);
+                    println!("  mesh:      {}", config_info.mesh_ipv4_prefix);
                     println!(
                         "  role:      {}",
                         if config_info.is_gateway {
@@ -134,7 +134,7 @@ pub(crate) fn cmd_route_status(config_path: PathBuf) -> Result<()> {
 
 pub(crate) struct ConfigInfo {
     name: String,
-    mesh_ip: String,
+    mesh_ipv4_prefix: String,
     is_gateway: bool,
     listen_port: u16,
 }
@@ -171,9 +171,14 @@ pub(crate) fn read_config_info() -> Option<ConfigInfo> {
     let path = DEFAULT_CONFIG;
     let content = std::fs::read_to_string(path).ok()?;
     let config: pim_core::Config = toml::from_str(&content).ok()?;
+    let mesh_ipv4_prefix = config
+        .interface
+        .mesh_ipv4_prefix
+        .clone()
+        .unwrap_or_else(|| pim_core::DEFAULT_MESH_IPV4_PREFIX.to_string());
     Some(ConfigInfo {
         name: config.node.name,
-        mesh_ip: config.interface.mesh_ip,
+        mesh_ipv4_prefix,
         is_gateway: config.gateway.enabled,
         listen_port: config.transport.listen_port,
     })
@@ -185,24 +190,23 @@ pub(crate) fn load_route_info(config_path: &PathBuf) -> Result<RouteInfo> {
     let config: pim_core::Config = toml::from_str(&content)
         .with_context(|| format!("invalid TOML in {}", config_path.display()))?;
     let iface = config.interface.name;
-    let gateway_ip = active_gateway_ip(&iface)
-        .or_else(|| gateway_ip_from_config_mesh_ip(&config.interface.mesh_ip))
-        .with_context(|| {
-            format!(
-                "cannot determine gateway IP for {}; start pim first or use a static mesh_ip",
-                iface
-            )
-        })?;
-    let gateway_ipv6 = config
-        .interface
-        .mesh_ipv6
-        .as_deref()
-        .and_then(gateway_ipv6_from_config_mesh_ip);
+    // Mesh addresses are derived from each NodeId now, so the
+    // gateway IP isn't a static `.1` of the prefix anymore. The CLI
+    // can only honestly install a route via the live pim0 interface
+    // — when the daemon is running, its route_installer (which
+    // queries `RoutingTable::nearest_gateway_mesh_ip`) is the
+    // authoritative path.
+    let gateway_ip = active_gateway_ip(&iface).with_context(|| {
+        format!(
+            "cannot determine gateway IP for {iface}; start pim first so the \
+                 daemon's route installer can elect a gateway"
+        )
+    })?;
 
     Ok(RouteInfo {
         iface,
         gateway_ip,
-        gateway_ipv6,
+        gateway_ipv6: None,
     })
 }
 
@@ -223,17 +227,6 @@ pub(crate) fn active_gateway_ip(iface: &str) -> Option<Ipv4Addr> {
     }
     let stdout = String::from_utf8(output.stdout).ok()?;
     parse_first_ipv4_cidr(&stdout).and_then(gateway_ip_from_cidr)
-}
-
-pub(crate) fn gateway_ip_from_config_mesh_ip(mesh_ip: &str) -> Option<Ipv4Addr> {
-    parse_first_ipv4_cidr(mesh_ip).and_then(gateway_ip_from_cidr)
-}
-
-pub(crate) fn gateway_ipv6_from_config_mesh_ip(mesh_ip: &str) -> Option<Ipv6Addr> {
-    let (ip, prefix_len) = mesh_ip.split_once('/')?;
-    let ip: Ipv6Addr = ip.parse().ok()?;
-    let prefix_len: u8 = prefix_len.parse().ok()?;
-    first_host_in_subnet_v6(ip, prefix_len)
 }
 
 pub(crate) fn parse_first_ipv4_cidr(s: &str) -> Option<&str> {
@@ -263,22 +256,6 @@ pub(crate) fn first_host_in_subnet(ip: Ipv4Addr, prefix_len: u8) -> Option<Ipv4A
     };
     let network = ip_u32 & mask;
     Some(Ipv4Addr::from(network.saturating_add(1)))
-}
-
-pub(crate) fn first_host_in_subnet_v6(ip: Ipv6Addr, prefix_len: u8) -> Option<Ipv6Addr> {
-    if prefix_len > 128 {
-        return None;
-    }
-    let ip_u128 = u128::from(ip);
-    let mask = if prefix_len == 0 {
-        0
-    } else if prefix_len >= 128 {
-        u128::MAX
-    } else {
-        !((1u128 << (128 - prefix_len)) - 1)
-    };
-    let network = ip_u128 & mask;
-    Some(Ipv6Addr::from(network.saturating_add(1)))
 }
 
 pub(crate) fn split_default_cidrs() -> [&'static str; 2] {

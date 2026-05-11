@@ -31,7 +31,7 @@ Transport listen port:
 - all nodes listen on `9100`
 
 Current implementation note:
-The daemon can start with `mesh_ip = "auto"` and request an assignment from a gateway, but the most deterministic way to run a lab is still to use explicit static mesh CIDRs on every node.
+Mesh addresses are derived deterministically from each node's `NodeId` inside `[interface].mesh_ipv4_prefix` / `mesh_ipv6_prefix`. To keep a node's address stable across restarts, preserve its `node.key` file — the same key always derives to the same mesh IP.
 
 ## Example Gateway Config
 
@@ -41,7 +41,8 @@ name = "gateway-a"
 
 [interface]
 name = "pim0"
-mesh_ip = "10.77.0.1/24"
+mesh_ipv4_prefix = "10.77.0.0/16"
+mesh_ipv6_prefix = "fd77::/64"
 mtu = 1400
 
 [transport]
@@ -75,7 +76,8 @@ name = "relay-b"
 
 [interface]
 name = "pim0"
-mesh_ip = "10.77.0.2/24"
+mesh_ipv4_prefix = "10.77.0.0/16"
+mesh_ipv6_prefix = "fd77::/64"
 mtu = 1400
 
 [transport]
@@ -110,7 +112,8 @@ name = "client-c"
 
 [interface]
 name = "pim0"
-mesh_ip = "10.77.0.3/24"
+mesh_ipv4_prefix = "10.77.0.0/16"
+mesh_ipv6_prefix = "fd77::/64"
 mtu = 1400
 
 [transport]
@@ -259,7 +262,7 @@ It does not:
 - Start by validating direct TCP reachability between peers before debugging routing.
 - If packets do not leave the mesh, check whether a gateway route was learned.
 - If packets reach the gateway but not the internet, check NAT setup and interface permissions.
-- If the daemon refuses to start, verify that `mesh_ip` is explicit and that `/dev/net/tun` is available.
+- If the daemon refuses to start, verify that `[interface].mesh_ipv4_prefix` parses cleanly and that `/dev/net/tun` is available.
 
 ## Current Gaps To Keep In Mind
 

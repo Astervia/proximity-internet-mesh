@@ -62,16 +62,23 @@ Settings for the Linux TUN interface that carries mesh IP traffic. Backed by
 |-----|------|---------|----------|-------|
 | `name` | string | `"pim0"` | no | Requested TUN interface name. macOS requires a `utunN` name (e.g. `utun0`). |
 | `mtu` | integer | `1400` | no | Interface MTU in bytes. Keep this consistent across all nodes in the mesh. |
-| `mesh_ip` | string | `"auto"` | no | Mesh IPv4 address as a CIDR (e.g. `"10.77.0.1/24"`) or the string `"auto"` to request automatic assignment from a gateway. |
-| `mesh_ipv6` | optional string | _(none)_ | no | Optional mesh IPv6 CIDR assigned to the local TUN interface (e.g. `"fd77::10/64"`). Leave unset to run IPv4-only. |
+| `mesh_ipv4_prefix` | optional string | `"10.77.0.0/16"` | no | Mesh IPv4 prefix. Each node's host bits inside this prefix are derived from its `NodeId` via [`pim_core::derive_mesh_ipv4`](../../crates/pim-core/src/mesh_address.rs); two daemons sharing the prefix get unique addresses without coordination. Widen to `/14` if a small mesh hits the `/16` birthday-bound (≈300 nodes for 50%). |
+| `mesh_ipv6_prefix` | optional string | `"fd77::/64"` | no | Mesh IPv6 prefix. `/64` is collision-free at PIM scale. |
 
 ```toml
 [interface]
 name = "pim0"
-mesh_ip = "10.77.0.10/24"
+mesh_ipv4_prefix = "10.77.0.0/16"
+mesh_ipv6_prefix = "fd77::/64"
 mtu = 1400
-# mesh_ipv6 = "fd77::10/64"
 ```
+
+> **Removed.** The `mesh_ip` / `mesh_ipv6` keys and the `"auto"` sentinel
+> were dropped when mesh addresses became deterministic from each
+> daemon's `NodeId`. Configs that still set them parse cleanly (the keys
+> are silently ignored) but the values have no effect — the per-node
+> address is whatever derivation produces. See
+> [routing.md](../architecture/routing.md#address-assignment).
 
 ---
 

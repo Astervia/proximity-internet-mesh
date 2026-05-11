@@ -70,6 +70,14 @@ pub struct NodeConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 /// Settings for the Linux TUN interface that carries mesh IP traffic.
+///
+/// Mesh addresses are derived deterministically from each node's
+/// `NodeId` via [`pim_core::derive_mesh_ipv4`] / [`derive_mesh_ipv6`].
+/// Configure only the mesh **prefix**; the per-node host bits come from
+/// the derivation. Two daemons sharing a prefix will never collide on
+/// IPv6 (`/64` is collision-free at PIM scale) and only rarely on IPv4
+/// in small prefixes; collisions degrade gracefully — see the routing
+/// docs.
 pub struct InterfaceConfig {
     /// Requested interface name, for example `pim0`.
     #[serde(default = "default_interface_name")]
@@ -77,12 +85,15 @@ pub struct InterfaceConfig {
     /// Interface MTU in bytes.
     #[serde(default = "default_mtu")]
     pub mtu: u32,
-    /// Mesh IPv4 address or the string `\"auto\"` to request assignment automatically.
-    #[serde(default = "default_mesh_ip")]
-    pub mesh_ip: String,
-    /// Optional mesh IPv6 CIDR assigned to the local TUN interface.
+    /// Mesh IPv4 prefix (e.g. `"10.77.0.0/16"`). Defaults to
+    /// [`pim_core::DEFAULT_MESH_IPV4_PREFIX`]. Each node's host bits
+    /// inside this prefix are derived from its `NodeId`.
     #[serde(default)]
-    pub mesh_ipv6: Option<String>,
+    pub mesh_ipv4_prefix: Option<String>,
+    /// Mesh IPv6 prefix (e.g. `"fd77::/64"`). Defaults to
+    /// [`pim_core::DEFAULT_MESH_IPV6_PREFIX`]. `/64` recommended.
+    #[serde(default)]
+    pub mesh_ipv6_prefix: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -541,10 +552,6 @@ fn default_mtu() -> u32 {
     1400
 }
 
-fn default_mesh_ip() -> String {
-    "auto".into()
-}
-
 fn default_discovery_enabled() -> bool {
     true
 }
@@ -734,8 +741,8 @@ impl Default for InterfaceConfig {
         Self {
             name: default_interface_name(),
             mtu: default_mtu(),
-            mesh_ip: default_mesh_ip(),
-            mesh_ipv6: None,
+            mesh_ipv4_prefix: None,
+            mesh_ipv6_prefix: None,
         }
     }
 }

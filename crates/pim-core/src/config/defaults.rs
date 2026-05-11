@@ -16,10 +16,6 @@ pub(super) fn default_mtu() -> u32 {
     1400
 }
 
-pub(super) fn default_mesh_ip() -> String {
-    "auto".into()
-}
-
 pub(super) fn default_discovery_enabled() -> bool {
     true
 }

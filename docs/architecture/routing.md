@@ -67,25 +67,51 @@ Node B acts as a GC in Group 2 while being the GO of Group 1, bridging the two g
 
 ## IP Addressing
 
-Each node in the mesh receives an internal IP address from a private range:
+Each node in the mesh occupies a deterministic slot inside two
+configurable prefixes:
 
 ```
-Mesh subnet:   10.77.0.0/16
-Node A:        10.77.0.1
-Node B:        10.77.0.2
-Gateway D:     10.77.0.4
+Mesh IPv4 prefix:   10.77.0.0/16   (interface.mesh_ipv4_prefix)
+Mesh IPv6 prefix:   fd77::/64      (interface.mesh_ipv6_prefix)
 ```
 
 ### Address Assignment
 
-- Gateway nodes act as lightweight DHCP within the mesh:
-    - Each gateway manages a slice of the address space
-    - On mesh join, a client requests an address from the nearest gateway
-- Alternatively, addresses can be deterministically derived from the node ID:
-    ```
-    mesh_ip = 10.77. || node_id[0] . node_id[1]
-    ```
-    With collision resolution if needed.
+Mesh addresses are **derived deterministically** from each node's
+`NodeId` via [`pim_core::derive_mesh_ipv4`] / [`derive_mesh_ipv6`].
+Two daemons sharing the same prefix never need to coordinate to pick
+unique addresses — the derivation is offline, idempotent, and
+authenticated end-to-end through the handshake.
+
+- **Self-assignment is offline.** Every daemon computes its own
+  address at boot from `self_id`. There is no `IpRequest` round-trip,
+  no central pool, no lease.
+- **Reverse lookup is offline.** Given a peer's `NodeId`, anyone can
+  recover its mesh IP. The routing table populates its `mesh_ip`
+  reverse index from `derive(peer.node_id)` when it accepts a route,
+  so the peer doesn't even have to advertise a mesh IP.
+- **Multi-gateway is no longer special.** Two gateways covering the
+  same prefix see the same derivation; there's nothing to allocate.
+
+#### Collision behaviour
+
+IPv4 derivation hashes into the host bits of the configured prefix.
+At a `/16`, the birthday-bound 50% collision sits around ~300 nodes;
+at `/14` it widens to ~1200. When two `NodeId`s do collide on the
+same IPv4 host slot, the routing table's `mesh_ip_index` is
+**first-writer wins** — the second peer's IPv4 traffic is dropped
+and a `mesh_ip_collisions_total` counter increments (visible via the
+debug snapshot). The IPv6 path stays usable because `/64` is
+collision-free at PIM scale; deployments that care about IPv4
+collisions should widen `mesh_ipv4_prefix` or rely on IPv6.
+
+#### Verification
+
+Old daemons may still advertise a `mesh_ip` field inside route
+updates. The receiver runs
+[`pim_core::verify_mesh_ipv4`](../../crates/pim-core/src/mesh_address.rs)
+on every advertisement and logs a `WARN` on mismatch — the advertised
+value is **never trusted**, only the derivation is.
 
 ### Routing to the Internet
 

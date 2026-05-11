@@ -36,7 +36,7 @@ fn load_aware_selection_prefers_less_loaded_gateway() {
     let gw1 = id(10);
     let gw2 = id(11);
 
-    let mut rt = RoutingTable::new(self_id, false);
+    let mut rt = super::new_table(self_id, false);
     rt.add_peer(relay_a);
     rt.add_peer(relay_b);
 
@@ -65,7 +65,7 @@ fn rtt_aware_selection_prefers_lower_latency_gateway() {
     let gw1 = id(10);
     let gw2 = id(11);
 
-    let mut rt = RoutingTable::new(self_id, false);
+    let mut rt = super::new_table(self_id, false);
     rt.add_peer(relay_a);
     rt.add_peer(relay_b);
 
@@ -92,7 +92,7 @@ fn rtt_aware_selection_switches_at_high_latency() {
     let gw1 = id(10);
     let gw2 = id(11);
 
-    let mut rt = RoutingTable::new(self_id, false);
+    let mut rt = super::new_table(self_id, false);
     rt.add_peer(relay_a);
     rt.add_peer(relay_b);
 
@@ -114,7 +114,7 @@ fn failover_to_second_gateway_when_first_removed() {
     let gw1 = id(10);
     let gw2 = id(11);
 
-    let mut rt = RoutingTable::new(self_id, false);
+    let mut rt = super::new_table(self_id, false);
     rt.add_peer(relay_a);
     rt.add_peer(relay_b);
 
@@ -141,7 +141,7 @@ fn all_gateways_sorted_by_score() {
     let gw1 = id(10); // 2 hops, load=200 → score=200+100=300
     let gw2 = id(11); // 3 hops, load=0   → score=300
 
-    let mut rt = RoutingTable::new(self_id, false);
+    let mut rt = super::new_table(self_id, false);
     rt.add_peer(relay_a);
     rt.add_peer(relay_b);
 
@@ -160,7 +160,7 @@ fn all_gateways_sorted_by_score() {
 
 #[test]
 fn update_gateway_load_only_applies_to_gateway_entries() {
-    let mut rt = RoutingTable::new(id(1), false);
+    let mut rt = super::new_table(id(1), false);
     rt.add_peer(id(2));
     // id(2) is not a gateway — update_gateway_load should be a no-op
     rt.update_gateway_load(id(2), 200);
@@ -169,7 +169,7 @@ fn update_gateway_load_only_applies_to_gateway_entries() {
 
 #[test]
 fn update_gateway_rtt_only_applies_to_gateway_entries() {
-    let mut rt = RoutingTable::new(id(1), false);
+    let mut rt = super::new_table(id(1), false);
     rt.add_peer(id(2));
     rt.update_gateway_rtt(id(2), 50);
     assert_eq!(rt.routes[&id(2)].rtt_ms, None);
@@ -181,7 +181,7 @@ fn update_returns_changed_only_on_change() {
     let b = id(2);
     let c = id(3);
 
-    let mut rt = RoutingTable::new(a, false);
+    let mut rt = super::new_table(a, false);
     rt.add_peer(b);
 
     let upd = advertisement(b, 1, vec![(c, 1, false)]);
@@ -201,7 +201,7 @@ fn gateway_flag_flip_marks_update_changed() {
     let a = id(1);
     let b = id(2);
 
-    let mut rt = RoutingTable::new(a, false);
+    let mut rt = super::new_table(a, false);
     rt.add_peer(b);
     assert!(!rt.routes[&b].is_gateway);
 

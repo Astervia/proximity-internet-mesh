@@ -1,13 +1,11 @@
 # Relay for multi-gateway tests (Phase 5).
 # Connected to both gateway1 and gateway2 so it can route to either.
-# Transport address: relay:9100  Mesh IP: 10.77.0.10/24
 
 [node]
 name = "relay"
 data_dir = "/var/lib/pim"
 
 [interface]
-mesh_ip = "10.77.0.10/24"
 mtu = 1400
 
 [transport]

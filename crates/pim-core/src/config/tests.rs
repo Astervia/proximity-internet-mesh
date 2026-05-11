@@ -22,8 +22,8 @@ data_dir = "/tmp/pim"
 [interface]
 name = "pim0"
 mtu = 1400
-mesh_ip = "auto"
-mesh_ipv6 = "fd77::10/64"
+mesh_ipv4_prefix = "10.77.0.0/16"
+mesh_ipv6_prefix = "fd77::/64"
 
 [discovery]
 enabled = true

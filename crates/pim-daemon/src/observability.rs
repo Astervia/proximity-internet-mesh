@@ -1,4 +1,3 @@
-use std::net::Ipv4Addr;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Duration;
@@ -205,9 +204,8 @@ async fn build_debug_snapshot(state: &Arc<DaemonState>) -> DebugSnapshot {
             node_id: state.self_id.to_hex(),
             short_id: state.self_id.to_string(),
             is_gateway: state.is_gateway,
-            mesh_ip: Ipv4Addr::from(state.mesh_ip.load(Ordering::Relaxed)).to_string(),
-            mesh_prefix_len: state.mesh_prefix_len.load(Ordering::Relaxed),
-            request_dynamic_ip: state.request_dynamic_ip,
+            mesh_ip: state.mesh_ipv4.to_string(),
+            mesh_prefix_len: state.mesh_ipv4_prefix.prefix_len,
         },
         stats: DebugStatsSnapshot {
             peers: stats.peers,

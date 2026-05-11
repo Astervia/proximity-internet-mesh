@@ -24,11 +24,12 @@
 
 use std::collections::{HashMap, HashSet};
 use std::net::Ipv4Addr;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use tracing::{debug, info, trace, warn};
 
-use pim_core::NodeId;
+use pim_core::{derive_mesh_ipv4, verify_mesh_ipv4, Ipv4Prefix, NodeId};
 use pim_protocol::{RouteEntry, RouteUpdateFrame};
 
 // ── Constants ─────────────────────────────────────────────────────────────────
@@ -120,12 +121,30 @@ pub struct RoutingTable {
     blacklisted_peers: HashSet<NodeId>,
     self_mesh_ip: Option<Ipv4Addr>,
     /// Reverse index: mesh IPv4 → destination NodeId for O(1) `lookup_mesh_ip`.
+    ///
+    /// First-writer-wins: if two NodeIds derive to the same IPv4
+    /// address inside the configured prefix (a birthday collision in
+    /// small prefixes), the second insert is dropped and a counter
+    /// increments. The colliding peer's traffic falls back to the v6
+    /// path, which is collision-free at `/64`.
     mesh_ip_index: HashMap<Ipv4Addr, NodeId>,
+    /// Mesh IPv4 prefix used to derive every peer's mesh IP from its
+    /// `NodeId`. Read on every `add_route` / `apply_update` to
+    /// populate the reverse index.
+    ipv4_prefix: Ipv4Prefix,
+    /// Lifetime count of `(ip, dst != existing)` rejections from the
+    /// reverse index. Surfaced via the observability snapshot so a
+    /// spike is operator-visible.
+    mesh_ip_collisions_total: AtomicU64,
 }
 
 impl RoutingTable {
-    /// Create a routing table for `self_id`.
-    pub fn new(self_id: NodeId, is_gateway: bool) -> Self {
+    /// Create a routing table for `self_id` inside `ipv4_prefix`.
+    ///
+    /// The prefix is used to derive every peer's mesh IPv4 from its
+    /// `NodeId` (see [`pim_core::derive_mesh_ipv4`]). Daemons that
+    /// share a mesh must agree on the prefix.
+    pub fn new(self_id: NodeId, is_gateway: bool, ipv4_prefix: Ipv4Prefix) -> Self {
         Self {
             self_id,
             is_gateway,
@@ -136,29 +155,65 @@ impl RoutingTable {
             blacklisted_peers: HashSet::new(),
             self_mesh_ip: None,
             mesh_ip_index: HashMap::new(),
+            ipv4_prefix,
+            mesh_ip_collisions_total: AtomicU64::new(0),
         }
     }
 
-    /// Insert or update a route, keeping `mesh_ip_index` in sync.
-    fn insert_route(&mut self, dst: NodeId, entry: RouteTableEntry) {
+    /// Replace the IPv4 prefix used for derivation. Provided for
+    /// boot-ordering convenience (when the prefix is built later than
+    /// the routing table). Safe to call any time; existing entries
+    /// keep their previously-derived `mesh_ip` until refreshed.
+    pub fn set_ipv4_prefix(&mut self, prefix: Ipv4Prefix) {
+        self.ipv4_prefix = prefix;
+    }
+
+    /// Lifetime number of mesh-IP reverse-index collisions observed.
+    pub fn mesh_ip_collisions_total(&self) -> u64 {
+        self.mesh_ip_collisions_total.load(Ordering::Relaxed)
+    }
+
+    /// Insert or update a route, keeping `mesh_ip_index` in sync. The
+    /// stored mesh IP is **derived** from `dst` plus the routing
+    /// table's IPv4 prefix; any peer-advertised value is verified
+    /// elsewhere and never trusted.
+    fn insert_route(&mut self, dst: NodeId, mut entry: RouteTableEntry) {
+        let derived = derive_mesh_ipv4(&dst, self.ipv4_prefix);
+        entry.mesh_ip = Some(derived);
         if let Some(old) = self.routes.get(&dst) {
-            if old.mesh_ip != entry.mesh_ip {
+            if old.mesh_ip != Some(derived) {
                 if let Some(old_ip) = old.mesh_ip {
                     self.mesh_ip_index.remove(&old_ip);
                 }
             }
         }
-        if let Some(ip) = entry.mesh_ip {
-            self.mesh_ip_index.insert(ip, dst);
+        match self.mesh_ip_index.get(&derived) {
+            Some(existing) if *existing != dst => {
+                self.mesh_ip_collisions_total
+                    .fetch_add(1, Ordering::Relaxed);
+                info!(
+                    %dst,
+                    existing = %existing,
+                    ip = %derived,
+                    "mesh-IP derivation collision; first writer wins"
+                );
+            }
+            _ => {
+                self.mesh_ip_index.insert(derived, dst);
+            }
         }
         self.routes.insert(dst, entry);
     }
 
-    /// Remove a route, keeping `mesh_ip_index` in sync.
+    /// Remove a route, keeping `mesh_ip_index` in sync. Only removes
+    /// the index entry if it still points at this `dst` — protects
+    /// against losing the index for a peer that won a collision race.
     fn remove_route(&mut self, dst: &NodeId) -> Option<RouteTableEntry> {
         let entry = self.routes.remove(dst)?;
         if let Some(ip) = entry.mesh_ip {
-            self.mesh_ip_index.remove(&ip);
+            if self.mesh_ip_index.get(&ip) == Some(dst) {
+                self.mesh_ip_index.remove(&ip);
+            }
         }
         Some(entry)
     }
@@ -172,7 +227,10 @@ impl RoutingTable {
     pub fn add_peer(&mut self, peer_id: NodeId) {
         self.direct_peers.insert(peer_id);
         // A direct peer is 1 hop away; install/refresh its route immediately.
-        self.routes.insert(
+        // Going through `insert_route` keeps the derived `mesh_ip`
+        // and the reverse index in sync — direct peers must be
+        // reachable via `lookup_mesh_ip` for the TUN ingress path.
+        self.insert_route(
             peer_id,
             RouteTableEntry {
                 next_hop: peer_id,
@@ -238,11 +296,22 @@ impl RoutingTable {
             .iter()
             .map(|entry| entry.destination)
             .collect();
-        let advertised_self_mesh_ip = update
-            .entries
-            .iter()
-            .find(|entry| entry.destination == from_peer && entry.hops == 0)
-            .and_then(|entry| decode_mesh_ip(entry.mesh_ip));
+
+        // Cross-check any peer-advertised mesh_ip against derivation.
+        // Mismatches surface old daemons / misconfigured labs / spoof
+        // attempts at WARN — never trusted, never fatal.
+        for entry in &update.entries {
+            if let Some(claimed) = decode_mesh_ip(entry.mesh_ip) {
+                if !verify_mesh_ipv4(&entry.destination, claimed, self.ipv4_prefix) {
+                    let derived = derive_mesh_ipv4(&entry.destination, self.ipv4_prefix);
+                    warn!(
+                        from = %from_peer, dst = %entry.destination,
+                        claimed = %claimed, derived = %derived,
+                        "advertised mesh_ip does not match NodeId derivation; ignoring"
+                    );
+                }
+            }
+        }
 
         // Update last_seen for the advertising peer itself
         if let Some(entry) = self.routes.get_mut(&from_peer) {
@@ -260,7 +329,7 @@ impl RoutingTable {
                     sequence: update.sequence,
                     gateway_load: 0,
                     rtt_ms: None,
-                    mesh_ip: advertised_self_mesh_ip,
+                    mesh_ip: None, // overwritten by insert_route from derivation
                 },
             );
             changed = true;
@@ -294,7 +363,8 @@ impl RoutingTable {
 
             match self.routes.get(&dst) {
                 None => {
-                    // New route
+                    // New route — `mesh_ip` is overwritten by
+                    // insert_route from `derive_mesh_ipv4(dst, prefix)`.
                     self.insert_route(
                         dst,
                         RouteTableEntry {
@@ -306,7 +376,7 @@ impl RoutingTable {
                             sequence: update.sequence,
                             gateway_load: 0,
                             rtt_ms: None,
-                            mesh_ip: decode_mesh_ip(advertised.mesh_ip),
+                            mesh_ip: None,
                         },
                     );
                     debug!(%dst, hops = new_hops, via = %from_peer, "new route");
@@ -320,15 +390,14 @@ impl RoutingTable {
                     if better_path || newer_seq {
                         let old_hops = existing.hops;
                         let gateway_flag_flipped = existing.is_gateway != is_gw;
-                        // Preserve load/rtt when refreshing an existing gateway entry
-                        let (prev_load, prev_rtt, prev_mesh_ip) =
-                            if existing.is_gateway && !better_path {
-                                (existing.gateway_load, existing.rtt_ms, existing.mesh_ip)
-                            } else {
-                                (0, None, None)
-                            };
-                        let new_mesh_ip = decode_mesh_ip(advertised.mesh_ip).or(prev_mesh_ip);
-                        let mesh_ip_changed = existing.mesh_ip != new_mesh_ip;
+                        // Preserve load/rtt when refreshing an existing
+                        // gateway entry. mesh_ip is re-derived by
+                        // insert_route — no need to thread it through.
+                        let (prev_load, prev_rtt) = if existing.is_gateway && !better_path {
+                            (existing.gateway_load, existing.rtt_ms)
+                        } else {
+                            (0, None)
+                        };
                         self.insert_route(
                             dst,
                             RouteTableEntry {
@@ -340,17 +409,17 @@ impl RoutingTable {
                                 sequence: update.sequence,
                                 gateway_load: prev_load,
                                 rtt_ms: prev_rtt,
-                                mesh_ip: new_mesh_ip,
+                                mesh_ip: None,
                             },
                         );
                         if better_path {
                             debug!(%dst, old = old_hops, new = new_hops, "route improved");
                             changed = true;
                         }
-                        if gateway_flag_flipped || mesh_ip_changed {
+                        if gateway_flag_flipped {
                             debug!(
                                 %dst, via = %from_peer,
-                                gateway_flag_flipped, mesh_ip_changed,
+                                gateway_flag_flipped,
                                 "route attributes changed"
                             );
                             changed = true;

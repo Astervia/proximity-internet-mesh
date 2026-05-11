@@ -82,7 +82,6 @@ pub(crate) fn render_config_template(roles: &[NodeRole], override_name: Option<&
     let node_name = override_name
         .map(ToOwned::to_owned)
         .unwrap_or_else(|| default_node_name(&roles));
-    let mesh_ip = default_mesh_ip(&roles);
     let peer_example = default_peer_example(&roles);
     let roles_label = roles
         .iter()
@@ -94,7 +93,7 @@ pub(crate) fn render_config_template(roles: &[NodeRole], override_name: Option<&
 
     push_header(&mut out, &roles_label);
     push_node(&mut out, &node_name);
-    push_interface(&mut out, mesh_ip);
+    push_interface(&mut out);
     push_discovery(&mut out);
     push_mesh(&mut out);
     push_transport(&mut out);
@@ -138,7 +137,7 @@ fn push_node(out: &mut String, node_name: &str) {
     push_blank(out);
 }
 
-fn push_interface(out: &mut String, mesh_ip: &str) {
+fn push_interface(out: &mut String) {
     push_line(out, "[interface]");
     push_line(
         out,
@@ -147,14 +146,31 @@ fn push_interface(out: &mut String, mesh_ip: &str) {
     push_line(out, &format!("name = {:?}", default_interface_name()));
     push_line(
         out,
-        "# Use a static CIDR for predictable labs or \"auto\" to request an address from a gateway.",
+        "# Mesh IPv4 prefix. Each node's host bits are derived from its NodeId, so two daemons",
     );
-    push_line(out, &format!("mesh_ip = {:?}", mesh_ip));
     push_line(
         out,
-        "# Optional static IPv6 ULA on the mesh TUN. Leave commented to run IPv4-only.",
+        "# sharing this prefix get unique addresses without coordination. Widen to /14 if the",
     );
-    push_line(out, "# mesh_ipv6 = \"fd77::10/64\"");
+    push_line(out, "# default /16 birthday-collides on small meshes.");
+    push_line(
+        out,
+        &format!(
+            "mesh_ipv4_prefix = {:?}",
+            pim_core::DEFAULT_MESH_IPV4_PREFIX
+        ),
+    );
+    push_line(
+        out,
+        "# Mesh IPv6 prefix. /64 is collision-free at PIM scale; the default ULA is recommended.",
+    );
+    push_line(
+        out,
+        &format!(
+            "mesh_ipv6_prefix = {:?}",
+            pim_core::DEFAULT_MESH_IPV6_PREFIX
+        ),
+    );
     push_line(
         out,
         "# Keep this aligned with the mesh MTU expected by other peers.",
@@ -723,16 +739,6 @@ pub(crate) fn default_node_name(roles: &BTreeSet<NodeRole>) -> String {
         .collect::<Vec<_>>()
         .join("-");
     format!("{joined}-node")
-}
-
-pub(crate) fn default_mesh_ip(roles: &BTreeSet<NodeRole>) -> &'static str {
-    if roles.contains(&NodeRole::Gateway) {
-        "10.77.0.1/24"
-    } else if roles.contains(&NodeRole::Relay) {
-        "10.77.0.10/24"
-    } else {
-        "auto"
-    }
 }
 
 pub(crate) fn default_interface_name() -> &'static str {

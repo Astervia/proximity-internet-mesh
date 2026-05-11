@@ -142,7 +142,9 @@ async fn run(state: Arc<DaemonState>) {
         //       configured mesh IPv6 (the per-gateway mesh_ipv6 isn't
         //       yet exposed by the routing table, so we don't switch on
         //       gateway-selection — the v6 path is single-gateway today).
-        let desired_v6 = route_on && state.mesh_ipv6.read().await.is_some();
+        // IPv6 derivation is unconditional now — there's always a
+        // mesh IPv6, so the toggle is purely `route_on`.
+        let desired_v6 = route_on;
         if desired_v6 != current_v6 {
             if desired_v6 {
                 match state.tun.add_default_ipv6_route(PLACEHOLDER_V6_GATEWAY) {

@@ -5,39 +5,6 @@ fn temp_trust_store_path() -> PathBuf {
     std::env::temp_dir().join(format!("pim-trust-{}.toml", rand::random::<u64>()))
 }
 
-#[test]
-fn ip_request_classifier_accepts_first_request() {
-    let requester = peer_id(70);
-    let mut pending = HashSet::new();
-    assert_eq!(
-        classify_ip_request(&mut pending, requester, requester),
-        IpRequestDisposition::Process
-    );
-    assert!(pending.contains(&requester));
-}
-
-#[test]
-fn ip_request_classifier_drops_duplicate_inflight_request() {
-    let requester = peer_id(71);
-    let mut pending = HashSet::from([requester]);
-    assert_eq!(
-        classify_ip_request(&mut pending, requester, requester),
-        IpRequestDisposition::DuplicateInFlight
-    );
-}
-
-#[test]
-fn ip_request_classifier_rejects_spoofed_requester() {
-    let requester = peer_id(72);
-    let from_peer = peer_id(73);
-    let mut pending = HashSet::new();
-    assert_eq!(
-        classify_ip_request(&mut pending, requester, from_peer),
-        IpRequestDisposition::SpoofedRequester
-    );
-    assert!(pending.is_empty());
-}
-
 #[tokio::test]
 async fn authorization_allow_list_rejects_unlisted_peer() {
     let path = temp_trust_store_path();
