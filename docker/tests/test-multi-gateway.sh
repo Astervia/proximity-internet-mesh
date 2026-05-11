@@ -35,11 +35,21 @@ wait_all_healthy "$COMPOSE_FILE" 180
 log_info "Waiting 15 s for dual-gateway routing to converge..."
 sleep 15
 
-assert_ping "$COMPOSE_FILE" client "10.77.0.1" \
-    "client reaches gateway1 via relay"
+# Mesh addresses are derived from each gateway's NodeId — pull the
+# actual values so assertions stay valid regardless of which Ed25519
+# key was generated at first boot.
+GW1_IPV4=$(mesh_ipv4_of "$COMPOSE_FILE" gateway1) || {
+    log_fail "could not read gateway1 mesh IPv4"; exit 1; }
+GW2_IPV4=$(mesh_ipv4_of "$COMPOSE_FILE" gateway2) || {
+    log_fail "could not read gateway2 mesh IPv4"; exit 1; }
+log_info "gateway1 mesh_ipv4 = $GW1_IPV4"
+log_info "gateway2 mesh_ipv4 = $GW2_IPV4"
 
-assert_ping "$COMPOSE_FILE" client "10.77.0.2" \
-    "client reaches gateway2 via relay"
+assert_ping "$COMPOSE_FILE" client "$GW1_IPV4" \
+    "client reaches gateway1 via relay ($GW1_IPV4)"
+
+assert_ping "$COMPOSE_FILE" client "$GW2_IPV4" \
+    "client reaches gateway2 via relay ($GW2_IPV4)"
 
 assert_cmd \
     "client enables split-default routing explicitly" \
@@ -56,12 +66,12 @@ log_section "5.1 Gateway failover"
 
 log_info "Recording initial preferred gateway via ping RTTs..."
 RTT1=$(in_svc "$COMPOSE_FILE" client bash -c \
-    "ping -c 3 -W 2 10.77.0.1 2>/dev/null | tail -1 | grep -oP '\d+\.\d+(?=/\d)' | head -1" \
+    "ping -c 3 -W 2 $GW1_IPV4 2>/dev/null | tail -1 | grep -oP '\d+\.\d+(?=/\d)' | head -1" \
     2>/dev/null || echo "0")
 RTT2=$(in_svc "$COMPOSE_FILE" client bash -c \
-    "ping -c 3 -W 2 10.77.0.2 2>/dev/null | tail -1 | grep -oP '\d+\.\d+(?=/\d)' | head -1" \
+    "ping -c 3 -W 2 $GW2_IPV4 2>/dev/null | tail -1 | grep -oP '\d+\.\d+(?=/\d)' | head -1" \
     2>/dev/null || echo "0")
-log_info "Baseline RTT — gateway1: ${RTT1} ms  gateway2: ${RTT2} ms"
+log_info "Baseline RTT — gateway1 ($GW1_IPV4): ${RTT1} ms  gateway2 ($GW2_IPV4): ${RTT2} ms"
 
 log_info "Stopping gateway1..."
 compose "$COMPOSE_FILE" stop gateway1
@@ -69,7 +79,7 @@ compose "$COMPOSE_FILE" stop gateway1
 log_info "Waiting 20 s for peer timeout and route failover..."
 sleep 20
 
-assert_ping "$COMPOSE_FILE" client "10.77.0.2" \
+assert_ping "$COMPOSE_FILE" client "$GW2_IPV4" \
     "client reaches gateway2 after gateway1 removed"
 
 assert_curl "$COMPOSE_FILE" client "http://example.com" \
@@ -82,7 +92,7 @@ wait_healthy "$COMPOSE_FILE" gateway1 60
 log_info "Waiting 20 s for gateway1 to rejoin and routes to update..."
 sleep 20
 
-assert_ping "$COMPOSE_FILE" client "10.77.0.1" \
+assert_ping "$COMPOSE_FILE" client "$GW1_IPV4" \
     "client can reach gateway1 after it rejoins"
 
 assert_curl "$COMPOSE_FILE" client "http://example.com" \
@@ -121,7 +131,7 @@ log_section "5.2 Load-aware gateway selection"
 
 log_info "Flooding gateway1 with traffic for 15 s..."
 in_svc "$COMPOSE_FILE" client bash -c \
-    "ping -f -c 3000 -W 1 10.77.0.1 >/dev/null 2>&1 || true" &
+    "ping -f -c 3000 -W 1 $GW1_IPV4 >/dev/null 2>&1 || true" &
 sleep 15
 
 STATS=$(in_svc "$COMPOSE_FILE" relay pim status --verbose 2>/dev/null || echo "")

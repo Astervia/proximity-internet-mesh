@@ -45,11 +45,25 @@ assert_cmd \
 # ── 1.6 TUN interface ─────────────────────────────────────────────────────────
 log_section "1.6 TUN interface"
 
+# Mesh addresses are derived from each container's NodeId at boot, so
+# the per-container IPv4 isn't pinned anymore. Pull the actual derived
+# address from the live daemon and assert *that* lands on pim0.
+GW_IPV4=$(mesh_ipv4_of "$COMPOSE_FILE" gateway) || {
+    log_fail "could not read gateway mesh IPv4 from RPC"
+    exit 1
+}
+CLIENT_IPV4=$(mesh_ipv4_of "$COMPOSE_FILE" client) || {
+    log_fail "could not read client mesh IPv4 from RPC"
+    exit 1
+}
+log_info "gateway derived mesh_ipv4 = $GW_IPV4"
+log_info "client  derived mesh_ipv4 = $CLIENT_IPV4"
+
 assert_iface_up   "$COMPOSE_FILE" gateway pim0 "gateway pim0 is UP"
-assert_iface_addr "$COMPOSE_FILE" gateway "10.77.0.1" "gateway pim0 has address 10.77.0.1"
+assert_iface_addr "$COMPOSE_FILE" gateway "$GW_IPV4" "gateway pim0 has derived address $GW_IPV4"
 
 assert_iface_up   "$COMPOSE_FILE" client pim0 "client pim0 is UP"
-assert_iface_addr "$COMPOSE_FILE" client "10.77.0.100" "client pim0 has address 10.77.0.100"
+assert_iface_addr "$COMPOSE_FILE" client "$CLIENT_IPV4" "client pim0 has derived address $CLIENT_IPV4"
 
 # ── 1.7 Gateway NAT ───────────────────────────────────────────────────────────
 log_section "1.7 Gateway NAT / internet access"
@@ -63,8 +77,8 @@ assert_curl "$COMPOSE_FILE" gateway "http://example.com" \
 # ── 1.8 End-to-end: client through mesh ───────────────────────────────────────
 log_section "1.8 Client through mesh"
 
-assert_ping "$COMPOSE_FILE" client "10.77.0.1" \
-    "client pings gateway mesh IP (10.77.0.1)"
+assert_ping "$COMPOSE_FILE" client "$GW_IPV4" \
+    "client pings gateway mesh IP ($GW_IPV4)"
 
 assert_cmd \
     "client enables split-default routing explicitly" \

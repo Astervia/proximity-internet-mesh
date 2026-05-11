@@ -27,10 +27,17 @@ wait_for_peers "$COMPOSE_FILE" gateway 1 60
 wait_for_peers "$COMPOSE_FILE" client 1 60
 
 log_section "TUN IPv6 addressing"
+GW_IPV6=$(mesh_ipv6_of "$COMPOSE_FILE" gateway) || {
+    log_fail "could not read gateway mesh IPv6"; exit 1; }
+CLIENT_IPV6=$(mesh_ipv6_of "$COMPOSE_FILE" client) || {
+    log_fail "could not read client mesh IPv6"; exit 1; }
+log_info "gateway derived mesh_ipv6 = $GW_IPV6"
+log_info "client  derived mesh_ipv6 = $CLIENT_IPV6"
+
 assert_iface_up "$COMPOSE_FILE" gateway pim0 "gateway pim0 is UP"
-assert_iface_addr "$COMPOSE_FILE" gateway "fd77::1" "gateway pim0 has IPv6 address fd77::1"
+assert_iface_addr "$COMPOSE_FILE" gateway "$GW_IPV6" "gateway pim0 has derived IPv6 $GW_IPV6"
 assert_iface_up "$COMPOSE_FILE" client pim0 "client pim0 is UP"
-assert_iface_addr "$COMPOSE_FILE" client "fd77::100" "client pim0 has IPv6 address fd77::100"
+assert_iface_addr "$COMPOSE_FILE" client "$CLIENT_IPV6" "client pim0 has derived IPv6 $CLIENT_IPV6"
 
 log_section "Gateway uplink IPv6"
 assert_cmd \

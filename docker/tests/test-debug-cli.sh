@@ -40,23 +40,33 @@ assert_cmd \
      [ "$(echo "$out" | grep -c "direct=true")" -eq 3 ] &&
      [ "$(echo "$out" | grep -c "mechanism=tcp")" -eq 3 ]'
 
+# Pull the derived mesh IPs out of the live daemons so the assertions
+# stay valid regardless of which Ed25519 keys were generated at boot.
+GW1_IPV4=$(mesh_ipv4_of "$PHASE5_FILE" gateway1) || {
+    log_fail "could not read gateway1 mesh IPv4"; exit 1; }
+GW2_IPV4=$(mesh_ipv4_of "$PHASE5_FILE" gateway2) || {
+    log_fail "could not read gateway2 mesh IPv4"; exit 1; }
+RELAY_IPV4=$(mesh_ipv4_of "$PHASE5_FILE" relay) || {
+    log_fail "could not read relay mesh IPv4"; exit 1; }
+log_info "derived: gateway1=$GW1_IPV4  gateway2=$GW2_IPV4  relay=$RELAY_IPV4"
+
 assert_cmd \
     "client debug routes lists relay and both gateways" \
     in_svc "$PHASE5_FILE" client bash -lc \
-    'out="$(pim debug routes)" &&
-     echo "$out" | grep -q "installed routes: 3" &&
-     echo "$out" | grep -q "mesh_ip=10.77.0.10" &&
-     echo "$out" | grep -q "mesh_ip=10.77.0.1" &&
-     echo "$out" | grep -q "mesh_ip=10.77.0.2"'
+    "out=\"\$(pim debug routes)\" &&
+     echo \"\$out\" | grep -q 'installed routes: 3' &&
+     echo \"\$out\" | grep -q 'mesh_ip=$RELAY_IPV4' &&
+     echo \"\$out\" | grep -q 'mesh_ip=$GW1_IPV4' &&
+     echo \"\$out\" | grep -q 'mesh_ip=$GW2_IPV4'"
 
 assert_cmd \
     "client debug gateways lists two gateways and marks one selected" \
     in_svc "$PHASE5_FILE" client bash -lc \
-    'out="$(pim debug gateways)" &&
-     echo "$out" | grep -q "known gateways: 2" &&
-     echo "$out" | grep -q "mesh_ip=10.77.0.1" &&
-     echo "$out" | grep -q "mesh_ip=10.77.0.2" &&
-     echo "$out" | grep -Eq "^\* "'
+    "out=\"\$(pim debug gateways)\" &&
+     echo \"\$out\" | grep -q 'known gateways: 2' &&
+     echo \"\$out\" | grep -q 'mesh_ip=$GW1_IPV4' &&
+     echo \"\$out\" | grep -q 'mesh_ip=$GW2_IPV4' &&
+     echo \"\$out\" | grep -Eq '^\\* '"
 
 assert_cmd \
     "client debug route get internet explains the selected mesh egress" \
@@ -68,13 +78,13 @@ assert_cmd \
      echo "$out" | grep -q "mechanism: tcp"'
 
 assert_cmd \
-    "client debug route get 10.77.0.2 explains a gateway destination route" \
+    "client debug route get $GW2_IPV4 explains a gateway destination route" \
     in_svc "$PHASE5_FILE" client bash -lc \
-    'out="$(pim debug route get 10.77.0.2)" &&
-     echo "$out" | grep -q "^route:" &&
-     echo "$out" | grep -q "gateway:     true" &&
-     echo "$out" | grep -q "mesh_ip:     10.77.0.2" &&
-     echo "$out" | grep -q "mechanism:   tcp"'
+    "out=\"\$(pim debug route get $GW2_IPV4)\" &&
+     echo \"\$out\" | grep -q '^route:' &&
+     echo \"\$out\" | grep -q 'gateway:     true' &&
+     echo \"\$out\" | grep -q 'mesh_ip:     $GW2_IPV4' &&
+     echo \"\$out\" | grep -q 'mechanism:   tcp'"
 
 assert_cmd \
     "client debug discovery shows both gateways plus the relay role mix" \

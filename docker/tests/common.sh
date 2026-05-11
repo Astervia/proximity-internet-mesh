@@ -334,6 +334,45 @@ rpc_node_id() {
     rpc_result "$file" "$svc" status | jq -er '.node_id'
 }
 
+# mesh_ipv4_of <file> <svc> [max_seconds]
+# Returns the daemon's derived mesh IPv4 address (no CIDR suffix).
+# Polls because the daemon may need a moment to come up and register
+# its address. Falls back to `mesh_ip` if `mesh_ipv4` isn't yet
+# present on the response (older daemon).
+mesh_ipv4_of() {
+    local file="$1" svc="$2" max="${3:-30}"
+    local elapsed=0 cidr=""
+    while [ $elapsed -lt $max ]; do
+        cidr=$(rpc_result "$file" "$svc" status 2>/dev/null \
+            | jq -er '(.mesh_ipv4 // .mesh_ip) // empty' 2>/dev/null || true)
+        if [ -n "$cidr" ]; then
+            echo "${cidr%%/*}"
+            return 0
+        fi
+        sleep 1
+        elapsed=$((elapsed+1))
+    done
+    return 1
+}
+
+# mesh_ipv6_of <file> <svc> [max_seconds]
+# Returns the daemon's derived mesh IPv6 address (no prefix suffix).
+mesh_ipv6_of() {
+    local file="$1" svc="$2" max="${3:-30}"
+    local elapsed=0 cidr=""
+    while [ $elapsed -lt $max ]; do
+        cidr=$(rpc_result "$file" "$svc" status 2>/dev/null \
+            | jq -er '.mesh_ipv6 // empty' 2>/dev/null || true)
+        if [ -n "$cidr" ]; then
+            echo "${cidr%%/*}"
+            return 0
+        fi
+        sleep 1
+        elapsed=$((elapsed+1))
+    done
+    return 1
+}
+
 # wait_routes <file> <svc> <min_routes> [max_seconds]
 # Block until `pim status --verbose` reports at least `min_routes`
 # entries. Routes propagate through distance-vector advertisements
