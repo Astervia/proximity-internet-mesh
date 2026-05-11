@@ -318,6 +318,35 @@ pub(super) async fn run_event_loop(state: Arc<DaemonState>) -> Result<()> {
                                 match packet_ip_version(ip_packet_slice) {
                                     Some(4) => match (&state.gw_engine, &state.internet_link) {
                                         (Some(gw), Some(link)) => {
+                                            // Skip non-unicast destinations
+                                            // (limited broadcast, multicast,
+                                            // unspecified, loopback,
+                                            // link-local). Forwarding these
+                                            // makes no semantic sense — they
+                                            // aren't routable on the
+                                            // internet — and the kernel
+                                            // EACCESes raw sendto for
+                                            // limited-broadcast destinations
+                                            // anyway. Common source today:
+                                            // pim-discovery UDP broadcasts
+                                            // leaking out the Android TUN
+                                            // through the split-default
+                                            // route. Drop quietly at trace
+                                            // level so the log stays clean.
+                                            if let Some(dst) = super::net::ipv4_destination(ip_packet_slice) {
+                                                if dst.is_broadcast()
+                                                    || dst.is_multicast()
+                                                    || dst.is_unspecified()
+                                                    || dst.is_loopback()
+                                                    || dst.is_link_local()
+                                                {
+                                                    tracing::trace!(
+                                                        %dst,
+                                                        "gateway: dropping non-unicast outbound"
+                                                    );
+                                                    continue;
+                                                }
+                                            }
                                             if let Err(e) = gw.translate_outbound(&mut ip_packet).await {
                                                 warn!("gateway outbound NAT failed: {e}");
                                                 continue;
