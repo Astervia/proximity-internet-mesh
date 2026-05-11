@@ -438,6 +438,18 @@ pub struct BluetoothRfcommConfig {
     /// Bridge established RFCOMM sessions to the local TCP transport listener.
     #[serde(default = "default_bluetooth_rfcomm_bridge_to_tcp")]
     pub bridge_to_tcp: bool,
+    /// Enable the desktop-initiated inquiry loop that scans for nearby
+    /// `device_name_prefix` peers and runs `bluetoothctl pair` on them.
+    /// Mirrors the Android side's `startDiscovery`; together they make
+    /// either device able to bootstrap the bond without manual pairing
+    /// in OS Bluetooth Settings.
+    #[serde(default = "default_bluetooth_rfcomm_discovery_enabled")]
+    pub discovery_enabled: bool,
+    /// Cadence between `bluetoothctl scan on` cycles in the inquiry
+    /// loop. BR/EDR inquiry runs for ~12 s per cycle then idles —
+    /// re-arming too often wastes the BT controller and battery.
+    #[serde(default = "default_bluetooth_rfcomm_inquiry_interval_ms")]
+    pub inquiry_interval_ms: u64,
     /// Periodic cleanup of unreachable paired peers — see
     /// [`PeerCleanupConfig`]. The destructive action is
     /// `bluetoothctl remove <bd_addr>`. Bluetooth-flavoured defaults:
@@ -736,6 +748,14 @@ fn default_bluetooth_rfcomm_bridge_to_tcp() -> bool {
     true
 }
 
+fn default_bluetooth_rfcomm_discovery_enabled() -> bool {
+    true
+}
+
+fn default_bluetooth_rfcomm_inquiry_interval_ms() -> u64 {
+    60_000
+}
+
 impl Default for InterfaceConfig {
     fn default() -> Self {
         Self {
@@ -867,6 +887,8 @@ impl Default for BluetoothRfcommConfig {
             outbound_enabled: default_bluetooth_rfcomm_outbound_enabled(),
             poll_interval_ms: default_bluetooth_rfcomm_poll_interval_ms(),
             bridge_to_tcp: default_bluetooth_rfcomm_bridge_to_tcp(),
+            discovery_enabled: default_bluetooth_rfcomm_discovery_enabled(),
+            inquiry_interval_ms: default_bluetooth_rfcomm_inquiry_interval_ms(),
             peer_cleanup: PeerCleanupConfig::bluetooth_default(),
         }
     }

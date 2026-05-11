@@ -37,6 +37,8 @@ use tokio_util::sync::CancellationToken;
 #[cfg(target_os = "linux")]
 mod bridge;
 #[cfg(target_os = "linux")]
+mod inquiry;
+#[cfg(target_os = "linux")]
 mod listener;
 #[cfg(target_os = "linux")]
 mod outbound;
@@ -143,6 +145,18 @@ pub struct RfcommConfig {
     /// `None` disables the bridge — discovery still emits `Discovered`
     /// events but the channel will not carry mesh frames.
     pub local_bridge_addr: Option<SocketAddr>,
+    /// Enable the desktop-initiated BR/EDR inquiry loop. When `true`,
+    /// the service periodically runs `bluetoothctl scan on`, parses
+    /// the `[NEW] Device` lines for names matching `prefix`, and runs
+    /// `bluetoothctl pair` + `trust` on each new candidate. The pair
+    /// dialog pops on both sides via BlueZ's default agent. Mirrors
+    /// the Android side's `startDiscovery` so either device can
+    /// bootstrap the bond without manual settings work.
+    pub discovery_enabled: bool,
+    /// Cadence between inquiry cycles when `discovery_enabled = true`.
+    /// BR/EDR inquiry runs for ~12 s per cycle and idles; we wait
+    /// `inquiry_interval` before the next `scan on`.
+    pub inquiry_interval: Duration,
 }
 
 impl Default for RfcommConfig {
@@ -155,6 +169,8 @@ impl Default for RfcommConfig {
             outbound_enabled: true,
             bluetoothctl_command: PathBuf::from("bluetoothctl"),
             local_bridge_addr: None,
+            discovery_enabled: true,
+            inquiry_interval: Duration::from_secs(60),
         }
     }
 }
@@ -265,6 +281,15 @@ impl RfcommService {
                 cancel.clone(),
                 active.clone(),
             )?;
+            // Inquiry + pair loop runs in parallel with the outbound
+            // paired-device scan. Inquiry adds new bonds via
+            // `bluetoothctl pair`; the outbound loop then picks them
+            // up on its next tick and dials RFCOMM. They share no
+            // state — keep them decoupled so a stuck pair attempt
+            // doesn't block the dial path.
+            if cfg.discovery_enabled {
+                inquiry::spawn(cfg.clone(), events_tx.clone(), cancel.clone());
+            }
             if cfg.outbound_enabled {
                 outbound::spawn(cfg, identity, events_tx, cancel.clone(), active);
             }
