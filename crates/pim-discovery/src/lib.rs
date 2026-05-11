@@ -24,4 +24,4 @@ pub mod service;
 
 pub use advertisement::{DiscoveryAdvertisement, NodeCapabilities};
 pub use peer_table::{PeerRecord, PeerTable};
-pub use service::DiscoveryService;
+pub use service::{current_socket_fd, DiscoveryService};
