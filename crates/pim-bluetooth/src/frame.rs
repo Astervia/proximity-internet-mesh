@@ -1,7 +1,10 @@
 //! Length-prefixed frame codec — `u32 BE | payload (utf-8 JSON)`.
 //! Matches `spikes/bt-rfcomm/PROTOCOL.md` byte-for-byte. Reuses the
 //! same wire format as `pim-protocol::LengthDelimitedCodec` (the
-//! Phase 7 spec doc cites it explicitly).
+//! Phase 7 spec doc cites it explicitly). Shared by both
+//! [`crate::rfcomm`] and [`crate::coc`].
+
+#![allow(missing_docs)]
 
 /// Maximum payload size — frames larger than this are rejected with
 /// `FrameError::TooLarge`. 65 536 mirrors the Mac sidecar limit.

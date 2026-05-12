@@ -1,4 +1,9 @@
-//! Per-RFCOMM-channel session: handshake + event emission.
+//! Per-CoC-channel session: handshake + event emission.
+//!
+//! Byte-for-byte parallel to `rfcomm/session.rs`. The
+//! [`verify_peer_mesh_tag`] gate is copied verbatim from RFCOMM, not
+//! re-derived, per the L2CAP CoC plan's acceptance criterion that the
+//! mesh-tag truth table is shared between transports.
 
 #![cfg(target_os = "linux")]
 
@@ -11,9 +16,9 @@ use tokio_util::sync::CancellationToken;
 use tracing::{debug, warn};
 
 use super::bridge;
-use super::socket::RfcommStream;
+use super::socket::CocStream;
+use super::{format_bdaddr, now_iso, BdAddr, CocEvent, LocalIdentity, HELLO_VERSION};
 use crate::frame::{decode_frame, encode_frame, FrameError};
-use super::{format_bdaddr, now_iso, BdAddr, LocalIdentity, RfcommEvent, HELLO_VERSION};
 
 #[derive(Debug, Serialize, Deserialize)]
 struct HelloMsg<'a> {
@@ -24,32 +29,21 @@ struct HelloMsg<'a> {
     name: String,
     platform: &'a str,
     caps: Vec<String>,
-    /// Lowercase-hex `HMAC-SHA256(mesh_handshake_key, node_id_hex)`.
-    /// Present iff the sender is on a private mesh. See
-    /// `pim_crypto::compute_rfcomm_hello_tag`. The receiver requires
-    /// this field to be present and matching when the receiver is
-    /// itself on a private mesh, and absent when the receiver is on
-    /// the open mesh — i.e., open ↔ private is hard-rejected at the
-    /// RFCOMM Hello layer, before any TCP bridge is set up.
+    /// Same `mesh_tag` semantics as the RFCOMM Hello — reusing
+    /// `pim_crypto::compute_rfcomm_hello_tag` directly so a single tag
+    /// derivation governs both transports.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     mesh_tag: Option<String>,
 }
 
-/// Drive a freshly-accepted/dialed RFCOMM session from handshake
+/// Drive a freshly-accepted/dialed CoC session from handshake
 /// completion through teardown.
-///
-/// `local_bridge_addr`: when `Some`, on successful handshake the
-/// channel is bridged to that loopback TCP address (the daemon's
-/// `pim-transport` listener) and bytes flow through until either side
-/// closes or `cancel` fires. When `None`, the post-handshake side
-/// just consumes bytes until the channel closes (discovery-only mode,
-/// kept for tests / acceptor-only deployments).
 pub async fn run(
-    stream: RfcommStream,
+    stream: CocStream,
     peer_addr: BdAddr,
     initiator: bool,
     identity: LocalIdentity,
-    events_tx: mpsc::Sender<RfcommEvent>,
+    events_tx: mpsc::Sender<CocEvent>,
     cancel: CancellationToken,
     local_bridge_addr: Option<std::net::SocketAddr>,
 ) {
@@ -58,7 +52,7 @@ pub async fn run(
         Ok(id) => id,
         Err(e) => {
             let _ = events_tx
-                .send(RfcommEvent::Lost {
+                .send(CocEvent::Lost {
                     bd_addr: bd_str.clone(),
                     reason: format!("handshake_failed: {e}"),
                 })
@@ -71,21 +65,15 @@ pub async fn run(
     let close_reason = match local_bridge_addr {
         Some(addr) => {
             debug!(
-                target: "pim-bluetooth-rfcomm",
+                target: "pim-bluetooth-coc",
                 peer = %bd_str,
                 bridge = %addr,
                 "session: handshake OK, bridging to loopback TCP",
             );
-            // Hand the bridge a CHILD token, not a clone. `bridge::run`
-            // calls `cancel.cancel()` from inside its r2t/t2r select to
-            // unwind the second pump when the first exits — if that
-            // call landed on the parent token (a clone of the listener
-            // / outbound token), one peer disconnecting would also
-            // cancel the acceptor + outbound poll, and every future
-            // dial against this daemon would hit
-            // `Connection refused (os error 111)` until restart.
-            // Child tokens cascade parent → child cancellation but not
-            // child → parent.
+            // Hand the bridge a CHILD token, not a clone — same
+            // rationale as `rfcomm/session.rs`: bridge's internal
+            // `cancel.cancel()` must not bubble up and tear down the
+            // acceptor or outbound loop.
             match bridge::run(
                 stream.clone(),
                 addr,
@@ -103,18 +91,15 @@ pub async fn run(
     };
 
     let _ = events_tx
-        .send(RfcommEvent::Lost {
+        .send(CocEvent::Lost {
             bd_addr: bd_str,
             reason: close_reason,
         })
         .await;
 }
 
-/// Discovery-only mode: just consume bytes until the peer closes or
-/// the supervisor cancels us. Kept around for tests and acceptor-only
-/// deployments that don't run a daemon TCP listener.
 async fn discovery_only_loop(
-    stream: Arc<RfcommStream>,
+    stream: Arc<CocStream>,
     bd_str: &str,
     cancel: CancellationToken,
 ) -> String {
@@ -132,13 +117,13 @@ async fn discovery_only_loop(
                             for f in frames {
                                 match serde_json::from_slice::<Value>(&f) {
                                     Ok(_v) => debug!(
-                                        target: "pim-bluetooth-rfcomm",
+                                        target: "pim-bluetooth-coc",
                                         peer = %bd_str,
                                         bytes = f.len(),
                                         "rx post-handshake frame (discovery-only)",
                                     ),
                                     Err(e) => warn!(
-                                        target: "pim-bluetooth-rfcomm",
+                                        target: "pim-bluetooth-coc",
                                         peer = %bd_str,
                                         err = %e,
                                         "non-json post-handshake frame",
@@ -155,7 +140,10 @@ async fn discovery_only_loop(
     }
 }
 
-/// Mesh-membership gate enforced on every RFCOMM Hello / HelloAck.
+/// Mesh-membership gate. Copied verbatim from
+/// `rfcomm::session::verify_peer_mesh_tag` (same truth table, same
+/// `pim_crypto::compute_rfcomm_hello_tag` derivation) so both
+/// transports admit/reject identically.
 ///
 /// | local | peer sent tag | result | reason returned |
 /// |-------|---------------|--------|-----------------|
@@ -164,10 +152,6 @@ async fn discovery_only_loop(
 /// | private | absent | reject | "mesh tag missing ..." |
 /// | open | absent | admit | — |
 /// | open | present | reject | "mesh tag present ..." |
-///
-/// Pure function — no I/O — so the table above is exercised directly
-/// in `pim_bluetooth::rfcomm::session::tests` rather than via the
-/// async RFCOMM socket plumbing.
 pub(super) fn verify_peer_mesh_tag(
     local_mesh_key: Option<&[u8; 32]>,
     peer_mesh_tag_hex: Option<&str>,
@@ -193,7 +177,6 @@ pub(super) fn verify_peer_mesh_tag(
     }
 }
 
-/// Lowercase-hex encode a 32-byte tag for the JSON Hello envelope.
 fn bytes_to_hex(bytes: &[u8]) -> String {
     let mut out = String::with_capacity(bytes.len() * 2);
     for b in bytes {
@@ -202,8 +185,6 @@ fn bytes_to_hex(bytes: &[u8]) -> String {
     out
 }
 
-/// Constant-time byte-slice equality. Avoids leaking the
-/// position-of-first-mismatch through timing for the mesh-tag check.
 fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
     if a.len() != b.len() {
         return false;
@@ -215,9 +196,6 @@ fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
     diff == 0
 }
 
-/// Decode a 32-char lowercase hex NodeId into 16 bytes. Returns the
-/// concrete `String` reason on parse failure so the caller can pass it
-/// up the `RfcommEvent::Lost` reason field unchanged.
 fn hex_to_node_id(hex: &str, out: &mut [u8; 16]) -> Result<(), String> {
     if hex.len() != 32 {
         return Err(format!("expected 32 hex chars, got {}", hex.len()));
@@ -229,19 +207,12 @@ fn hex_to_node_id(hex: &str, out: &mut [u8; 16]) -> Result<(), String> {
     Ok(())
 }
 
-/// Run the RFCOMM session-level Hello / HelloAck handshake. Returns
-/// the peer's 16-byte raw NodeId on success — the caller forwards it
-/// to the bridge so the loopback TCP listener can be told *who* this
-/// connection is from without having to send the bytes back over
-/// RFCOMM (which would race with the post-handshake byte stream and
-/// cause `decode_frame` to choke on binary NodeId bytes that look
-/// like absurd length prefixes).
 async fn handshake(
-    stream: &RfcommStream,
+    stream: &CocStream,
     bd_str: &str,
     initiator: bool,
     identity: &LocalIdentity,
-    events_tx: &mpsc::Sender<RfcommEvent>,
+    events_tx: &mpsc::Sender<CocEvent>,
 ) -> Result<[u8; 16], Box<dyn std::error::Error + Send + Sync>> {
     let local_caps = identity.caps.clone();
     let local_node_hex = identity.node_id_hex.clone();
@@ -271,7 +242,6 @@ async fn handshake(
         stream.write_all(&frame).await?;
     }
 
-    // Read until we get exactly one Hello (acceptor) or HelloAck (initiator).
     let want = if initiator { "hello-ack" } else { "hello" };
     let mut buf: Vec<u8> = Vec::with_capacity(2048);
     let mut chunk = [0u8; 1024];
@@ -325,7 +295,6 @@ async fn handshake(
             })
             .unwrap_or_default();
 
-        // Mesh-membership gate. See `verify_peer_mesh_tag`.
         let their_mesh_tag = v
             .get("mesh_tag")
             .and_then(|x| x.as_str())
@@ -342,16 +311,12 @@ async fn handshake(
             let frame = send_msg("hello-ack")?;
             stream.write_all(&frame).await?;
         }
-        // Decode the peer's hex NodeId now so the caller can hand the
-        // raw 16-byte form to the bridge. Errors here mean the peer
-        // sent us a Hello with a malformed `node_id` field; treat as
-        // a handshake failure so we don't bridge with garbage.
         let mut peer_node_id = [0u8; 16];
         if let Err(msg) = hex_to_node_id(&their_node, &mut peer_node_id) {
             return Err(format!("invalid peer node_id `{their_node}`: {msg}").into());
         }
         let _ = events_tx
-            .send(RfcommEvent::Discovered {
+            .send(CocEvent::Discovered {
                 bd_addr: bd_str.to_string(),
                 node_id: their_node,
                 name: their_name,
@@ -414,32 +379,9 @@ mod tests {
 
     #[test]
     fn private_with_tag_for_different_node_rejects() {
-        // Replay defense: peer says they're PEER_ID but signed a tag for
-        // a different node id (mounted attack from a captured Hello).
         let key = [0xABu8; 32];
         let tag_for_other = matching_tag(&key, "ffffffffffffffffffffffffffffffff");
         let err = verify_peer_mesh_tag(Some(&key), Some(&tag_for_other), PEER_ID).unwrap_err();
         assert!(err.contains("mismatch"), "{err}");
-    }
-
-    #[test]
-    fn private_with_garbage_tag_rejects() {
-        let key = [0xABu8; 32];
-        let err = verify_peer_mesh_tag(Some(&key), Some("not-hex"), PEER_ID).unwrap_err();
-        assert!(err.contains("mismatch"), "{err}");
-    }
-
-    #[test]
-    fn constant_time_eq_correctness() {
-        assert!(constant_time_eq(b"abc", b"abc"));
-        assert!(!constant_time_eq(b"abc", b"abd"));
-        assert!(!constant_time_eq(b"abc", b"ab"));
-        assert!(constant_time_eq(b"", b""));
-    }
-
-    #[test]
-    fn bytes_to_hex_round_trip() {
-        let bytes = [0x00u8, 0xAB, 0xFF, 0x42];
-        assert_eq!(bytes_to_hex(&bytes), "00abff42");
     }
 }

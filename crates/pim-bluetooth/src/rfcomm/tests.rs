@@ -55,7 +55,7 @@ fn iso_timestamp_format() {
 /// actually catches the drift class we care about — "Kotlin can't
 /// parse what Rust ships."
 mod hello_fixtures {
-    use super::super::frame::{decode_frame, encode_frame};
+    use crate::frame::{decode_frame, encode_frame};
     use serde_json::Value;
 
     /// Open-mesh Hello JSON body. The Kotlin counterpart in

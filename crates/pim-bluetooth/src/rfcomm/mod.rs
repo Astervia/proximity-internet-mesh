@@ -56,12 +56,10 @@ mod socket;
 // arrives, just the constructor body changes. Existing `frame.rs`
 // codec is platform-agnostic and shared.
 
-mod frame;
-
 #[cfg(test)]
 mod tests;
 
-pub use frame::{decode_frame, encode_frame, FrameError, MAX_FRAME_PAYLOAD};
+pub use crate::frame::{decode_frame, encode_frame, FrameError, MAX_FRAME_PAYLOAD};
 
 /// 6-byte Bluetooth Device Address. Big-endian "AA:BB:CC:DD:EE:FF" on the
 /// wire, but stored little-endian to match the Linux kernel's `bdaddr_t`

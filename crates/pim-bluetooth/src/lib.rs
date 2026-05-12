@@ -310,12 +310,29 @@ mod service;
 mod service_stub;
 mod support;
 
+/// Length-prefixed Hello-frame codec — `u32 BE | payload`. Shared by
+/// the RFCOMM (`rfcomm`) and L2CAP CoC (`coc`) handshake modules so a
+/// single source of truth defines the on-wire shape both transports
+/// emit during the pre-bridge identity exchange.
+pub mod frame;
+
 /// Phase 7 RFCOMM auto-discovery service. Linux production impl of the
 /// Python spike at `spikes/bt-rfcomm/linux/pim-bt-rfcomm-linux.py`. The
 /// Mac side keeps using the Swift sidecar in `pim-ui/tools/`. Both
 /// sides speak the same wire protocol so they discover each other
 /// without coordination.
 pub mod rfcomm;
+
+/// L2CAP Connection-Oriented Channel transport (BLE).
+///
+/// LE-equivalent of [`rfcomm`]: same Hello/HelloAck JSON envelope,
+/// same `verify_peer_mesh_tag` gate, same loopback-TCP bridge. Picks a
+/// dynamic PSM in the LE range (0x0080–0x00FF) instead of an RFCOMM
+/// channel; routes through the LE controller via
+/// `BDADDR_LE_PUBLIC`/`BDADDR_LE_RANDOM`. Structurally immune to the
+/// BlueZ A2DP/HFP audio-profile leak documented under `.agent/memory`
+/// because LE has no auto-registered audio profiles.
+pub mod coc;
 
 #[cfg(test)]
 mod tests;
