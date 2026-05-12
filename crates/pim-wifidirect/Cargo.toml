@@ -1,6 +1,6 @@
 [package]
 name = "pim-wifidirect"
-version = "0.1.4"
+version = "0.1.5"
 edition = "2021"
 description = "Wi-Fi Direct transport implementation for the Proximity Internet Mesh"
 license.workspace = true

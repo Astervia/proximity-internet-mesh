@@ -945,7 +945,7 @@ dependencies = [
 
 [[package]]
 name = "pim-bluetooth"
-version = "0.1.8"
+version = "0.1.9"
 dependencies = [
  "libc",
  "pim-core",
@@ -960,7 +960,7 @@ dependencies = [
 
 [[package]]
 name = "pim-cli"
-version = "0.1.23"
+version = "0.1.24"
 dependencies = [
  "anyhow",
  "clap",
@@ -978,7 +978,7 @@ dependencies = [
 
 [[package]]
 name = "pim-core"
-version = "0.1.9"
+version = "0.1.10"
 dependencies = [
  "blake3",
  "bytes",
@@ -1009,7 +1009,7 @@ dependencies = [
 
 [[package]]
 name = "pim-daemon"
-version = "0.1.17"
+version = "0.1.18"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1048,7 +1048,7 @@ dependencies = [
 
 [[package]]
 name = "pim-discovery"
-version = "0.1.3"
+version = "0.1.4"
 dependencies = [
  "aes-gcm",
  "anyhow",
@@ -1065,7 +1065,7 @@ dependencies = [
 
 [[package]]
 name = "pim-gateway"
-version = "0.1.5"
+version = "0.1.6"
 dependencies = [
  "bytes",
  "pim-core",
@@ -1151,7 +1151,7 @@ dependencies = [
 
 [[package]]
 name = "pim-tun"
-version = "0.1.3"
+version = "0.1.4"
 dependencies = [
  "libc",
  "nix",
@@ -1163,7 +1163,7 @@ dependencies = [
 
 [[package]]
 name = "pim-wifidirect"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "async-dnssd",
  "futures-util",
