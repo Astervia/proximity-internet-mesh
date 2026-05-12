@@ -1,6 +1,15 @@
 # ── Stage 1: Build ─────────────────────────────────────────────────────────────
 FROM rust:1.94-bookworm AS builder
 
+# pim-bluetooth depends on `bluer`, which FFI-links to libdbus-1 for
+# the BlueZ LEAdvertisingManager1 / Adapter1 D-Bus client. The runtime
+# stage installs the shared lib; the build stage needs the `-dev`
+# package so the build script can link.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        libdbus-1-dev \
+        pkg-config \
+    && rm -rf /var/lib/apt/lists/*
+
 WORKDIR /build
 
 # Copy manifests first so dependency fetching is cached independently of source.
@@ -57,6 +66,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         procps \
         jq \
         sqlite3 \
+        libdbus-1-3 \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /build/target/release/pim-daemon /usr/local/bin/pim-daemon
