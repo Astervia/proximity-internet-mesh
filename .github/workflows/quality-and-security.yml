@@ -30,6 +30,15 @@ jobs:
             - name: Cache cargo artifacts
               uses: Swatinem/rust-cache@v2
 
+            # pim-bluetooth pulls in `bluer` on Linux, which links against
+            # libdbus-1 via libdbus-sys. The hosted ubuntu runner doesn't
+            # ship the dev headers, so cargo's build script panics during
+            # the first clippy/test compile without these.
+            - name: Install Linux build dependencies
+              run: |
+                  sudo apt-get update
+                  sudo apt-get install -y libdbus-1-dev pkg-config
+
             - name: Check formatting
               run: cargo fmt --all --check
 
@@ -65,6 +74,14 @@ jobs:
 
             - name: Cache cargo artifacts
               uses: Swatinem/rust-cache@v2
+
+            # `bluer` is `cfg(target_os = "linux")` only, so macOS doesn't
+            # need libdbus. Linux runners do.
+            - name: Install Linux build dependencies
+              if: startsWith(matrix.runner, 'ubuntu')
+              run: |
+                  sudo apt-get update
+                  sudo apt-get install -y libdbus-1-dev pkg-config
 
             - name: Run tests
               run: cargo test --workspace --locked
