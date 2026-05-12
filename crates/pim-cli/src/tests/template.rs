@@ -308,6 +308,34 @@ fn template_bluetooth_rfcomm_emits_full_block_disabled_by_default() {
 }
 
 #[test]
+fn template_bluetooth_coc_emits_full_block_enabled_by_default() {
+    // Phase 5 of the L2CAP CoC plan flipped the default to `true`.
+    // Lock both the rendered template AND the round-trip parse so a
+    // future schema bump can't silently re-disable the audio-leak fix.
+    let rendered = render_config_template(&[NodeRole::Client], None);
+    assert!(rendered.contains("[bluetooth_coc]"));
+    for needle in [
+        "enabled = true",
+        "psm = 0x0083",
+        "device_name_prefix = \"PIM-\"",
+        "outbound_enabled = true",
+        "bridge_to_tcp = true",
+        "peer_bdaddr_type = 1",
+    ] {
+        assert!(
+            rendered.contains(needle),
+            "bluetooth_coc missing `{needle}`. rendered:\n{rendered}"
+        );
+    }
+    let cfg = pim_core::Config::from_toml_str(&rendered).unwrap();
+    assert!(cfg.bluetooth_coc.enabled);
+    assert_eq!(cfg.bluetooth_coc.psm, 0x0083);
+    assert!(cfg.bluetooth_coc.outbound_enabled);
+    assert!(cfg.bluetooth_coc.bridge_to_tcp);
+    assert_eq!(cfg.bluetooth_coc.peer_bdaddr_type, 1);
+}
+
+#[test]
 fn template_wifi_direct_emits_full_block_disabled_by_default() {
     let rendered = render_config_template(&[NodeRole::Client], None);
     assert!(rendered.contains("[wifi_direct]"));

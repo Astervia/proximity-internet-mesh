@@ -103,6 +103,7 @@ pub(crate) fn render_config_template(roles: &[NodeRole], override_name: Option<&
     push_security(&mut out);
     push_bluetooth(&mut out, &node_name);
     push_bluetooth_rfcomm(&mut out);
+    push_bluetooth_coc(&mut out);
     push_wifi_direct(&mut out);
     push_static_peers(&mut out, peer_example, is_client, is_relay, is_gateway);
 
@@ -586,6 +587,26 @@ fn push_bluetooth_rfcomm(out: &mut String) {
         out,
         "# to the local TCP listener so normal PIM handshakes and sessions are reused.",
     );
+    push_line(
+        out,
+        "# Default now `false` — L2CAP CoC (`[bluetooth_coc]`) is the recommended path.",
+    );
+    push_line(
+        out,
+        "# RFCOMM bonds on Linux pull in BlueZ's A2DP/HFP audio profiles by default, which",
+    );
+    push_line(
+        out,
+        "# can route an Android peer's audio to the Linux machine after pairing. See",
+    );
+    push_line(
+        out,
+        "# `.agent/memory/lessons/known-bugs.md#3` for the audio-leak history.",
+    );
+    push_line(
+        out,
+        "# Re-enable here for compatibility with Android 9 and below (no L2CAP CoC client API).",
+    );
     push_line(out, "enabled = false");
     push_line(
         out,
@@ -603,6 +624,91 @@ fn push_bluetooth_rfcomm(out: &mut String) {
         "# Bridge established RFCOMM sessions into [transport].listen_port over loopback.",
     );
     push_line(out, "bridge_to_tcp = true");
+    push_blank(out);
+}
+
+fn push_bluetooth_coc(out: &mut String) {
+    push_line(out, "[bluetooth_coc]");
+    push_line(
+        out,
+        "# Bluetooth L2CAP Connection-Oriented Channel — LE-routed counterpart to",
+    );
+    push_line(
+        out,
+        "# `[bluetooth_rfcomm]`. Same Hello/HelloAck envelope, same TCP bridge, but the",
+    );
+    push_line(
+        out,
+        "# underlying socket routes through the LE controller via `BDADDR_LE_PUBLIC` /",
+    );
+    push_line(
+        out,
+        "# `BDADDR_LE_RANDOM`. LE has no auto-registered audio profiles, so a successful",
+    );
+    push_line(
+        out,
+        "# bond never pulls in A2DP/HFP side-channels (cf. `[bluetooth_rfcomm]`).",
+    );
+    push_line(
+        out,
+        "# Default `true` — shipped as the recommended Bluetooth transport. Disable here",
+    );
+    push_line(
+        out,
+        "# to fall back exclusively to RFCOMM (e.g. for Android 9 and below).",
+    );
+    push_line(out, "enabled = true");
+    push_line(
+        out,
+        "# L2CAP PSM to bind and dial. Must be inside the LE dynamic range `0x0080..=0x00FF`;",
+    );
+    push_line(
+        out,
+        "# values `0x0001..=0x007F` are SIG-assigned and reserved. Default `0x0083`.",
+    );
+    push_line(
+        out,
+        "# Android initiators read the PSM from the GAP advertisement (Phase 4) and ignore",
+    );
+    push_line(
+        out,
+        "# this value on the acceptor side (Android picks dynamically).",
+    );
+    push_line(out, "psm = 0x0083");
+    push_line(out, "# Filter paired Bluetooth devices by name prefix.");
+    push_line(out, "device_name_prefix = \"PIM-\"");
+    push_line(out, "# Dial paired matching devices periodically.");
+    push_line(out, "outbound_enabled = true");
+    push_line(out, "# Paired-device scan cadence (ms).");
+    push_line(out, "poll_interval_ms = 30000");
+    push_line(
+        out,
+        "# Bridge established CoC sessions into [transport].listen_port over loopback.",
+    );
+    push_line(out, "bridge_to_tcp = true");
+    push_line(
+        out,
+        "# When `true`, run the LE GAP advertising + scan loop alongside the paired-",
+    );
+    push_line(
+        out,
+        "# device dialer so peers find each other without an out-of-band PSM exchange.",
+    );
+    push_line(out, "discovery_enabled = false");
+    push_line(
+        out,
+        "# LE-scan cadence (ms) when `discovery_enabled = true`.",
+    );
+    push_line(out, "inquiry_interval_ms = 60000");
+    push_line(
+        out,
+        "# Peer address-type fed to `sockaddr_l2.l2_bdaddr_type`: 1 = LE public, 2 = LE",
+    );
+    push_line(
+        out,
+        "# random. Most Linux-paired peers are public; most smartphones are random.",
+    );
+    push_line(out, "peer_bdaddr_type = 1");
     push_blank(out);
 }
 

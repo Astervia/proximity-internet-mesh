@@ -142,9 +142,13 @@ inquiry_interval_ms = 30000
 }
 
 #[test]
-fn bluetooth_coc_defaults_to_disabled() {
+fn bluetooth_coc_defaults_to_enabled() {
+    // Phase 5 flipped the default: CoC is now the shipped Bluetooth
+    // transport. Lock the flip explicitly so a future refactor can't
+    // silently revert it (the audio-leak regression that motivated
+    // this would come back).
     let config = Config::from_toml_str(MINIMAL_CONFIG).unwrap();
-    assert!(!config.bluetooth_coc.enabled);
+    assert!(config.bluetooth_coc.enabled);
     // Default PSM must be inside the LE dynamic range
     // 0x0080..=0x00FF; SIG-assigned 0x0001..=0x007F is forbidden.
     assert_eq!(config.bluetooth_coc.psm, 0x0083);

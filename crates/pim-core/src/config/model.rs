@@ -481,9 +481,13 @@ pub struct BluetoothRfcommConfig {
 /// transports does not end up with duplicate post-handshake bridges.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct BluetoothCocConfig {
-    /// Enable the Linux L2CAP CoC service. Defaults to `false` until
-    /// Phase 5 of the L2CAP CoC plan flips the default.
-    #[serde(default)]
+    /// Enable the Linux L2CAP CoC service. Phase 5 flipped this
+    /// default to `true` — L2CAP CoC is the recommended Bluetooth
+    /// transport now that the RFCOMM A2DP/HFP audio-profile leak is
+    /// out of the picture (LE has no auto-registered audio
+    /// profiles). Set to `false` if the peer fleet needs RFCOMM
+    /// only (e.g. Android 9 and below have no L2CAP CoC client API).
+    #[serde(default = "default_bluetooth_coc_enabled")]
     pub enabled: bool,
     /// L2CAP PSM to bind and dial. Must be inside the LE dynamic
     /// range `0x0080..=0x00FF`; SIG-assigned values
@@ -832,6 +836,14 @@ fn default_bluetooth_rfcomm_inquiry_interval_ms() -> u64 {
     60_000
 }
 
+fn default_bluetooth_coc_enabled() -> bool {
+    // Phase 5: CoC is the recommended Bluetooth transport. See
+    // `BluetoothCocConfig::enabled` doc comment for the rationale.
+    // Operators who only want RFCOMM (Android 9 and below) set this
+    // to `false` explicitly.
+    true
+}
+
 fn default_bluetooth_coc_psm() -> u16 {
     // 0x0083: inside the LE dynamic PSM range (0x0080..=0x00FF).
     // SIG-assigned 0x0001..=0x007F is reserved by the BT spec.
@@ -1009,7 +1021,7 @@ impl Default for BluetoothRfcommConfig {
 impl Default for BluetoothCocConfig {
     fn default() -> Self {
         Self {
-            enabled: false,
+            enabled: default_bluetooth_coc_enabled(),
             psm: default_bluetooth_coc_psm(),
             device_name_prefix: default_bluetooth_device_name_prefix(),
             outbound_enabled: default_bluetooth_coc_outbound_enabled(),
