@@ -12,8 +12,8 @@ use tracing::{debug, warn};
 
 use super::bridge;
 use super::socket::RfcommStream;
-use crate::frame::{decode_frame, encode_frame, FrameError};
 use super::{format_bdaddr, now_iso, BdAddr, LocalIdentity, RfcommEvent, HELLO_VERSION};
+use crate::frame::{decode_frame, encode_frame, FrameError};
 
 #[derive(Debug, Serialize, Deserialize)]
 struct HelloMsg<'a> {

@@ -72,22 +72,21 @@ pub fn spawn(
                     psm = format!("{:#06x}", cfg.psm),
                     "coc dialing peer"
                 );
-                let stream =
-                    match socket::connect(bd_addr, cfg.psm, cfg.peer_bdaddr_type).await {
-                        Ok(s) => s,
-                        Err(e) => {
-                            let _ = events_tx
-                                .send(CocEvent::OpenFailed {
-                                    bd_addr: bd_addr_str.clone(),
-                                    name: name.clone(),
-                                    reason: e.to_string(),
-                                })
-                                .await;
-                            let mut set = active.lock().await;
-                            set.remove(&bd_addr);
-                            continue;
-                        }
-                    };
+                let stream = match socket::connect(bd_addr, cfg.psm, cfg.peer_bdaddr_type).await {
+                    Ok(s) => s,
+                    Err(e) => {
+                        let _ = events_tx
+                            .send(CocEvent::OpenFailed {
+                                bd_addr: bd_addr_str.clone(),
+                                name: name.clone(),
+                                reason: e.to_string(),
+                            })
+                            .await;
+                        let mut set = active.lock().await;
+                        set.remove(&bd_addr);
+                        continue;
+                    }
+                };
                 let identity = identity.clone();
                 let events_tx = events_tx.clone();
                 let cancel = cancel.child_token();

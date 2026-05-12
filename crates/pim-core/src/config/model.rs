@@ -50,6 +50,14 @@ pub struct Config {
     /// Bluetooth RFCOMM direct-channel discovery and TCP bridge settings.
     #[serde(default)]
     pub bluetooth_rfcomm: BluetoothRfcommConfig,
+    /// Bluetooth L2CAP Connection-Oriented Channel (CoC) — LE-routed
+    /// counterpart to `[bluetooth_rfcomm]`. Default is opt-in for the
+    /// transition window; Phase 5 of the L2CAP CoC plan flips this to
+    /// `enabled = true` as the shipped default once `[bluetooth_coc]`
+    /// has soaked on hardware. Coexists with `[bluetooth_rfcomm]` —
+    /// both services can run in parallel.
+    #[serde(default)]
+    pub bluetooth_coc: BluetoothCocConfig,
     /// User-to-user encrypted messaging settings, including broadcast policy.
     #[serde(default)]
     pub messaging: MessagingConfig,
@@ -458,6 +466,74 @@ pub struct BluetoothRfcommConfig {
     pub peer_cleanup: PeerCleanupConfig,
 }
 
+/// Bluetooth L2CAP Connection-Oriented Channel (CoC) configuration.
+///
+/// LE-routed counterpart to [`BluetoothRfcommConfig`]. Binds the
+/// configured L2CAP PSM, runs the same Hello/HelloAck identity
+/// exchange over a `BTPROTO_L2CAP` socket (with
+/// `BDADDR_LE_PUBLIC`/`BDADDR_LE_RANDOM` so the kernel routes through
+/// the LE controller), and bridges the post-handshake byte stream to
+/// the local `pim-transport` TCP listener — identical to the RFCOMM
+/// path in shape, only the underlying socket changes.
+///
+/// CoC and RFCOMM can run in parallel; the daemon dedups concurrent
+/// sessions for the same `bd_addr` so a peer reachable on both
+/// transports does not end up with duplicate post-handshake bridges.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct BluetoothCocConfig {
+    /// Enable the Linux L2CAP CoC service. Defaults to `false` until
+    /// Phase 5 of the L2CAP CoC plan flips the default.
+    #[serde(default)]
+    pub enabled: bool,
+    /// L2CAP PSM to bind and dial. Must be inside the LE dynamic
+    /// range `0x0080..=0x00FF`; SIG-assigned values
+    /// `0x0001..=0x007F` are forbidden. Default `0x0083`. Note:
+    /// Android's `listenUsingL2capChannel` assigns its own dynamic
+    /// PSM at listen time and ignores this value on the acceptor
+    /// side; Phase 4 GAP-advertising surfaces the assigned PSM so the
+    /// Linux initiator dials the right number.
+    #[serde(default = "default_bluetooth_coc_psm")]
+    pub psm: u16,
+    /// Prefix used to identify paired PIM peers by Bluetooth device
+    /// name. Shared with RFCOMM by convention; falls through to
+    /// `[bluetooth_rfcomm].device_name_prefix` (and ultimately
+    /// `default_bluetooth_device_name_prefix`) when empty.
+    #[serde(default = "default_bluetooth_device_name_prefix")]
+    pub device_name_prefix: String,
+    /// Enable outbound paired-device scanning and dialing.
+    #[serde(default = "default_bluetooth_coc_outbound_enabled")]
+    pub outbound_enabled: bool,
+    /// Poll interval for outbound paired-device scans, in milliseconds.
+    #[serde(default = "default_bluetooth_coc_poll_interval_ms")]
+    pub poll_interval_ms: u64,
+    /// Bridge established CoC sessions to the local TCP transport listener.
+    #[serde(default = "default_bluetooth_coc_bridge_to_tcp")]
+    pub bridge_to_tcp: bool,
+    /// Reserved for Phase 4 GAP-scan discovery. When `false` (the
+    /// default until Phase 4), the outbound loop falls back to
+    /// `bluetoothctl devices Paired` exactly like the RFCOMM path so
+    /// CoC works on Linux↔Linux today without LE-scan plumbing.
+    #[serde(default = "default_bluetooth_coc_discovery_enabled")]
+    pub discovery_enabled: bool,
+    /// Cadence between LE-scan cycles when `discovery_enabled = true`.
+    #[serde(default = "default_bluetooth_coc_inquiry_interval_ms")]
+    pub inquiry_interval_ms: u64,
+    /// Address-type fed into `sockaddr_l2.l2_bdaddr_type` when dialing
+    /// a peer. `1` = `BDADDR_LE_PUBLIC` (default — most Linux-paired
+    /// peers), `2` = `BDADDR_LE_RANDOM` (most smartphones). The
+    /// daemon does not currently auto-detect this; deployments with
+    /// mixed peer fleets should split into two configs or rely on the
+    /// Phase 4 GAP advertisement (which carries the address-type in
+    /// the AdvA field).
+    #[serde(default = "default_bluetooth_coc_peer_bdaddr_type")]
+    pub peer_bdaddr_type: u8,
+    /// Periodic cleanup of unreachable paired peers — same shape as
+    /// `[bluetooth_rfcomm.peer_cleanup]`. Defaults to the bluetooth
+    /// preset (2 h lifetime, 1 h sweep cadence).
+    #[serde(default = "PeerCleanupConfig::bluetooth_default")]
+    pub peer_cleanup: PeerCleanupConfig,
+}
+
 /// Messaging subsystem configuration. Exposes the
 /// `[messaging.broadcast]` policy that governs how this node
 /// advertises its identity across the mesh, plus a peer-cleanup
@@ -756,6 +832,42 @@ fn default_bluetooth_rfcomm_inquiry_interval_ms() -> u64 {
     60_000
 }
 
+fn default_bluetooth_coc_psm() -> u16 {
+    // 0x0083: inside the LE dynamic PSM range (0x0080..=0x00FF).
+    // SIG-assigned 0x0001..=0x007F is reserved by the BT spec.
+    0x0083
+}
+
+fn default_bluetooth_coc_outbound_enabled() -> bool {
+    true
+}
+
+fn default_bluetooth_coc_poll_interval_ms() -> u64 {
+    30_000
+}
+
+fn default_bluetooth_coc_bridge_to_tcp() -> bool {
+    true
+}
+
+fn default_bluetooth_coc_discovery_enabled() -> bool {
+    // Phase 4 (GAP advertising + LE scan) flips this. Off by default
+    // so Phase 2 / Phase 3 ship without an unfinished discovery
+    // codepath under the same flag.
+    false
+}
+
+fn default_bluetooth_coc_inquiry_interval_ms() -> u64 {
+    60_000
+}
+
+fn default_bluetooth_coc_peer_bdaddr_type() -> u8 {
+    // BDADDR_LE_PUBLIC. Smartphone fleets that default to random
+    // addresses should set this to `2` (BDADDR_LE_RANDOM) or wait for
+    // the Phase 4 GAP-scan path which carries the type per-peer.
+    0x01
+}
+
 impl Default for InterfaceConfig {
     fn default() -> Self {
         Self {
@@ -889,6 +1001,23 @@ impl Default for BluetoothRfcommConfig {
             bridge_to_tcp: default_bluetooth_rfcomm_bridge_to_tcp(),
             discovery_enabled: default_bluetooth_rfcomm_discovery_enabled(),
             inquiry_interval_ms: default_bluetooth_rfcomm_inquiry_interval_ms(),
+            peer_cleanup: PeerCleanupConfig::bluetooth_default(),
+        }
+    }
+}
+
+impl Default for BluetoothCocConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            psm: default_bluetooth_coc_psm(),
+            device_name_prefix: default_bluetooth_device_name_prefix(),
+            outbound_enabled: default_bluetooth_coc_outbound_enabled(),
+            poll_interval_ms: default_bluetooth_coc_poll_interval_ms(),
+            bridge_to_tcp: default_bluetooth_coc_bridge_to_tcp(),
+            discovery_enabled: default_bluetooth_coc_discovery_enabled(),
+            inquiry_interval_ms: default_bluetooth_coc_inquiry_interval_ms(),
+            peer_bdaddr_type: default_bluetooth_coc_peer_bdaddr_type(),
             peer_cleanup: PeerCleanupConfig::bluetooth_default(),
         }
     }
