@@ -20,3 +20,13 @@ tracing = { workspace = true }
 # code is `cfg(target_os = "linux")` only.
 serde = { workspace = true }
 serde_json = { workspace = true }
+
+# BlueZ D-Bus client (LE GAP advertising + scan, Phase 4 of the L2CAP
+# CoC plan). Linux-only — the crate has no portable backend, so it
+# only enters the build on Linux targets. `default-features = false`
+# strips the `id` (Apple ProductID), `gatt`, and `mesh` features we
+# don't use, keeping the dependency surface and compile time
+# reasonable.
+[target.'cfg(target_os = "linux")'.dependencies]
+bluer = { version = "0.17", default-features = false, features = ["bluetoothd"] }
+futures-util = "0.3"

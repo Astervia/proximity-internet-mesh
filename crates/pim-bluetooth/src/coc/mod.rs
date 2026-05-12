@@ -55,11 +55,15 @@ use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
 #[cfg(target_os = "linux")]
+mod advertising;
+#[cfg(target_os = "linux")]
 mod bridge;
 #[cfg(target_os = "linux")]
 mod listener;
 #[cfg(target_os = "linux")]
 mod outbound;
+#[cfg(target_os = "linux")]
+mod scan;
 #[cfg(target_os = "linux")]
 mod session;
 #[cfg(target_os = "linux")]
@@ -295,6 +299,28 @@ impl CocService {
                 cancel.clone(),
                 active.clone(),
             )?;
+            // Phase 4: LE GAP advertising + scan are opt-in via
+            // `discovery_enabled`. Advertising publishes our bound
+            // PSM in service-data so remote scanners can dial; scan
+            // discovers PIM advertisers and dials each new peer's
+            // PSM. The pair forms the LE-native discovery surface
+            // that replaces RFCOMM's BR/EDR-inquiry path.
+            if cfg.discovery_enabled {
+                advertising::spawn(
+                    cfg.clone(),
+                    identity.clone(),
+                    cfg.psm,
+                    events_tx.clone(),
+                    cancel.clone(),
+                );
+                scan::spawn(
+                    cfg.clone(),
+                    identity.clone(),
+                    events_tx.clone(),
+                    cancel.clone(),
+                    active.clone(),
+                );
+            }
             if cfg.outbound_enabled {
                 outbound::spawn(cfg, identity, events_tx, cancel.clone(), active);
             }

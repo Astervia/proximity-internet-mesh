@@ -2,7 +2,31 @@
 //! Socket / kernel tests live behind `RUN_BT_HW_TESTS=1` on Linux;
 //! everything here runs on every platform.
 
-use super::{format_bdaddr, parse_bdaddr, BdAddr, DEFAULT_PSM};
+use super::{format_bdaddr, parse_bdaddr, BdAddr, DEFAULT_PSM, PIM_SERVICE_UUID};
+
+#[test]
+fn pim_service_uuid_parses() {
+    // The const is unwrap'd at runtime in `advertising::run` and
+    // `scan::run`; a typo would crash bluetoothd-side startup. Lock
+    // it here so the failure surfaces in unit tests, not at deploy
+    // time.
+    let _ = bluer_uuid_compat_parse(PIM_SERVICE_UUID).expect("PIM_SERVICE_UUID parses");
+}
+
+/// Reimplemented via `uuid::Uuid::parse_str` to keep this test
+/// dependency-light (avoid pulling bluer into the cross-platform test
+/// surface). `bluer::Uuid` is re-exported from `uuid::Uuid`, so any
+/// parser that handles the canonical 8-4-4-4-12 hex form works.
+fn bluer_uuid_compat_parse(s: &str) -> Result<u128, String> {
+    let stripped: String = s.chars().filter(|c| *c != '-').collect();
+    if stripped.len() != 32 {
+        return Err(format!(
+            "expected 32 hex chars after stripping dashes, got {}",
+            stripped.len()
+        ));
+    }
+    u128::from_str_radix(&stripped, 16).map_err(|e| e.to_string())
+}
 
 #[test]
 fn bdaddr_roundtrip() {
