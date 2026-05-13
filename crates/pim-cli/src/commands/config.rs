@@ -694,7 +694,7 @@ fn push_bluetooth_coc(out: &mut String) {
         out,
         "# device dialer so peers find each other without an out-of-band PSM exchange.",
     );
-    push_line(out, "discovery_enabled = false");
+    push_line(out, "discovery_enabled = true");
     push_line(
         out,
         "# LE-scan cadence (ms) when `discovery_enabled = true`.",

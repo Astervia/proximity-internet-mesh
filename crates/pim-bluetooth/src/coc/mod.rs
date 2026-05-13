@@ -194,7 +194,7 @@ impl Default for CocConfig {
             outbound_enabled: true,
             bluetoothctl_command: std::path::PathBuf::from("bluetoothctl"),
             local_bridge_addr: None,
-            discovery_enabled: false,
+            discovery_enabled: true,
             inquiry_interval: Duration::from_secs(60),
             peer_bdaddr_type: BDADDR_LE_PUBLIC,
         }

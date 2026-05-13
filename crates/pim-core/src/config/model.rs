@@ -863,10 +863,15 @@ fn default_bluetooth_coc_bridge_to_tcp() -> bool {
 }
 
 fn default_bluetooth_coc_discovery_enabled() -> bool {
-    // Phase 4 (GAP advertising + LE scan) flips this. Off by default
-    // so Phase 2 / Phase 3 ship without an unfinished discovery
-    // codepath under the same flag.
-    false
+    // Phase 4 (LE GAP advertising + scan) has shipped; the default
+    // flips ON so Android↔Linux discovery just works without
+    // requiring operators to edit `pim.toml`. Pre-existing configs
+    // that don't carry a `[bluetooth_coc]` section pick up the new
+    // default automatically because every field on
+    // `BluetoothCocConfig` is `#[serde(default)]`. Operators on
+    // headless gateways with no LE radio can opt out by setting it
+    // back to `false`.
+    true
 }
 
 fn default_bluetooth_coc_inquiry_interval_ms() -> u64 {

@@ -157,10 +157,11 @@ fn bluetooth_coc_defaults_to_enabled() {
     assert!(config.bluetooth_coc.outbound_enabled);
     assert_eq!(config.bluetooth_coc.poll_interval_ms, 30_000);
     assert!(config.bluetooth_coc.bridge_to_tcp);
-    // Phase 4 (GAP-scan discovery) defaults to off until that phase
-    // ships; locked in here so a future schema bump can't silently
-    // flip it ahead of the discovery implementation.
-    assert!(!config.bluetooth_coc.discovery_enabled);
+    // Phase 4 (LE GAP advertising + scan) has shipped, so the
+    // default is `true` — Android↔Linux discovery works without
+    // operators editing `pim.toml`. Lock the on-default explicitly
+    // so a future schema bump can't silently re-disable it.
+    assert!(config.bluetooth_coc.discovery_enabled);
     assert_eq!(config.bluetooth_coc.inquiry_interval_ms, 60_000);
     assert_eq!(config.bluetooth_coc.peer_bdaddr_type, 0x01);
 }
