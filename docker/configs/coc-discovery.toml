@@ -1,0 +1,49 @@
+# CoC-only seam test config.
+#
+# pim-bluetooth (PAN/NAP) is OFF — only the bluetooth_coc service runs.
+# Docker bridge containers can't bind AF_BLUETOOTH sockets, so the
+# L2CAP CoC listener bind fails with EAFNOSUPPORT. The lab verifies
+# the daemon survives that failure cleanly and the rest of the stack
+# (TUN, transport, RPC, event loop) still comes up.
+#
+# bluetooth_rfcomm stays disabled here so the two transports' startup
+# failures don't mask each other in the log assertions.
+
+[node]
+name = "coc-discovery"
+data_dir = "/var/lib/pim"
+
+[interface]
+mtu = 1400
+
+[discovery]
+enabled = false
+
+[transport]
+listen_port = 9100
+
+[security]
+key_file = "/var/lib/pim/node.key"
+
+[bluetooth]
+enabled = false
+
+[bluetooth_rfcomm]
+enabled = false
+
+[bluetooth_coc]
+enabled = true
+psm = 0x0083
+device_name_prefix = "PIM-"
+outbound_enabled = true
+# Polled fast so the lab doesn't waste wall-clock waiting for the first
+# scan. Production default is 30 s.
+poll_interval_ms = 1500
+# Bridge to TCP loopback is OFF here — without a real CoC peer there's
+# no traffic to bridge, and turning it on adds log noise.
+bridge_to_tcp = false
+# Phase 4 LE GAP advertising/scan stay off — they hit the same
+# `AF_BLUETOOTH` ceiling in Docker (bluer's D-Bus calls would fail
+# similarly), and the listener bind failure is already the
+# definitive signal that the BT stack isn't available.
+discovery_enabled = false

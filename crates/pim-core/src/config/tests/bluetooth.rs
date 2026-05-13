@@ -142,6 +142,66 @@ inquiry_interval_ms = 30000
 }
 
 #[test]
+fn bluetooth_coc_defaults_to_enabled() {
+    // Phase 5 flipped the default: CoC is now the shipped Bluetooth
+    // transport. Lock the flip explicitly so a future refactor can't
+    // silently revert it (the audio-leak regression that motivated
+    // this would come back).
+    let config = Config::from_toml_str(MINIMAL_CONFIG).unwrap();
+    assert!(config.bluetooth_coc.enabled);
+    // Default PSM must be inside the LE dynamic range
+    // 0x0080..=0x00FF; SIG-assigned 0x0001..=0x007F is forbidden.
+    assert_eq!(config.bluetooth_coc.psm, 0x0083);
+    assert!((0x0080..=0x00FF).contains(&config.bluetooth_coc.psm));
+    assert_eq!(config.bluetooth_coc.device_name_prefix, "PIM-");
+    assert!(config.bluetooth_coc.outbound_enabled);
+    assert_eq!(config.bluetooth_coc.poll_interval_ms, 30_000);
+    assert!(config.bluetooth_coc.bridge_to_tcp);
+    // Phase 4 (LE GAP advertising + scan) has shipped, so the
+    // default is `true` — Android↔Linux discovery works without
+    // operators editing `pim.toml`. Lock the on-default explicitly
+    // so a future schema bump can't silently re-disable it.
+    assert!(config.bluetooth_coc.discovery_enabled);
+    assert_eq!(config.bluetooth_coc.inquiry_interval_ms, 60_000);
+    assert_eq!(config.bluetooth_coc.peer_bdaddr_type, 0x01);
+}
+
+#[test]
+fn bluetooth_coc_enabled_round_trips() {
+    let toml = r#"
+[node]
+name = "t"
+
+[bluetooth_coc]
+enabled = true
+psm = 0x0091
+device_name_prefix = "MESH-"
+outbound_enabled = false
+poll_interval_ms = 15000
+bridge_to_tcp = false
+discovery_enabled = true
+inquiry_interval_ms = 45000
+peer_bdaddr_type = 2
+"#;
+    let config = Config::from_toml_str(toml).unwrap();
+    assert!(config.bluetooth_coc.enabled);
+    assert_eq!(config.bluetooth_coc.psm, 0x0091);
+    assert_eq!(config.bluetooth_coc.device_name_prefix, "MESH-");
+    assert!(!config.bluetooth_coc.outbound_enabled);
+    assert_eq!(config.bluetooth_coc.poll_interval_ms, 15_000);
+    assert!(!config.bluetooth_coc.bridge_to_tcp);
+    assert!(config.bluetooth_coc.discovery_enabled);
+    assert_eq!(config.bluetooth_coc.inquiry_interval_ms, 45_000);
+    assert_eq!(config.bluetooth_coc.peer_bdaddr_type, 0x02);
+
+    let serialized = config.to_toml_string().unwrap();
+    let reparsed = Config::from_toml_str(&serialized).unwrap();
+    assert!(reparsed.bluetooth_coc.enabled);
+    assert_eq!(reparsed.bluetooth_coc.psm, 0x0091);
+    assert_eq!(reparsed.bluetooth_coc.peer_bdaddr_type, 0x02);
+}
+
+#[test]
 fn bluetooth_rfcomm_enabled_round_trips() {
     let toml = r#"
 [node]

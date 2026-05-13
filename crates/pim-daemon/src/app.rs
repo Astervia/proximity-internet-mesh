@@ -1122,6 +1122,145 @@ pub async fn run_in_process(
         None
     };
 
+    // ── L2CAP CoC service (BLE-routed, Linux-only impl) ─────────────────────
+    //
+    // LE-routed counterpart to the RFCOMM block above. Same Hello
+    // envelope, same TCP bridge — only the underlying socket
+    // changes. Coexists with RFCOMM: both services share the daemon's
+    // event sinks, and the per-service `active` HashSet keeps
+    // duplicate sessions to the same peer out of each transport
+    // independently.
+    #[cfg(target_os = "linux")]
+    let _coc_handle: Option<(pim_bluetooth::coc::CocService, tokio::task::JoinHandle<()>)> =
+        if config.bluetooth_coc.enabled {
+            use pim_bluetooth::coc::{CocConfig, CocEvent, CocService, LocalIdentity};
+            // Falls through to `bluetooth_rfcomm.device_name_prefix` when
+            // empty so a single name controls both transports. Final
+            // fallback is the shared `PIM-` default — same behaviour as
+            // the RFCOMM block.
+            let coc_prefix = if !config.bluetooth_coc.device_name_prefix.is_empty() {
+                config.bluetooth_coc.device_name_prefix.clone()
+            } else if !config.bluetooth_rfcomm.device_name_prefix.is_empty() {
+                config.bluetooth_rfcomm.device_name_prefix.clone()
+            } else {
+                pim_bluetooth::coc::DEFAULT_PREFIX.to_string()
+            };
+            let local_identity = LocalIdentity {
+                node_id_hex: identity.node_id().to_hex(),
+                name: format!("{coc_prefix}{}", config.node.name),
+                caps: {
+                    let mut caps = vec!["mesh-v1".to_string()];
+                    if config.gateway.enabled {
+                        caps.push("gateway-v1".to_string());
+                    }
+                    caps
+                },
+                mesh_handshake_key: state.mesh_handshake_key,
+            };
+            let coc_cfg = CocConfig {
+                enabled: true,
+                psm: config.bluetooth_coc.psm,
+                prefix: coc_prefix,
+                poll_interval: std::time::Duration::from_millis(
+                    config.bluetooth_coc.poll_interval_ms.max(1),
+                ),
+                outbound_enabled: config.bluetooth_coc.outbound_enabled,
+                bluetoothctl_command: bluetoothctl_command(),
+                local_bridge_addr: config.bluetooth_coc.bridge_to_tcp.then_some(
+                    std::net::SocketAddr::new(
+                        std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST),
+                        transport_listen_port,
+                    ),
+                ),
+                discovery_enabled: config.bluetooth_coc.discovery_enabled,
+                inquiry_interval: std::time::Duration::from_millis(
+                    config.bluetooth_coc.inquiry_interval_ms.max(1),
+                ),
+                peer_bdaddr_type: config.bluetooth_coc.peer_bdaddr_type,
+            };
+            let (events_tx, mut events_rx) = tokio::sync::mpsc::channel(64);
+            match CocService::start(coc_cfg, local_identity, events_tx) {
+                Ok(svc) => {
+                    info!("Bluetooth L2CAP CoC service started");
+                    let state_for_coc = state.clone();
+                    let log_handle = tokio::spawn(async move {
+                        while let Some(ev) = events_rx.recv().await {
+                            match &ev {
+                                CocEvent::Listening { psm } => {
+                                    info!(psm = format!("{psm:#06x}"), "coc listening")
+                                }
+                                CocEvent::Discovered {
+                                    bd_addr,
+                                    node_id,
+                                    name,
+                                    platform,
+                                    caps,
+                                    initiator,
+                                    ..
+                                } => {
+                                    info!(
+                                        bd_addr = %bd_addr,
+                                        node_id = %&node_id[..16.min(node_id.len())],
+                                        name = %name,
+                                        platform = %platform,
+                                        caps = ?caps,
+                                        initiator = *initiator,
+                                        "coc peer discovered"
+                                    );
+                                    // CoC reuses the RFCOMM lifecycle
+                                    // bookkeeping — the
+                                    // `bluetooth_pan_lifecycle` table
+                                    // tracks "this BD address is reachable
+                                    // via some Bluetooth transport", and
+                                    // RFCOMM and CoC observations are
+                                    // equally valid signals of liveness
+                                    // for the bluetoothctl-driven cleanup
+                                    // path. Same Noise initiator election
+                                    // applies — only one side drives the
+                                    // pim-transport handshake.
+                                    record_rfcomm_lifecycle_connected(
+                                        state_for_coc.clone(),
+                                        bd_addr.clone(),
+                                        name.clone(),
+                                    );
+                                    spawn_rfcomm_initiator_if_lower(
+                                        state_for_coc.clone(),
+                                        node_id.clone(),
+                                    );
+                                }
+                                CocEvent::Lost { bd_addr, reason } => {
+                                    info!(bd_addr = %bd_addr, reason = %reason, "coc peer lost")
+                                }
+                                CocEvent::OpenFailed {
+                                    bd_addr,
+                                    name,
+                                    reason,
+                                } => {
+                                    warn!(bd_addr = %bd_addr, reason = %reason, "coc open failed");
+                                    observe_rfcomm_lifecycle_paired(
+                                        state_for_coc.clone(),
+                                        bd_addr.clone(),
+                                        name.clone(),
+                                    );
+                                }
+                                CocEvent::Error { code, message } => {
+                                    warn!(code = *code, message = %message, "coc error")
+                                }
+                            }
+                        }
+                    });
+                    Some((svc, log_handle))
+                }
+                Err(e) => {
+                    warn!("coc service failed to start: {e}");
+                    None
+                }
+            }
+        } else {
+            debug!("Bluetooth L2CAP CoC disabled by config");
+            None
+        };
+
     // RFCOMM peer cleanup task — opt-in. Phase 2 of
     // plans/rfcomm-reconnect/plan.md. Spawned only when RFCOMM is
     // enabled (no point cleaning lifecycle rows we never write to)

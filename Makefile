@@ -17,6 +17,7 @@ docker-build:
         test-resilience test-resilience-full test-multi-gateway test-auto-discovery \
         test-auto-ip-chain test-auth test-private-mesh test-debug-cli test-route-cli \
         test-bluetooth test-bluetooth-enx test-rfcomm-discovery test-rfcomm-cleanup \
+        test-coc-discovery \
         test-broadcast test-messaging test-all
 
 test-single-hop: docker-build         ## phase 1: TUN, NAT, gateway/client baseline
@@ -69,6 +70,9 @@ test-rfcomm-discovery: docker-build  ## RFCOMM listener + outbound dial-failure 
 
 test-rfcomm-cleanup: docker-build    ## RFCOMM unreachable-peer unpair (Phase 2 cleanup)
 	bash $(TEST_DIR)/test-rfcomm-cleanup.sh
+
+test-coc-discovery: docker-build     ## L2CAP CoC listener bind-failure resilience (seam)
+	bash $(TEST_DIR)/test-coc-discovery.sh
 
 test-broadcast: docker-build         ## identity broadcast across a multi-hop chain
 	bash $(TEST_DIR)/test-broadcast.sh
@@ -299,6 +303,7 @@ help:
 	@echo "  make test-bluetooth         Bluetooth fake-sysfs seam test in Docker"
 	@echo "  make test-bluetooth-enx     Bluetooth dynamic enx PAN fallback seam test in Docker"
 	@echo "  make test-rfcomm-discovery  RFCOMM listener + outbound dial-failure seam"
+	@echo "  make test-coc-discovery     L2CAP CoC listener bind-failure seam"
 	@echo "  make test-broadcast         Identity broadcast across a 4-node chain"
 	@echo "  make test-messaging         End-to-end messaging plugin (direct + 3-hop)"
 	@echo "  make test-all               All labs (slow tests skipped)"

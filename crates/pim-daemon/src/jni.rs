@@ -495,10 +495,15 @@ fn build_local_identity(config_path: &str) -> anyhow::Result<String> {
     let identity = pim_crypto::Identity::load_or_generate(std::path::Path::new(&key_path))?;
     let node_id_hex = identity.node_id().to_hex();
 
-    let prefix = if config.bluetooth_rfcomm.device_name_prefix.is_empty() {
-        pim_bluetooth::rfcomm::DEFAULT_PREFIX.to_string()
-    } else {
+    // Pick the active transport's prefix. RFCOMM wins when it has one
+    // set (the legacy/Android < 10 path), CoC fills in once it ships
+    // as the default. Final fallback is the shared `PIM-` default.
+    let prefix = if !config.bluetooth_rfcomm.device_name_prefix.is_empty() {
         config.bluetooth_rfcomm.device_name_prefix.clone()
+    } else if !config.bluetooth_coc.device_name_prefix.is_empty() {
+        config.bluetooth_coc.device_name_prefix.clone()
+    } else {
+        pim_bluetooth::rfcomm::DEFAULT_PREFIX.to_string()
     };
     let name = format!("{prefix}{}", config.node.name);
 
