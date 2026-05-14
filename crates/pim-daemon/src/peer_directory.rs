@@ -384,7 +384,8 @@ impl PeerDirectoryService {
 
     fn list_x25519_blocking(&self) -> Result<std::collections::HashMap<String, String>> {
         let conn = self.conn.lock().unwrap();
-        let mut stmt = conn.prepare("SELECT node_id, x25519_pub FROM peers_seen")?;
+        // ⚡ Bolt: Use prepare_cached to avoid recompiling this frequently executed static query
+        let mut stmt = conn.prepare_cached("SELECT node_id, x25519_pub FROM peers_seen")?;
         let rows = stmt
             .query_map([], |row| {
                 let node_id: String = row.get(0)?;
@@ -407,7 +408,8 @@ impl PeerDirectoryService {
     /// loop reports what it dropped.
     pub fn list_peers_older_than(&self, threshold_ms: i64) -> Result<Vec<(NodeId, i64, String)>> {
         let conn = self.conn.lock().unwrap();
-        let mut stmt = conn.prepare(
+        // ⚡ Bolt: Use prepare_cached to avoid recompiling this frequently executed static query
+        let mut stmt = conn.prepare_cached(
             "SELECT node_id, last_seen_ms, last_known_name \
              FROM peers_seen \
              WHERE last_seen_ms < ?1 \
@@ -501,7 +503,8 @@ impl PeerDirectoryService {
     #[allow(dead_code)]
     pub fn list_rfcomm_lifecycle(&self) -> Result<Vec<RfcommLifecycleRecord>> {
         let conn = self.conn.lock().unwrap();
-        let mut stmt = conn.prepare(
+        // ⚡ Bolt: Use prepare_cached to avoid recompiling this frequently executed static query
+        let mut stmt = conn.prepare_cached(
             "SELECT bd_addr, name, first_paired_at_s, last_connected_at_s \
              FROM rfcomm_peer_lifecycle \
              ORDER BY bd_addr ASC",
@@ -568,7 +571,8 @@ impl PeerDirectoryService {
     #[allow(dead_code)]
     pub fn list_pan_lifecycle(&self) -> Result<Vec<PanLifecycleRecord>> {
         let conn = self.conn.lock().unwrap();
-        let mut stmt = conn.prepare(
+        // ⚡ Bolt: Use prepare_cached to avoid recompiling this frequently executed static query
+        let mut stmt = conn.prepare_cached(
             "SELECT bd_addr, name, first_paired_at_s, last_connected_at_s \
              FROM bluetooth_pan_lifecycle \
              ORDER BY bd_addr ASC",
@@ -633,7 +637,8 @@ impl PeerDirectoryService {
     #[allow(dead_code)]
     pub fn list_wfd_lifecycle(&self) -> Result<Vec<WfdLifecycleRecord>> {
         let conn = self.conn.lock().unwrap();
-        let mut stmt = conn.prepare(
+        // ⚡ Bolt: Use prepare_cached to avoid recompiling this frequently executed static query
+        let mut stmt = conn.prepare_cached(
             "SELECT mac, first_seen_at_s, last_connected_at_s \
              FROM wfd_peer_lifecycle \
              ORDER BY mac ASC",
