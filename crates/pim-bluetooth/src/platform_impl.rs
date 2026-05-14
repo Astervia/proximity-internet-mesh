@@ -802,6 +802,12 @@ impl BluetoothDiscovery {
         &self,
     ) -> Result<Vec<ResolvedPanInterface>, BluetoothError> {
         let interface = resolve_macos_pan_interface_hint(&self.config.interface);
+        if !crate::support::is_safe_interface_name(interface) {
+            return Err(BluetoothError::CommandFailed {
+                command: "ifconfig",
+                message: format!("invalid interface name: {}", interface),
+            });
+        }
         let output = Command::new("ifconfig").arg(interface).output().await?;
         if !output.status.success() {
             return Ok(Vec::new());
@@ -827,6 +833,12 @@ impl BluetoothDiscovery {
         interface: &str,
     ) -> Result<Vec<SocketAddr>, BluetoothError> {
         let scope_id = interface_index(interface);
+        if !crate::support::is_safe_interface_name(interface) {
+            return Err(BluetoothError::CommandFailed {
+                command: "ip",
+                message: format!("invalid interface name: {}", interface),
+            });
+        }
         let output = Command::new(&self.ip_command)
             .args(["neigh", "show", "dev", interface])
             .output()
@@ -851,6 +863,12 @@ impl BluetoothDiscovery {
         &self,
         interface: &str,
     ) -> Result<Vec<SocketAddr>, BluetoothError> {
+        if !crate::support::is_safe_interface_name(interface) {
+            return Err(BluetoothError::CommandFailed {
+                command: "arp",
+                message: format!("invalid interface name: {}", interface),
+            });
+        }
         let output = Command::new(&self.ip_command)
             .args(["-an", "-i", interface])
             .output()
