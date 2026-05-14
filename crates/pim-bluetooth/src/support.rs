@@ -385,3 +385,16 @@ pub(super) fn parse_arp_output(output: &str, interface: &str, listen_port: u16) 
 
     addrs
 }
+
+pub(super) fn is_safe_interface_name(name: &str) -> bool {
+    let name = name.trim();
+    if name.is_empty() || name.len() > 15 {
+        return false;
+    }
+    let mut chars = name.chars();
+    let first = chars.next().unwrap();
+    if !first.is_ascii_alphanumeric() {
+        return false;
+    }
+    chars.all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.')
+}
