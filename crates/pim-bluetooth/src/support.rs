@@ -26,6 +26,14 @@ pub(super) fn is_ready_operstate(state: &str) -> bool {
     matches!(state.trim(), "up" | "unknown")
 }
 
+pub(super) fn is_safe_interface_name(name: &str) -> bool {
+    if name.is_empty() || name.len() > 15 {
+        return false;
+    }
+    name.chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.')
+}
+
 #[cfg(any(test, target_os = "linux"))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct PanInterfaceCandidate {
