@@ -50,6 +50,20 @@ duplicating them.
     - runtime and operator workflow
 - `docs/getting-started/example-topology.md`
     - sample node layouts and roles
+- `docs/getting-started/client-guide.md`
+    - run a PIM node as a client
+- `docs/getting-started/gateway-guide.md`
+    - run a PIM node as a gateway
+
+## Reference
+
+- `docs/reference/README.md`
+    - schemas, surfaces, matrices
+
+## Troubleshooting
+
+- `docs/troubleshooting/README.md`
+    - operator recovery notes and procedures
 
 ## Operations
 
@@ -57,6 +71,8 @@ duplicating them.
     - Cargo and Docker validation workflow
 - `docs/operations/docker-labs.md`
     - Docker lab details and usage
+- `docs/operations/test-writing.md`
+    - unit test writing conventions
 
 ## Usage Guidance
 
