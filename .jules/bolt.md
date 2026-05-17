@@ -49,3 +49,8 @@
 
 **Learning:** `Vec::new()` allocates no heap memory until the first element is pushed, at which point it dynamically allocates and then periodically reallocates. In hot network paths like `fragment_packet`, where we know we will push items, this leads to unnecessary reallocation overhead. However, it is a mistake to aggressively apply `Vec::with_capacity()` to collections that often remain empty (e.g., error queues or retry buffers on the "happy path"), as this will force an unnecessary heap allocation where `Vec::new()` would have remained zero-cost.
 **Action:** Always pre-allocate exact `Vec` capacities (e.g., using `Vec::with_capacity()`) over `Vec::new()` when the final size or an upper bound is known in advance *and* the vector is guaranteed or highly likely to be populated. Avoid `Vec::with_capacity()` for paths that usually remain empty.
+
+## 2024-05-20 - Fragment deserialization zero-copy optimization
+
+**Learning:** When parsing network frames, accepting a slice `&[u8]` forces a memory allocation via `Bytes::copy_from_slice` when trying to retain a sub-slice for later use in a struct that owns `Bytes`.
+**Action:** Change deserialization APIs to accept `bytes::Bytes` by value instead of `&[u8]`. This permits `buf.slice(offset..)` which performs an O(1) zero-copy operation instead of an expensive O(N) heap allocation and copy for every parsed packet or fragment.

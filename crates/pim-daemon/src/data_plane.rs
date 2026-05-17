@@ -71,7 +71,7 @@ pub(crate) async fn reassemble_or_deliver(
     state: &Arc<DaemonState>,
     src_id: NodeId,
     flags: DataFlags,
-    payload: &[u8],
+    payload: bytes::Bytes,
 ) -> Option<Vec<u8>> {
     if flags.contains(DataFlags::IS_FRAGMENT) {
         let frag = FragmentFrame::deserialize(payload)?;

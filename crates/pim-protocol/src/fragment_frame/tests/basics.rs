@@ -40,13 +40,13 @@ fn serialize_deserialize_round_trip() {
         payload: bytes::Bytes::from(vec![1, 2, 3, 4]),
     };
     let bytes = frame.serialize();
-    let decoded = FragmentFrame::deserialize(&bytes).unwrap();
+    let decoded = FragmentFrame::deserialize(bytes::Bytes::from(bytes)).unwrap();
     assert_eq!(frame, decoded);
 }
 
 #[test]
 fn deserialize_too_short_returns_none() {
-    assert!(FragmentFrame::deserialize(&[0u8; 7]).is_none());
+    assert!(FragmentFrame::deserialize(bytes::Bytes::from(vec![0u8; 7])).is_none());
 }
 
 #[test]
@@ -66,7 +66,7 @@ fn deserialize_offset_past_total_returns_none() {
     // We set total_length = 500, which is < 1100. This should fail.
     bad.total_length = 500;
     let bytes3 = bad.serialize();
-    assert!(FragmentFrame::deserialize(&bytes3).is_none());
+    assert!(FragmentFrame::deserialize(bytes::Bytes::from(bytes3)).is_none());
     let _ = bytes2; // suppress warning
 }
 
