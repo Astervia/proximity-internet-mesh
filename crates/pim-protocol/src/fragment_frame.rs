@@ -45,14 +45,14 @@ impl FragmentFrame {
 
     /// Deserialize from wire bytes.  Returns `None` if the buffer is too short
     /// or the contained offsets are nonsensical.
-    pub fn deserialize(buf: &[u8]) -> Option<Self> {
+    pub fn deserialize(buf: bytes::Bytes) -> Option<Self> {
         if buf.len() < FRAGMENT_HEADER_SIZE {
             return None;
         }
         let fragment_id = u32::from_be_bytes(buf[0..4].try_into().ok()?);
         let fragment_offset = u16::from_be_bytes(buf[4..6].try_into().ok()?);
         let total_length = u16::from_be_bytes(buf[6..8].try_into().ok()?);
-        let payload = bytes::Bytes::copy_from_slice(&buf[8..]);
+        let payload = buf.slice(8..);
 
         // Basic sanity checks.
         let end = (fragment_offset as usize).checked_add(payload.len())?;

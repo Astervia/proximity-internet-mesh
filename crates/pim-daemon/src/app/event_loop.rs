@@ -269,7 +269,7 @@ pub(super) async fn run_event_loop(state: Arc<DaemonState>) -> Result<()> {
                             state.packets_forwarded.fetch_add(1, Ordering::Relaxed);
                             state.bytes_forwarded.fetch_add(mesh.payload.len() as u64, Ordering::Relaxed);
                             let ip_payload = match reassemble_or_deliver(
-                                &state, mesh.src_id, mesh.flags, &mesh.payload,
+                                &state, mesh.src_id, mesh.flags, mesh.payload.clone(),
                             ).await {
                                 Some(p) => p,
                                 None => continue, // waiting for more fragments
