@@ -390,5 +390,6 @@ pub(super) fn is_safe_interface_name(name: &str) -> bool {
     if name.is_empty() || name.len() > 15 {
         return false;
     }
-    name.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    name.chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
 }
