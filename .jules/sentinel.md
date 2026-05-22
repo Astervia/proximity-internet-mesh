@@ -30,3 +30,8 @@
 **Vulnerability:** The daemon's broadcast config was persisted using `std::fs::write` to a temporary file before renaming it over the original file. Since `std::fs::write` falls back to the system's default `umask`, the temporary file could be created world-readable and world-writable. The POSIX `rename` operation preserves the permissions of the source file, causing the sensitive configuration file to end up with insecure permissions.
 **Learning:** When performing atomic file writes using a temporary file and `rename`, the temporary file must be created with explicitly strict permissions (e.g., `0o600`), because its permissions will become the permissions of the final file.
 **Prevention:** Explicitly configure `std::fs::OpenOptions` with `OpenOptionsExt::mode(0o600)` on Unix systems when creating temporary files for atomic replacement, avoiding reliance on system umasks.
+
+## 2024-05-22 - Fix Command Injection in Bluetooth Platform Commands
+**Vulnerability:** External utilities (`ifconfig`, `ip`, `dnsmasq`, `dhclient`) used in `pim-bluetooth` are executed via `std::process::Command` without validating interface/bridge strings derived from configuration or system state.
+**Learning:** While `std::process::Command` prevents shell injection, it is vulnerable to argument injection if a malformed interface string (e.g. starting with flags like `--`) or path traversal is passed as an argument.
+**Prevention:** Always validate interface and bridge names by invoking `is_safe_interface_name` to restrict inputs to safe alphanumeric/hyphen/underscore characters prior to invoking the `Command` builder.
