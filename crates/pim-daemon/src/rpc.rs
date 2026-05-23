@@ -120,11 +120,12 @@ fn new_subscription_id() -> String {
 
 pub(crate) async fn run_rpc_server(state: Arc<DaemonState>, socket_path: PathBuf) {
     // Best-effort cleanup of a stale socket from a previous run.
-    let _ = std::fs::remove_file(&socket_path);
+    // ⚡ Bolt: Using `tokio::fs` instead of `std::fs` to prevent blocking the async reactor thread.
+    let _ = tokio::fs::remove_file(&socket_path).await;
 
     if let Some(parent) = socket_path.parent() {
         if !parent.as_os_str().is_empty() {
-            if let Err(e) = std::fs::create_dir_all(parent) {
+            if let Err(e) = tokio::fs::create_dir_all(parent).await {
                 warn!(
                     "rpc: create parent dir {} failed: {e} — listener may fail to bind",
                     parent.display()
@@ -152,7 +153,7 @@ pub(crate) async fn run_rpc_server(state: Arc<DaemonState>, socket_path: PathBuf
     {
         use std::os::unix::fs::PermissionsExt;
         if let Err(e) =
-            std::fs::set_permissions(&socket_path, std::fs::Permissions::from_mode(0o660))
+            tokio::fs::set_permissions(&socket_path, std::fs::Permissions::from_mode(0o660)).await
         {
             warn!("rpc: chmod 0660 socket failed: {e}");
         }
