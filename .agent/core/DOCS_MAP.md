@@ -58,6 +58,18 @@ duplicating them.
 - `docs/operations/docker-labs.md`
     - Docker lab details and usage
 
+## Reference
+
+- `docs/reference/README.md`
+    - API and CLI reference index
+- `docs/troubleshooting/README.md`
+    - debugging common issues
+
+## Research
+
+- `docs/research/`
+    - investigation into platform-specific behaviors
+
 ## Usage Guidance
 
 - For implementation tasks, read the nearest section in `./docs` before editing.
