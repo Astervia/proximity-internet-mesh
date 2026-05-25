@@ -329,14 +329,16 @@ impl MessagingStorage {
         let limit_plus = limit.saturating_add(1).max(2);
 
         let mut stmt = match before_ts_ms {
-            Some(_) => conn.prepare(
+            // ⚡ Bolt: Use prepare_cached to reduce SQL parsing latency
+            Some(_) => conn.prepare_cached(
                 "SELECT id, peer_node_id, direction, body, timestamp_ms, status, failure_reason, delivered_at_ms, read_at_ms \
                  FROM messages \
                  WHERE peer_node_id = ?1 AND timestamp_ms < ?2 \
                  ORDER BY timestamp_ms DESC, id DESC \
                  LIMIT ?3",
             )?,
-            None => conn.prepare(
+            // ⚡ Bolt: Use prepare_cached to reduce SQL parsing latency
+            None => conn.prepare_cached(
                 "SELECT id, peer_node_id, direction, body, timestamp_ms, status, failure_reason, delivered_at_ms, read_at_ms \
                  FROM messages \
                  WHERE peer_node_id = ?1 \
@@ -363,7 +365,8 @@ impl MessagingStorage {
     /// layer fills them in from the daemon's peer directory.
     pub fn list_conversations_raw(&self) -> Result<Vec<ConversationSummary>> {
         let conn = self.conn.lock().unwrap();
-        let mut stmt = conn.prepare(
+        // ⚡ Bolt: Use prepare_cached to reduce SQL parsing latency
+        let mut stmt = conn.prepare_cached(
             "SELECT peer_node_id, last_message_preview, last_message_ts_ms, unread_count \
              FROM conversations_meta \
              ORDER BY last_message_ts_ms DESC NULLS LAST",
