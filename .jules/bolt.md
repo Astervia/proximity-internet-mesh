@@ -49,3 +49,8 @@
 
 **Learning:** `Vec::new()` allocates no heap memory until the first element is pushed, at which point it dynamically allocates and then periodically reallocates. In hot network paths like `fragment_packet`, where we know we will push items, this leads to unnecessary reallocation overhead. However, it is a mistake to aggressively apply `Vec::with_capacity()` to collections that often remain empty (e.g., error queues or retry buffers on the "happy path"), as this will force an unnecessary heap allocation where `Vec::new()` would have remained zero-cost.
 **Action:** Always pre-allocate exact `Vec` capacities (e.g., using `Vec::with_capacity()`) over `Vec::new()` when the final size or an upper bound is known in advance *and* the vector is guaranteed or highly likely to be populated. Avoid `Vec::with_capacity()` for paths that usually remain empty.
+
+## 2024-05-25 - SQLite query parsing latency optimization
+
+**Learning:** `rusqlite`'s `conn.prepare()` incurs parsing and compilation overhead for every execution of static SQL strings, which creates unnecessary latency on hot read paths.
+**Action:** Always prefer using `conn.prepare_cached()` over `conn.prepare()` for static SQL queries. This leverages `rusqlite`'s internal caching to compile the statement once and reuse it, drastically reducing latency in performance-sensitive query execution loops without sacrificing safety.
