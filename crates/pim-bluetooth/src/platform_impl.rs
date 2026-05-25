@@ -374,6 +374,10 @@ impl BluetoothDiscovery {
             debug!("Bluetooth MASQUERADE not installed; no nat_interface configured");
             return Ok(());
         };
+        if !crate::support::is_safe_interface_name(nat_iface) {
+            return Err(BluetoothError::CommandFailed { command: "iptables", message: "invalid nat_interface name".to_string() });
+        }
+
         let (gateway, prefix) = match parse_ipv4_cidr(&self.config.nap_bridge_addr) {
             Ok(v) => v,
             Err(msg) => {
@@ -424,6 +428,11 @@ impl BluetoothDiscovery {
         let Some(nat_iface) = self.nat_interface.as_deref() else {
             return;
         };
+        if !crate::support::is_safe_interface_name(nat_iface) {
+            warn!("invalid nat_interface name");
+            return;
+        }
+
         let (gateway, prefix) = match parse_ipv4_cidr(&self.config.nap_bridge_addr) {
             Ok(v) => v,
             Err(_) => return,
@@ -629,6 +638,9 @@ impl BluetoothDiscovery {
 
     #[cfg(target_os = "linux")]
     pub(super) async fn start_dnsmasq(&self, bridge: &str) -> Result<Child, BluetoothError> {
+        if !crate::support::is_safe_interface_name(bridge) {
+            return Err(BluetoothError::CommandFailed { command: "dnsmasq", message: "invalid interface name".to_string() });
+        }
         let (gateway, prefix) = parse_ipv4_cidr(&self.config.nap_bridge_addr).map_err(|msg| {
             BluetoothError::CommandFailed {
                 command: "dnsmasq",
@@ -683,6 +695,9 @@ impl BluetoothDiscovery {
         bridge: &str,
         child: &mut Option<Child>,
     ) -> Result<(), BluetoothError> {
+        if !crate::support::is_safe_interface_name(bridge) {
+            return Err(BluetoothError::CommandFailed { command: "dnsmasq", message: "invalid interface name".to_string() });
+        }
         if let Some(existing) = child.as_mut() {
             if let Some(status) = existing.try_wait()? {
                 warn!(?status, bridge, "Bluetooth DHCP server exited; restarting");
@@ -696,6 +711,9 @@ impl BluetoothDiscovery {
 
     #[cfg(target_os = "linux")]
     pub(super) async fn start_dhclient(&self, interface: &str) -> Result<Child, BluetoothError> {
+        if !crate::support::is_safe_interface_name(interface) {
+            return Err(BluetoothError::CommandFailed { command: "dhclient", message: "invalid interface name".to_string() });
+        }
         let child = Command::new(&self.dhclient_command)
             .args(["-d", "-v", interface])
             .stdout(Stdio::null())
@@ -712,6 +730,9 @@ impl BluetoothDiscovery {
         interface: &str,
         children: &mut HashMap<String, Child>,
     ) -> Result<(), BluetoothError> {
+        if !crate::support::is_safe_interface_name(interface) {
+            return Err(BluetoothError::CommandFailed { command: "dhclient", message: "invalid interface name".to_string() });
+        }
         let mut should_start = false;
         if let Some(existing) = children.get_mut(interface) {
             if let Some(status) = existing.try_wait()? {
@@ -802,6 +823,9 @@ impl BluetoothDiscovery {
         &self,
     ) -> Result<Vec<ResolvedPanInterface>, BluetoothError> {
         let interface = resolve_macos_pan_interface_hint(&self.config.interface);
+        if !crate::support::is_safe_interface_name(interface) {
+            return Err(BluetoothError::CommandFailed { command: "ifconfig", message: "invalid interface name".to_string() });
+        }
         let output = Command::new("ifconfig").arg(interface).output().await?;
         if !output.status.success() {
             return Ok(Vec::new());
@@ -826,6 +850,9 @@ impl BluetoothDiscovery {
         &self,
         interface: &str,
     ) -> Result<Vec<SocketAddr>, BluetoothError> {
+        if !crate::support::is_safe_interface_name(interface) {
+            return Err(BluetoothError::CommandFailed { command: "ip", message: "invalid interface name".to_string() });
+        }
         let scope_id = interface_index(interface);
         let output = Command::new(&self.ip_command)
             .args(["neigh", "show", "dev", interface])
@@ -851,6 +878,9 @@ impl BluetoothDiscovery {
         &self,
         interface: &str,
     ) -> Result<Vec<SocketAddr>, BluetoothError> {
+        if !crate::support::is_safe_interface_name(interface) {
+            return Err(BluetoothError::CommandFailed { command: "arp", message: "invalid interface name".to_string() });
+        }
         let output = Command::new(&self.ip_command)
             .args(["-an", "-i", interface])
             .output()
