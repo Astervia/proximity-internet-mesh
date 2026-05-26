@@ -31,6 +31,9 @@ This map is the default orientation for agent work in this repository.
     - shared configuration model
     - feature toggles and defaults
 
+- `crates/pim-daemon/src/jni.rs`
+    - Android library entrypoint and JNI bridge
+
 ## Major Subsystems
 
 - `crates/pim-tun/src/lib.rs`
@@ -52,6 +55,9 @@ This map is the default orientation for agent work in this repository.
     - route computation and advertisement handling
 - `crates/pim-gateway/src/lib.rs`
     - gateway NAT and internet-edge behavior
+
+- `crates/pim-bluetooth/src/lib.rs`
+    - Bluetooth RFCOMM transport and discovery
 
 ## Common Task Routing
 
