@@ -32,10 +32,12 @@
 
 **Learning:** Data and Transport frames were constantly taking ownership of byte buffers via `.to_vec()` instead of using zero-copy `bytes::Bytes`. This caused numerous heap allocations per forwarded packet on relay nodes, unnecessarily straining memory bandwidth.
 **Action:** Replace `Vec<u8>` payloads in protocol frame structs (`TransportFrame`, `MeshDataFrame`, `FragmentFrame`) with `bytes::Bytes` to allow zero-copy parsing and forwarding, drastically cutting allocations per packet.
+
 ## 2024-05-18 - Avoid allocations on uniquely owned `bytes::Bytes` with `try_into_mut()`
 
 **Learning:** `bytes::Bytes` holds a reference-counted buffer but its contents cannot be mutated via `.to_vec()` without forcing a clone and full allocation. However, if the network code owns the sole reference to the buffer (e.g. immediately after decoding), `.try_into_mut()` can safely reclaim mutable access to the underlying `BytesMut` with zero allocations. In high-throughput network daemons like PIM, allocating memory for every frame on the read path becomes a major performance bottleneck.
 **Action:** When a frame buffer needs to be mutated directly (like in `decrypt_in_place_detached`), avoid `.to_vec()`. Instead, attempt to use `.try_into_mut()` when we know the `Bytes` object is uniquely owned to recover zero-copy mutability.
+
 ## 2026-05-08 - Fragment reassembly vector allocation optimization
 
 **Learning:** Reassembling fragmented mesh packets created unnecessary memory pressure due to redundant heap allocations. The `try_reassemble` function was allocating a `vec![0u8; self.total_length]` on *every* fragment insertion attempt, even when the fragment stream was incomplete (causing N redundant allocations for a packet needing N fragments).
@@ -49,3 +51,8 @@
 
 **Learning:** `Vec::new()` allocates no heap memory until the first element is pushed, at which point it dynamically allocates and then periodically reallocates. In hot network paths like `fragment_packet`, where we know we will push items, this leads to unnecessary reallocation overhead. However, it is a mistake to aggressively apply `Vec::with_capacity()` to collections that often remain empty (e.g., error queues or retry buffers on the "happy path"), as this will force an unnecessary heap allocation where `Vec::new()` would have remained zero-cost.
 **Action:** Always pre-allocate exact `Vec` capacities (e.g., using `Vec::with_capacity()`) over `Vec::new()` when the final size or an upper bound is known in advance *and* the vector is guaranteed or highly likely to be populated. Avoid `Vec::with_capacity()` for paths that usually remain empty.
+
+## 2026-05-10 - rusqlite cached statements optimization
+
+**Learning:** Using `conn.prepare()` or `conn.execute()` compiles SQL statements dynamically upon every invocation, which is slow for repeated static queries. In `rusqlite`, `Connection::execute_cached()` does not exist, so the pattern is to use `conn.prepare_cached()?.execute()`. This leverages SQLite's statement caching, greatly reducing query execution latency across the application lifecycle.
+**Action:** Always prefer `conn.prepare_cached()` over `conn.prepare()` or `conn.execute()` for repetitive static SQL queries to leverage statement caching and minimize execution latency in performance-sensitive paths like `pim-daemon` or `pim-messaging`.

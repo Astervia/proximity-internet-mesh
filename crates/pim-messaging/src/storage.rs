@@ -190,11 +190,10 @@ impl MessagingStorage {
     /// for inbound).
     pub fn insert_message(&self, m: &MessageRecord) -> Result<()> {
         let conn = self.conn.lock().unwrap();
-        conn.execute(
+        conn.prepare_cached(
             "INSERT OR REPLACE INTO messages \
              (id, peer_node_id, direction, body, timestamp_ms, status, failure_reason, delivered_at_ms, read_at_ms) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
-            params![
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)")?.execute(params![
                 m.id,
                 m.peer_node_id,
                 m.direction.as_str(),
@@ -204,8 +203,7 @@ impl MessagingStorage {
                 m.failure_reason,
                 m.delivered_at_ms,
                 m.read_at_ms,
-            ],
-        )?;
+            ],)?;
         Ok(())
     }
 
@@ -219,7 +217,7 @@ impl MessagingStorage {
     ) -> Result<()> {
         let preview = preview_of(body);
         let conn = self.conn.lock().unwrap();
-        conn.execute(
+        conn.prepare_cached(
             "INSERT INTO conversations_meta (peer_node_id, unread_count, last_read_message_id, \
                 last_message_id, last_message_preview, last_message_ts_ms) \
              VALUES (?1, 0, NULL, ?2, ?3, ?4) \
@@ -227,8 +225,8 @@ impl MessagingStorage {
                 last_message_id = excluded.last_message_id, \
                 last_message_preview = excluded.last_message_preview, \
                 last_message_ts_ms = excluded.last_message_ts_ms",
-            params![peer_id_hex, message_id_hex, preview, ts_ms],
-        )?;
+        )?
+        .execute(params![peer_id_hex, message_id_hex, preview, ts_ms])?;
         Ok(())
     }
 
@@ -245,7 +243,7 @@ impl MessagingStorage {
         let preview = preview_of(body);
         let conn = self.conn.lock().unwrap();
 
-        conn.execute(
+        conn.prepare_cached(
             "INSERT INTO conversations_meta (peer_node_id, unread_count, last_message_id, \
                 last_message_preview, last_message_ts_ms) \
              VALUES (?1, 1, ?2, ?3, ?4) \
@@ -254,8 +252,8 @@ impl MessagingStorage {
                 last_message_id = excluded.last_message_id, \
                 last_message_preview = excluded.last_message_preview, \
                 last_message_ts_ms = excluded.last_message_ts_ms",
-            params![peer_id_hex, message_id_hex, preview, ts_ms],
-        )?;
+        )?
+        .execute(params![peer_id_hex, message_id_hex, preview, ts_ms])?;
 
         let unread_count: i64 = conn.query_row(
             "SELECT unread_count FROM conversations_meta WHERE peer_node_id = ?1",
@@ -281,28 +279,20 @@ impl MessagingStorage {
         let conn = self.conn.lock().unwrap();
         match (delivered_at_ms, read_at_ms) {
             (Some(d), Some(r)) => {
-                conn.execute(
-                    "UPDATE messages SET status = ?1, delivered_at_ms = ?2, read_at_ms = ?3 WHERE id = ?4",
-                    params![status.as_str(), d, r, message_id_hex],
-                )?;
+                conn.prepare_cached(
+                    "UPDATE messages SET status = ?1, delivered_at_ms = ?2, read_at_ms = ?3 WHERE id = ?4")?.execute(params![status.as_str(), d, r, message_id_hex],)?;
             }
             (Some(d), None) => {
-                conn.execute(
-                    "UPDATE messages SET status = ?1, delivered_at_ms = COALESCE(delivered_at_ms, ?2) WHERE id = ?3",
-                    params![status.as_str(), d, message_id_hex],
-                )?;
+                conn.prepare_cached(
+                    "UPDATE messages SET status = ?1, delivered_at_ms = COALESCE(delivered_at_ms, ?2) WHERE id = ?3")?.execute(params![status.as_str(), d, message_id_hex],)?;
             }
             (None, Some(r)) => {
-                conn.execute(
-                    "UPDATE messages SET status = ?1, read_at_ms = COALESCE(read_at_ms, ?2) WHERE id = ?3",
-                    params![status.as_str(), r, message_id_hex],
-                )?;
+                conn.prepare_cached(
+                    "UPDATE messages SET status = ?1, read_at_ms = COALESCE(read_at_ms, ?2) WHERE id = ?3")?.execute(params![status.as_str(), r, message_id_hex],)?;
             }
             (None, None) => {
-                conn.execute(
-                    "UPDATE messages SET status = ?1 WHERE id = ?2",
-                    params![status.as_str(), message_id_hex],
-                )?;
+                conn.prepare_cached("UPDATE messages SET status = ?1 WHERE id = ?2")?
+                    .execute(params![status.as_str(), message_id_hex])?;
             }
         }
         Ok(())
@@ -311,10 +301,8 @@ impl MessagingStorage {
     /// Set `status = failed` and persist a human-readable reason.
     pub fn set_message_failed(&self, message_id_hex: &str, reason: &str, at_ms: i64) -> Result<()> {
         let conn = self.conn.lock().unwrap();
-        conn.execute(
-            "UPDATE messages SET status = 'failed', failure_reason = ?1, delivered_at_ms = COALESCE(delivered_at_ms, ?2) WHERE id = ?3",
-            params![reason, at_ms, message_id_hex],
-        )?;
+        conn.prepare_cached(
+            "UPDATE messages SET status = 'failed', failure_reason = ?1, delivered_at_ms = COALESCE(delivered_at_ms, ?2) WHERE id = ?3")?.execute(params![reason, at_ms, message_id_hex],)?;
         Ok(())
     }
 
@@ -329,14 +317,14 @@ impl MessagingStorage {
         let limit_plus = limit.saturating_add(1).max(2);
 
         let mut stmt = match before_ts_ms {
-            Some(_) => conn.prepare(
+            Some(_) => conn.prepare_cached(
                 "SELECT id, peer_node_id, direction, body, timestamp_ms, status, failure_reason, delivered_at_ms, read_at_ms \
                  FROM messages \
                  WHERE peer_node_id = ?1 AND timestamp_ms < ?2 \
                  ORDER BY timestamp_ms DESC, id DESC \
                  LIMIT ?3",
             )?,
-            None => conn.prepare(
+            None => conn.prepare_cached(
                 "SELECT id, peer_node_id, direction, body, timestamp_ms, status, failure_reason, delivered_at_ms, read_at_ms \
                  FROM messages \
                  WHERE peer_node_id = ?1 \
@@ -363,7 +351,7 @@ impl MessagingStorage {
     /// layer fills them in from the daemon's peer directory.
     pub fn list_conversations_raw(&self) -> Result<Vec<ConversationSummary>> {
         let conn = self.conn.lock().unwrap();
-        let mut stmt = conn.prepare(
+        let mut stmt = conn.prepare_cached(
             "SELECT peer_node_id, last_message_preview, last_message_ts_ms, unread_count \
              FROM conversations_meta \
              ORDER BY last_message_ts_ms DESC NULLS LAST",
@@ -423,15 +411,13 @@ impl MessagingStorage {
     /// Returns the new `unread_count` (always 0).
     pub fn mark_read_up_to(&self, peer_id_hex: &str, up_to_ts_ms: i64) -> Result<i64> {
         let conn = self.conn.lock().unwrap();
-        conn.execute(
+        conn.prepare_cached(
             "UPDATE messages SET status = 'read', read_at_ms = COALESCE(read_at_ms, ?2) \
-             WHERE peer_node_id = ?1 AND direction = 'received' AND timestamp_ms <= ?2 AND status != 'read'",
-            params![peer_id_hex, up_to_ts_ms],
-        )?;
-        conn.execute(
+             WHERE peer_node_id = ?1 AND direction = 'received' AND timestamp_ms <= ?2 AND status != 'read'")?.execute(params![peer_id_hex, up_to_ts_ms],)?;
+        conn.prepare_cached(
             "UPDATE conversations_meta SET unread_count = 0 WHERE peer_node_id = ?1",
-            params![peer_id_hex],
-        )?;
+        )?
+        .execute(params![peer_id_hex])?;
         Ok(0)
     }
 
