@@ -256,6 +256,12 @@ impl BluetoothDiscovery {
 
     #[cfg(target_os = "linux")]
     pub(super) async fn ensure_bridge_ready(&self, bridge: &str) -> Result<(), BluetoothError> {
+        if !crate::support::is_safe_interface_name(bridge) {
+            return Err(BluetoothError::CommandFailed {
+                command: "validation",
+                message: format!("unsafe bridge name: {}", bridge),
+            });
+        }
         let bridge_path = self.sysfs_root.join(bridge);
         if !bridge_path.exists() {
             let output = Command::new(&self.ip_command)
@@ -317,6 +323,12 @@ impl BluetoothDiscovery {
     /// incoming PAN connections on some distros.
     #[cfg(target_os = "linux")]
     pub(super) async fn attach_bnep_to_bridge(&self, bridge: &str) -> Result<(), BluetoothError> {
+        if !crate::support::is_safe_interface_name(bridge) {
+            return Err(BluetoothError::CommandFailed {
+                command: "validation",
+                message: format!("unsafe bridge name: {}", bridge),
+            });
+        }
         if bridge.is_empty() {
             return Ok(());
         }
@@ -486,6 +498,9 @@ impl BluetoothDiscovery {
     /// Best-effort: errors are logged, not propagated.
     #[cfg(target_os = "linux")]
     pub(super) async fn delete_bridge_if_present(&self, bridge: &str) {
+        if !crate::support::is_safe_interface_name(bridge) {
+            return;
+        }
         if bridge.is_empty() {
             return;
         }
@@ -629,6 +644,12 @@ impl BluetoothDiscovery {
 
     #[cfg(target_os = "linux")]
     pub(super) async fn start_dnsmasq(&self, bridge: &str) -> Result<Child, BluetoothError> {
+        if !crate::support::is_safe_interface_name(bridge) {
+            return Err(BluetoothError::CommandFailed {
+                command: "validation",
+                message: format!("unsafe bridge name: {}", bridge),
+            });
+        }
         let (gateway, prefix) = parse_ipv4_cidr(&self.config.nap_bridge_addr).map_err(|msg| {
             BluetoothError::CommandFailed {
                 command: "dnsmasq",
@@ -696,6 +717,12 @@ impl BluetoothDiscovery {
 
     #[cfg(target_os = "linux")]
     pub(super) async fn start_dhclient(&self, interface: &str) -> Result<Child, BluetoothError> {
+        if !crate::support::is_safe_interface_name(interface) {
+            return Err(BluetoothError::CommandFailed {
+                command: "validation",
+                message: format!("unsafe interface name: {}", interface),
+            });
+        }
         let child = Command::new(&self.dhclient_command)
             .args(["-d", "-v", interface])
             .stdout(Stdio::null())
@@ -802,6 +829,9 @@ impl BluetoothDiscovery {
         &self,
     ) -> Result<Vec<ResolvedPanInterface>, BluetoothError> {
         let interface = resolve_macos_pan_interface_hint(&self.config.interface);
+        if !crate::support::is_safe_interface_name(interface) {
+            return Ok(Vec::new());
+        }
         let output = Command::new("ifconfig").arg(interface).output().await?;
         if !output.status.success() {
             return Ok(Vec::new());
@@ -826,6 +856,12 @@ impl BluetoothDiscovery {
         &self,
         interface: &str,
     ) -> Result<Vec<SocketAddr>, BluetoothError> {
+        if !crate::support::is_safe_interface_name(interface) {
+            return Err(BluetoothError::CommandFailed {
+                command: "validation",
+                message: format!("unsafe interface name: {}", interface),
+            });
+        }
         let scope_id = interface_index(interface);
         let output = Command::new(&self.ip_command)
             .args(["neigh", "show", "dev", interface])
@@ -851,6 +887,12 @@ impl BluetoothDiscovery {
         &self,
         interface: &str,
     ) -> Result<Vec<SocketAddr>, BluetoothError> {
+        if !crate::support::is_safe_interface_name(interface) {
+            return Err(BluetoothError::CommandFailed {
+                command: "validation",
+                message: format!("unsafe interface name: {}", interface),
+            });
+        }
         let output = Command::new(&self.ip_command)
             .args(["-an", "-i", interface])
             .output()

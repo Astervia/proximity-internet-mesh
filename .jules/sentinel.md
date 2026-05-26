@@ -30,3 +30,8 @@
 **Vulnerability:** The daemon's broadcast config was persisted using `std::fs::write` to a temporary file before renaming it over the original file. Since `std::fs::write` falls back to the system's default `umask`, the temporary file could be created world-readable and world-writable. The POSIX `rename` operation preserves the permissions of the source file, causing the sensitive configuration file to end up with insecure permissions.
 **Learning:** When performing atomic file writes using a temporary file and `rename`, the temporary file must be created with explicitly strict permissions (e.g., `0o600`), because its permissions will become the permissions of the final file.
 **Prevention:** Explicitly configure `std::fs::OpenOptions` with `OpenOptionsExt::mode(0o600)` on Unix systems when creating temporary files for atomic replacement, avoiding reliance on system umasks.
+
+## 2026-05-26 - [Command and Argument Injection via Interface Names]
+**Vulnerability:** In `pim-bluetooth`, untrusted strings intended to be network interfaces or bridge names (like `nap_bridge` from configuration) were passed directly as arguments to external command utilities (like `ip` or `ifconfig`) via `std::process::Command::new()`. This could allow an attacker to inject arbitrary command arguments (e.g., `-exec` or additional flags) to alter the command's behavior.
+**Learning:** Passing untrusted data directly to external shell commands, even without `sh -c`, can still lead to argument injection if the data starts with a dash or contains unsafe characters.
+**Prevention:** Always validate network interface and bridge names using a strict allowlist character check (like `is_safe_interface_name`) before passing them to `Command::new()`.

@@ -2,6 +2,17 @@
 
 use super::*;
 
+pub(super) fn is_safe_interface_name(name: &str) -> bool {
+    if name.is_empty() || name.len() > 15 {
+        return false;
+    }
+    if name.starts_with('-') {
+        return false;
+    }
+    name.chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.')
+}
+
 #[cfg(any(test, target_os = "linux"))]
 use std::path::{Path, PathBuf};
 
