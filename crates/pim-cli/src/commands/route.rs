@@ -5,6 +5,14 @@ use std::process;
 
 use crate::{process_alive, read_pid, DEFAULT_CONFIG};
 
+fn is_safe_interface_name(name: &str) -> bool {
+    let name = name.trim();
+    if name.is_empty() || name.starts_with('-') || name.len() > 15 {
+        return false;
+    }
+    name.chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+}
 pub(crate) fn cmd_status(pid_file: PathBuf, verbose: bool) -> Result<()> {
     match read_pid(&pid_file) {
         Err(_) => {
@@ -258,6 +266,9 @@ pub(crate) fn split_default_ipv6_cidrs() -> [&'static str; 2] {
 
 #[cfg(target_os = "linux")]
 pub(crate) fn replace_split_default_route(cidr: &str, route_info: &RouteInfo) -> Result<()> {
+    if !is_safe_interface_name(&route_info.iface) {
+        bail!("unsafe interface name: {}", route_info.iface);
+    }
     let status = process::Command::new("ip")
         .args([
             "route",
@@ -283,6 +294,9 @@ pub(crate) fn replace_split_default_route(cidr: &str, route_info: &RouteInfo) ->
 
 #[cfg(target_os = "macos")]
 pub(crate) fn replace_split_default_route(cidr: &str, route_info: &RouteInfo) -> Result<()> {
+    if !is_safe_interface_name(&route_info.iface) {
+        bail!("unsafe interface name: {}", route_info.iface);
+    }
     let _ = process::Command::new("route")
         .args([
             "-n",
@@ -313,6 +327,9 @@ pub(crate) fn replace_split_default_route(_cidr: &str, _route_info: &RouteInfo) 
 
 #[cfg(target_os = "linux")]
 pub(crate) fn replace_split_default_route_v6(cidr: &str, route_info: &RouteInfo) -> Result<()> {
+    if !is_safe_interface_name(&route_info.iface) {
+        bail!("unsafe interface name: {}", route_info.iface);
+    }
     let status = process::Command::new("ip")
         .args(["-6", "route", "replace", cidr, "dev", &route_info.iface])
         .status()
@@ -325,6 +342,9 @@ pub(crate) fn replace_split_default_route_v6(cidr: &str, route_info: &RouteInfo)
 
 #[cfg(target_os = "macos")]
 pub(crate) fn replace_split_default_route_v6(cidr: &str, route_info: &RouteInfo) -> Result<()> {
+    if !is_safe_interface_name(&route_info.iface) {
+        bail!("unsafe interface name: {}", route_info.iface);
+    }
     let _ = process::Command::new("route")
         .args([
             "-n",
@@ -352,6 +372,9 @@ pub(crate) fn replace_split_default_route_v6(_cidr: &str, _route_info: &RouteInf
 
 #[cfg(target_os = "linux")]
 pub(crate) fn remove_split_default_route(cidr: &str, route_info: &RouteInfo) -> Result<bool> {
+    if !is_safe_interface_name(&route_info.iface) {
+        bail!("unsafe interface name: {}", route_info.iface);
+    }
     let status = process::Command::new("ip")
         .args([
             "route",
@@ -369,6 +392,9 @@ pub(crate) fn remove_split_default_route(cidr: &str, route_info: &RouteInfo) -> 
 
 #[cfg(target_os = "macos")]
 pub(crate) fn remove_split_default_route(cidr: &str, route_info: &RouteInfo) -> Result<bool> {
+    if !is_safe_interface_name(&route_info.iface) {
+        bail!("unsafe interface name: {}", route_info.iface);
+    }
     let status = process::Command::new("route")
         .args([
             "-n",
@@ -390,6 +416,9 @@ pub(crate) fn remove_split_default_route(_cidr: &str, _route_info: &RouteInfo) -
 
 #[cfg(target_os = "linux")]
 pub(crate) fn remove_split_default_route_v6(cidr: &str, route_info: &RouteInfo) -> Result<bool> {
+    if !is_safe_interface_name(&route_info.iface) {
+        bail!("unsafe interface name: {}", route_info.iface);
+    }
     let status = process::Command::new("ip")
         .args(["-6", "route", "del", cidr, "dev", &route_info.iface])
         .status()
@@ -399,6 +428,9 @@ pub(crate) fn remove_split_default_route_v6(cidr: &str, route_info: &RouteInfo) 
 
 #[cfg(target_os = "macos")]
 pub(crate) fn remove_split_default_route_v6(cidr: &str, route_info: &RouteInfo) -> Result<bool> {
+    if !is_safe_interface_name(&route_info.iface) {
+        bail!("unsafe interface name: {}", route_info.iface);
+    }
     let status = process::Command::new("route")
         .args([
             "-n",
@@ -531,6 +563,9 @@ pub(crate) fn route_present_linux(
 
 #[cfg(target_os = "linux")]
 pub(crate) fn interface_present_command(iface: &str) -> process::Command {
+    if !is_safe_interface_name(iface) {
+        return process::Command::new("false");
+    }
     let mut cmd = process::Command::new("ip");
     cmd.args(["link", "show", "dev", iface]);
     cmd
@@ -538,6 +573,9 @@ pub(crate) fn interface_present_command(iface: &str) -> process::Command {
 
 #[cfg(target_os = "macos")]
 pub(crate) fn interface_present_command(iface: &str) -> process::Command {
+    if !is_safe_interface_name(iface) {
+        return process::Command::new("false");
+    }
     let mut cmd = process::Command::new("ifconfig");
     cmd.arg(iface);
     cmd
@@ -550,6 +588,9 @@ pub(crate) fn interface_present_command(_iface: &str) -> process::Command {
 
 #[cfg(target_os = "linux")]
 pub(crate) fn interface_ipv4_command(iface: &str) -> process::Command {
+    if !is_safe_interface_name(iface) {
+        return process::Command::new("false");
+    }
     let mut cmd = process::Command::new("ip");
     cmd.args(["-4", "-o", "addr", "show", "dev", iface]);
     cmd
@@ -557,6 +598,9 @@ pub(crate) fn interface_ipv4_command(iface: &str) -> process::Command {
 
 #[cfg(target_os = "macos")]
 pub(crate) fn interface_ipv4_command(iface: &str) -> process::Command {
+    if !is_safe_interface_name(iface) {
+        return process::Command::new("false");
+    }
     let mut cmd = process::Command::new("ifconfig");
     cmd.arg(iface);
     cmd
