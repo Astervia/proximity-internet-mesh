@@ -30,6 +30,8 @@ This map is the default orientation for agent work in this repository.
 - `crates/pim-core/src/config.rs`
     - shared configuration model
     - feature toggles and defaults
+- `crates/pim-daemon/src/jni.rs`
+    - Android JNI bridges and VPN service configurations
 
 ## Major Subsystems
 
@@ -52,6 +54,10 @@ This map is the default orientation for agent work in this repository.
     - route computation and advertisement handling
 - `crates/pim-gateway/src/lib.rs`
     - gateway NAT and internet-edge behavior
+- `crates/pim-bluetooth/src/`
+    - Bluetooth RFCOMM and discovery implementation
+- `crates/pim-messaging/src/`
+    - User-to-user encrypted messaging daemon plugin
 
 ## Common Task Routing
 
