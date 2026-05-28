@@ -27,12 +27,16 @@ This map is the default orientation for agent work in this repository.
     - main runtime orchestration
     - service startup and shutdown
     - connection, routing, forwarding, and gateway coordination
+- `crates/pim-daemon/src/jni.rs`
+    - Android native JNI bridges and VPN service configurations
 - `crates/pim-core/src/config.rs`
     - shared configuration model
     - feature toggles and defaults
 
 ## Major Subsystems
 
+- `crates/pim-bluetooth/src/`
+    - Bluetooth and RFCOMM transport layer and device discovery
 - `crates/pim-tun/src/lib.rs`
     - Linux TUN device lifecycle
     - packet ingress and egress with the host OS
