@@ -1,0 +1,4 @@
+💡 What: Replaced direct `conn.execute()` calls with `conn.prepare_cached()?.execute()` for static SQL queries in `peer_directory.rs` and `storage.rs`.
+🎯 Why: In rusqlite, `Connection::execute()` parses and prepares the SQL statement on every invocation. By using `prepare_cached()`, the parsed statement is cached in the connection, avoiding redundant compilation overhead in hot database paths.
+📊 Impact: Reduces database latency and CPU overhead for frequently executed queries (e.g., message inserts, peer lifecycle updates).
+🔬 Measurement: Verify by running standard database benchmarks or profiling the sqlite prepare time during high message throughput scenarios.
