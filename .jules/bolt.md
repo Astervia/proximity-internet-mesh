@@ -49,3 +49,8 @@
 
 **Learning:** `Vec::new()` allocates no heap memory until the first element is pushed, at which point it dynamically allocates and then periodically reallocates. In hot network paths like `fragment_packet`, where we know we will push items, this leads to unnecessary reallocation overhead. However, it is a mistake to aggressively apply `Vec::with_capacity()` to collections that often remain empty (e.g., error queues or retry buffers on the "happy path"), as this will force an unnecessary heap allocation where `Vec::new()` would have remained zero-cost.
 **Action:** Always pre-allocate exact `Vec` capacities (e.g., using `Vec::with_capacity()`) over `Vec::new()` when the final size or an upper bound is known in advance *and* the vector is guaranteed or highly likely to be populated. Avoid `Vec::with_capacity()` for paths that usually remain empty.
+
+## 2026-05-18 - Avoid synchronous file operations in async paths
+
+**Learning:** Synchronous file system operations (`std::fs::remove_file`, `std::fs::create_dir_all`, etc.) block the executing thread. In a Tokio runtime, calling these directly from an `async fn` blocks the reactor thread, preventing other asynchronous tasks from making progress and causing unpredictable latency spikes.
+**Action:** Always use the asynchronous equivalents found in `tokio::fs` within `async` functions to delegate blocking file operations to the runtime's blocking thread pool, preserving reactor responsiveness.
