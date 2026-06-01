@@ -111,17 +111,10 @@ Process every open PR against the target branch in one pass:
     plus any tests not in `test-all` (check the `Makefile`'s
     `.PHONY: test-*` line — typically rfcomm-cleanup/discovery, debug-cli,
     auto-discovery, auto-ip-chain). If a test fails for an environmental
-    <<<<<<< HEAD
-    reason (network blip, port collision, transient docker daemon error),
-    re-run _that single test_. If it fails twice, treat it as a real
-    regression and investigate.
-    =======
     reason (network blip, port collision, transient docker daemon error,
     discovery-convergence timeout), re-run _that single test_ with
     `DUMP_LOGS_ON_FAIL=1` for diagnostics. If it fails on three consecutive
     runs, treat it as a real regression and investigate.
-
-    > > > > > > > 12da7b3 (feat(agent): add review-prs prompt for batch PR triage)
 
 9. **Summary table.** End the session with a markdown table:
 
