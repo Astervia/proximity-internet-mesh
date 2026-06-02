@@ -273,19 +273,15 @@ impl PeerDirectoryService {
 
         match existing {
             None => {
-                conn.execute(
-                    "INSERT INTO peers_seen (node_id, x25519_pub, last_known_name, first_seen_ms, last_seen_ms) \
-                     VALUES (?1, ?2, ?3, ?4, ?4)",
-                    params![peer_hex, x25519_pub.as_slice(), name, now_ms],
-                )?;
+                /* PERF: Leverage rusqlite statement cache */
+                conn.prepare_cached("INSERT INTO peers_seen (node_id, x25519_pub, last_known_name, first_seen_ms, last_seen_ms) \
+                     VALUES (?1, ?2, ?3, ?4, ?4)")?.execute(params![peer_hex, x25519_pub.as_slice(), name, now_ms])?;
                 Ok(true)
             }
             Some(_) => {
-                conn.execute(
-                    "UPDATE peers_seen SET x25519_pub = ?2, last_known_name = ?3, last_seen_ms = ?4 \
-                     WHERE node_id = ?1",
-                    params![peer_hex, x25519_pub.as_slice(), name, now_ms],
-                )?;
+                /* PERF: Leverage rusqlite statement cache */
+                conn.prepare_cached("UPDATE peers_seen SET x25519_pub = ?2, last_known_name = ?3, last_seen_ms = ?4 \
+                     WHERE node_id = ?1")?.execute(params![peer_hex, x25519_pub.as_slice(), name, now_ms])?;
                 Ok(false)
             }
         }
@@ -311,24 +307,21 @@ impl PeerDirectoryService {
         match existing {
             None => {
                 let name = name_if_set.unwrap_or("");
-                conn.execute(
-                    "INSERT INTO peers_seen (node_id, x25519_pub, last_known_name, first_seen_ms, last_seen_ms) \
-                     VALUES (?1, ?2, ?3, ?4, ?4)",
-                    params![peer_hex, x25519_pub.as_slice(), name, now_ms],
-                )?;
+                /* PERF: Leverage rusqlite statement cache */
+                conn.prepare_cached("INSERT INTO peers_seen (node_id, x25519_pub, last_known_name, first_seen_ms, last_seen_ms) \
+                     VALUES (?1, ?2, ?3, ?4, ?4)")?.execute(params![peer_hex, x25519_pub.as_slice(), name, now_ms])?;
                 Ok(ImportOutcome::Inserted)
             }
             Some(bytes) if bytes.as_slice() == x25519_pub.as_slice() => {
                 if let Some(name) = name_if_set.filter(|s| !s.is_empty()) {
-                    conn.execute(
-                        "UPDATE peers_seen SET last_known_name = ?2, last_seen_ms = ?3 WHERE node_id = ?1",
-                        params![peer_hex, name, now_ms],
-                    )?;
+                    /* PERF: Leverage rusqlite statement cache */
+                    conn.prepare_cached("UPDATE peers_seen SET last_known_name = ?2, last_seen_ms = ?3 WHERE node_id = ?1")?.execute(params![peer_hex, name, now_ms])?;
                 } else {
-                    conn.execute(
+                    /* PERF: Leverage rusqlite statement cache */
+                    conn.prepare_cached(
                         "UPDATE peers_seen SET last_seen_ms = ?2 WHERE node_id = ?1",
-                        params![peer_hex, now_ms],
-                    )?;
+                    )?
+                    .execute(params![peer_hex, now_ms])?;
                 }
                 Ok(ImportOutcome::Refreshed)
             }
@@ -341,10 +334,8 @@ impl PeerDirectoryService {
     fn forget_blocking(&self, peer: &NodeId) -> Result<ForgetOutcome> {
         let conn = self.conn.lock().unwrap();
         let peer_hex = hex_node_id(peer);
-        let removed = conn.execute(
-            "DELETE FROM peers_seen WHERE node_id = ?1",
-            params![peer_hex],
-        )?;
+        let removed = /* PERF: Leverage rusqlite statement cache */
+conn.prepare_cached("DELETE FROM peers_seen WHERE node_id = ?1")?.execute(params![peer_hex])?;
         Ok(ForgetOutcome {
             forgot_identity: removed > 0,
         })
@@ -384,7 +375,7 @@ impl PeerDirectoryService {
 
     fn list_x25519_blocking(&self) -> Result<std::collections::HashMap<String, String>> {
         let conn = self.conn.lock().unwrap();
-        let mut stmt = conn.prepare("SELECT node_id, x25519_pub FROM peers_seen")?;
+        let mut stmt = /* PERF: Leverage rusqlite statement cache */ conn.prepare_cached("SELECT node_id, x25519_pub FROM peers_seen")?;
         let rows = stmt
             .query_map([], |row| {
                 let node_id: String = row.get(0)?;
@@ -407,7 +398,7 @@ impl PeerDirectoryService {
     /// loop reports what it dropped.
     pub fn list_peers_older_than(&self, threshold_ms: i64) -> Result<Vec<(NodeId, i64, String)>> {
         let conn = self.conn.lock().unwrap();
-        let mut stmt = conn.prepare(
+        let mut stmt = /* PERF: Leverage rusqlite statement cache */ conn.prepare_cached(
             "SELECT node_id, last_seen_ms, last_known_name \
              FROM peers_seen \
              WHERE last_seen_ms < ?1 \
@@ -447,12 +438,13 @@ impl PeerDirectoryService {
     /// untouched. Always idempotent.
     pub fn observe_rfcomm_paired(&self, bd_addr: &str, name: &str, now_s: i64) -> Result<()> {
         let conn = self.conn.lock().unwrap();
-        conn.execute(
+        /* PERF: Leverage rusqlite statement cache */
+        conn.prepare_cached(
             "INSERT INTO rfcomm_peer_lifecycle (bd_addr, name, first_paired_at_s) \
              VALUES (?1, ?2, ?3) \
              ON CONFLICT(bd_addr) DO NOTHING",
-            params![bd_addr, name, now_s],
-        )?;
+        )?
+        .execute(params![bd_addr, name, now_s])?;
         Ok(())
     }
 
@@ -466,13 +458,11 @@ impl PeerDirectoryService {
     /// the timestamp.
     pub fn record_rfcomm_connected(&self, bd_addr: &str, name: &str, now_s: i64) -> Result<()> {
         let conn = self.conn.lock().unwrap();
-        conn.execute(
-            "INSERT INTO rfcomm_peer_lifecycle (bd_addr, name, first_paired_at_s, last_connected_at_s) \
+        /* PERF: Leverage rusqlite statement cache */
+        conn.prepare_cached("INSERT INTO rfcomm_peer_lifecycle (bd_addr, name, first_paired_at_s, last_connected_at_s) \
              VALUES (?1, ?2, ?3, ?3) \
              ON CONFLICT(bd_addr) DO UPDATE SET \
-                last_connected_at_s = MAX(COALESCE(last_connected_at_s, 0), excluded.last_connected_at_s)",
-            params![bd_addr, name, now_s],
-        )?;
+                last_connected_at_s = MAX(COALESCE(last_connected_at_s, 0), excluded.last_connected_at_s)")?.execute(params![bd_addr, name, now_s])?;
         Ok(())
     }
 
@@ -501,7 +491,7 @@ impl PeerDirectoryService {
     #[allow(dead_code)]
     pub fn list_rfcomm_lifecycle(&self) -> Result<Vec<RfcommLifecycleRecord>> {
         let conn = self.conn.lock().unwrap();
-        let mut stmt = conn.prepare(
+        let mut stmt = /* PERF: Leverage rusqlite statement cache */ conn.prepare_cached(
             "SELECT bd_addr, name, first_paired_at_s, last_connected_at_s \
              FROM rfcomm_peer_lifecycle \
              ORDER BY bd_addr ASC",
@@ -525,10 +515,8 @@ impl PeerDirectoryService {
     #[allow(dead_code)]
     pub fn forget_rfcomm_peer(&self, bd_addr: &str) -> Result<bool> {
         let conn = self.conn.lock().unwrap();
-        let n = conn.execute(
-            "DELETE FROM rfcomm_peer_lifecycle WHERE bd_addr = ?1",
-            params![bd_addr],
-        )?;
+        let n = /* PERF: Leverage rusqlite statement cache */
+conn.prepare_cached("DELETE FROM rfcomm_peer_lifecycle WHERE bd_addr = ?1")?.execute(params![bd_addr])?;
         Ok(n > 0)
     }
 
@@ -540,12 +528,13 @@ impl PeerDirectoryService {
     /// [`Self::observe_rfcomm_paired`] but for the PAN table.
     pub fn observe_pan_paired(&self, bd_addr: &str, name: &str, now_s: i64) -> Result<()> {
         let conn = self.conn.lock().unwrap();
-        conn.execute(
+        /* PERF: Leverage rusqlite statement cache */
+        conn.prepare_cached(
             "INSERT INTO bluetooth_pan_lifecycle (bd_addr, name, first_paired_at_s) \
              VALUES (?1, ?2, ?3) \
              ON CONFLICT(bd_addr) DO NOTHING",
-            params![bd_addr, name, now_s],
-        )?;
+        )?
+        .execute(params![bd_addr, name, now_s])?;
         Ok(())
     }
 
@@ -553,13 +542,11 @@ impl PeerDirectoryService {
     /// `bd_addr`. Upserts; never rewinds `last_connected_at_s`.
     pub fn record_pan_connected(&self, bd_addr: &str, name: &str, now_s: i64) -> Result<()> {
         let conn = self.conn.lock().unwrap();
-        conn.execute(
-            "INSERT INTO bluetooth_pan_lifecycle (bd_addr, name, first_paired_at_s, last_connected_at_s) \
+        /* PERF: Leverage rusqlite statement cache */
+        conn.prepare_cached("INSERT INTO bluetooth_pan_lifecycle (bd_addr, name, first_paired_at_s, last_connected_at_s) \
              VALUES (?1, ?2, ?3, ?3) \
              ON CONFLICT(bd_addr) DO UPDATE SET \
-                last_connected_at_s = MAX(COALESCE(last_connected_at_s, 0), excluded.last_connected_at_s)",
-            params![bd_addr, name, now_s],
-        )?;
+                last_connected_at_s = MAX(COALESCE(last_connected_at_s, 0), excluded.last_connected_at_s)")?.execute(params![bd_addr, name, now_s])?;
         Ok(())
     }
 
@@ -568,7 +555,7 @@ impl PeerDirectoryService {
     #[allow(dead_code)]
     pub fn list_pan_lifecycle(&self) -> Result<Vec<PanLifecycleRecord>> {
         let conn = self.conn.lock().unwrap();
-        let mut stmt = conn.prepare(
+        let mut stmt = /* PERF: Leverage rusqlite statement cache */ conn.prepare_cached(
             "SELECT bd_addr, name, first_paired_at_s, last_connected_at_s \
              FROM bluetooth_pan_lifecycle \
              ORDER BY bd_addr ASC",
@@ -591,10 +578,8 @@ impl PeerDirectoryService {
     #[allow(dead_code)]
     pub fn forget_pan_peer(&self, bd_addr: &str) -> Result<bool> {
         let conn = self.conn.lock().unwrap();
-        let n = conn.execute(
-            "DELETE FROM bluetooth_pan_lifecycle WHERE bd_addr = ?1",
-            params![bd_addr],
-        )?;
+        let n = /* PERF: Leverage rusqlite statement cache */
+conn.prepare_cached("DELETE FROM bluetooth_pan_lifecycle WHERE bd_addr = ?1")?.execute(params![bd_addr])?;
         Ok(n > 0)
     }
 
@@ -605,12 +590,13 @@ impl PeerDirectoryService {
     /// untouched.
     pub fn observe_wfd_peer(&self, mac: &str, now_s: i64) -> Result<()> {
         let conn = self.conn.lock().unwrap();
-        conn.execute(
+        /* PERF: Leverage rusqlite statement cache */
+        conn.prepare_cached(
             "INSERT INTO wfd_peer_lifecycle (mac, first_seen_at_s) \
              VALUES (?1, ?2) \
              ON CONFLICT(mac) DO NOTHING",
-            params![mac, now_s],
-        )?;
+        )?
+        .execute(params![mac, now_s])?;
         Ok(())
     }
 
@@ -618,13 +604,11 @@ impl PeerDirectoryService {
     /// with `mac`. Upserts; never rewinds `last_connected_at_s`.
     pub fn record_wfd_connected(&self, mac: &str, now_s: i64) -> Result<()> {
         let conn = self.conn.lock().unwrap();
-        conn.execute(
-            "INSERT INTO wfd_peer_lifecycle (mac, first_seen_at_s, last_connected_at_s) \
+        /* PERF: Leverage rusqlite statement cache */
+        conn.prepare_cached("INSERT INTO wfd_peer_lifecycle (mac, first_seen_at_s, last_connected_at_s) \
              VALUES (?1, ?2, ?2) \
              ON CONFLICT(mac) DO UPDATE SET \
-                last_connected_at_s = MAX(COALESCE(last_connected_at_s, 0), excluded.last_connected_at_s)",
-            params![mac, now_s],
-        )?;
+                last_connected_at_s = MAX(COALESCE(last_connected_at_s, 0), excluded.last_connected_at_s)")?.execute(params![mac, now_s])?;
         Ok(())
     }
 
@@ -633,7 +617,7 @@ impl PeerDirectoryService {
     #[allow(dead_code)]
     pub fn list_wfd_lifecycle(&self) -> Result<Vec<WfdLifecycleRecord>> {
         let conn = self.conn.lock().unwrap();
-        let mut stmt = conn.prepare(
+        let mut stmt = /* PERF: Leverage rusqlite statement cache */ conn.prepare_cached(
             "SELECT mac, first_seen_at_s, last_connected_at_s \
              FROM wfd_peer_lifecycle \
              ORDER BY mac ASC",
@@ -655,10 +639,8 @@ impl PeerDirectoryService {
     #[allow(dead_code)]
     pub fn forget_wfd_peer(&self, mac: &str) -> Result<bool> {
         let conn = self.conn.lock().unwrap();
-        let n = conn.execute(
-            "DELETE FROM wfd_peer_lifecycle WHERE mac = ?1",
-            params![mac],
-        )?;
+        let n = /* PERF: Leverage rusqlite statement cache */
+conn.prepare_cached("DELETE FROM wfd_peer_lifecycle WHERE mac = ?1")?.execute(params![mac])?;
         Ok(n > 0)
     }
 }
