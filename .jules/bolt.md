@@ -49,3 +49,7 @@
 
 **Learning:** `Vec::new()` allocates no heap memory until the first element is pushed, at which point it dynamically allocates and then periodically reallocates. In hot network paths like `fragment_packet`, where we know we will push items, this leads to unnecessary reallocation overhead. However, it is a mistake to aggressively apply `Vec::with_capacity()` to collections that often remain empty (e.g., error queues or retry buffers on the "happy path"), as this will force an unnecessary heap allocation where `Vec::new()` would have remained zero-cost.
 **Action:** Always pre-allocate exact `Vec` capacities (e.g., using `Vec::with_capacity()`) over `Vec::new()` when the final size or an upper bound is known in advance *and* the vector is guaranteed or highly likely to be populated. Avoid `Vec::with_capacity()` for paths that usually remain empty.
+## 2026-05-10 - Prepared statement caching for SQLite performance
+
+**Learning:** In database modules like `pim-daemon`'s `peer_directory` and `pim-messaging`'s `storage`, using `conn.execute()` or `conn.prepare()` without caching parses the static SQL string into a VDBE program on every invocation. For frequent database writes (like processing incoming chat messages or peer discovery events), this adds significant CPU overhead.
+**Action:** Use `conn.prepare_cached()` instead of `conn.execute()` or `conn.prepare()` to leverage `rusqlite`'s statement cache, avoiding redundant SQL compilation in performance-sensitive paths.
