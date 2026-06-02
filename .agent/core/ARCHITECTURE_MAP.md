@@ -23,6 +23,8 @@ This map is the default orientation for agent work in this repository.
 - `crates/pim-cli/src/main.rs`
     - user-facing commands
     - daemon lifecycle entry points
+- `crates/pim-daemon/src/jni.rs`
+    - Android integration, providing JNI bridges and VPN service configurations
 - `crates/pim-daemon/src/main.rs`
     - main runtime orchestration
     - service startup and shutdown
@@ -42,6 +44,8 @@ This map is the default orientation for agent work in this repository.
     - current implemented transport backend
 - `crates/pim-discovery/src/lib.rs`
     - LAN peer discovery
+- `crates/pim-bluetooth/src/`
+    - Bluetooth and RFCOMM link establishment, wire protocol, and platform backends
 - `crates/pim-wifidirect/src/lib.rs`
     - alternative peer-finding or link-establishment path
 - `crates/pim-crypto/src/`
